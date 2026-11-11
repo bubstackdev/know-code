@@ -446,7 +446,10 @@ mod tests {
             ));
         let db = root.join("workspaces/w/index.db");
         crate::cursor::lifecycle_tests::publish(&db, "original source");
+        // Startup probes may defer under concurrent test load. Finish normal
+        // maintenance before testing cancellation during an active upload.
         let service = CursorService::new(&root, [db.clone()]).unwrap();
+        service.sweep().unwrap();
         let listener = UnixListener::bind(control::socket_path(&root)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let cancellation = crate::execution::QueryCancellation::default();

@@ -1,6 +1,6 @@
 # Corrupt derived-index recovery
 
-Status: frozen implementation contract; implementation and acceptance remain pending. This slice implements corruption recovery, not incompatible-version upgrade triggers.
+Status: implemented in the combined candidate; assembled native and installed acceptance is in progress. This slice implements corruption recovery, not incompatible-version upgrade triggers.
 
 ## Accepted recovery policy
 

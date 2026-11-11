@@ -18,7 +18,10 @@ node tests/node_preparation.mjs
 node tests/swift_toolchain.mjs
 node tests/sdk-metadata.mjs
 node tests/csharp_context.mjs
+node tests/csharp_target_grouping.mjs
 python3 tests/e2e.py
+python3 tests/test_classification.py
+python3 tests/recovery.py
 python3 tests/mcp.py
 python3 tests/cursors.py
 python3 tests/workspace_api.py

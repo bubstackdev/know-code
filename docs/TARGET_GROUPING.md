@@ -1,6 +1,6 @@
 # Cross-target finding presentation
 
-Status: frozen implementation contract for the next parallel release slice; not yet implemented or certified.
+Status: implemented in the combined candidate; assembled native and installed acceptance is in progress. This is not whole-release certification.
 
 ## Accepted behavior
 

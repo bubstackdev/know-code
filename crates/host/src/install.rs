@@ -379,7 +379,12 @@ fn info(bundle: &Path) -> Result<Value> {
     )?)?)
 }
 fn same_contract(a: &Path, b: &Path) -> Result<()> {
-    let (a, b) = (info(a)?, info(b)?);
+    compatible_info(&info(a)?, &info(b)?)
+}
+fn compatible_info(a: &Value, b: &Value) -> Result<()> {
+    if b["index_lifecycle_version"] != know_code_core::protocol::INDEX_LIFECYCLE_VERSION {
+        return Err("target runtime lacks the required index-lifecycle safety contract; use a compatible runtime".into());
+    }
     if b["analysis_settings_version"] != know_code_core::settings::VERSION {
         return Err("target runtime lacks the required workspace analysis-settings contract; use a compatible runtime rather than rolling back to legacy settings".into());
     }
@@ -778,4 +783,34 @@ pub fn run(args: &[String]) -> Result<Value> {
     Ok(
         json!({"installed":true,"prefix":layout.prefix,"selected":layout.selected(&layout.current)?,"previous":layout.selected(&layout.previous)?,"launcher":layout.launcher,"login_enabled":s.login,"data_directory":s.data}),
     )
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_switch_requires_explicit_lifecycle_safety() {
+        let supported = json!({
+            "index_lifecycle_version": know_code_core::protocol::INDEX_LIFECYCLE_VERSION,
+            "analysis_settings_version": know_code_core::settings::VERSION,
+            "resource_control_version": know_code_core::resource::CONTROL_VERSION,
+            "worker_protocol": know_code_core::protocol::VERSION,
+            "store_format": 8
+        });
+        assert!(compatible_info(&supported, &supported).is_ok());
+        for value in [Value::Null, json!(0), json!(2)] {
+            let mut target = supported.clone();
+            target["index_lifecycle_version"] = value;
+            assert!(
+                compatible_info(&supported, &target)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("index-lifecycle")
+            );
+        }
+        let mut mismatch = supported.clone();
+        mismatch["store_format"] = json!(7);
+        assert!(compatible_info(&supported, &mismatch).is_err());
+    }
 }

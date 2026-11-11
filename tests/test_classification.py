@@ -1,4 +1,4 @@
-"""Focused assembled finding filters, native parity, cursor and policy backfill."""
+"""Assembled finding filters, target grouping, snapshots, cursors and recovery."""
 from pathlib import Path
 import hashlib,json,os,sqlite3,subprocess,time
 ROOT=Path(__file__).resolve().parents[1]
@@ -15,7 +15,8 @@ ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1'
 (W/'ambient.test.ts').write_text('interface Mixed { tested: number; }\n')
 for name,is_test in [('Lib','false'),('Checks','true')]:
  p=W/name;p.mkdir();reference='<ItemGroup><ProjectReference Include="../Lib/Lib.csproj" /></ItemGroup>' if name=='Checks' else ''
- (p/f'{name}.csproj').write_text(f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><IsTestProject>{is_test}</IsTestProject></PropertyGroup>{reference}<ItemGroup><Compile Include="../Linked.cs" Link="Linked.cs" /></ItemGroup></Project>')
+ targets='<TargetFrameworks>netstandard2.1;net10.0</TargetFrameworks>' if name=='Lib' else '<TargetFramework>net10.0</TargetFramework>'
+ (p/f'{name}.csproj').write_text(f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup>{targets}<IsTestProject>{is_test}</IsTestProject></PropertyGroup>{reference}<ItemGroup><Compile Include="../Linked.cs" Link="Linked.cs" /></ItemGroup></Project>')
  (p/'Code.cs').write_text('public static class Core { public static int Target() => 1; public static int Helper() => Target(); }\n' if name=='Lib' else 'public static class Checks { public static int TestEntry() => Core.Helper(); }\n')
 (W/'Linked.cs').write_text('public class Linked { public int Value => 1; }\n')
 CHECKS=[];DATABASE=None;passed=False
@@ -49,6 +50,10 @@ def parity(request):
  results=[stable(query(language,request)) for language in ['cli','node','dotnet']]
  assert results[0]==results[1]==results[2],(request,results)
  return results[0]
+def physical():
+ state=json.loads(Path(DATABASE).with_suffix('.lifecycle.json').read_text())
+ selected=state['selected']
+ return Path(DATABASE) if selected['legacy'] else Path(DATABASE).parent/'indexes'/selected['id']/'index.db'
 def stop():
  cli('coordinator','stop',check=False);until=time.monotonic()+15
  while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
@@ -57,7 +62,7 @@ try:
  value('watch',W);initial=ready();DATABASE=initial['database']
  baseline=parity({'op':'symbols','limit':1000})
  assert set(c['language'] for c in baseline['coverage'])=={'typescript','csharp'},baseline
- assert baseline['workspace_coverage']['compilations']==3,baseline['workspace_coverage']
+ assert baseline['workspace_coverage']['compilations']==4,baseline['workspace_coverage']
  for mode in ['only','exclude']:
   filtered=parity({'op':'symbols','tests':mode,'limit':1000})
   assert filtered['symbols'] and not filtered['truncated'],filtered
@@ -73,6 +78,28 @@ try:
  assert len(linked)==2 and {s['test_classification']['kind'] for s in linked}=={'test','non_test'},linked
  assert len({l['content_hash'] for s in linked for l in s['locations']})==1,linked
  CHECKS.append('mixed_declarations_and_linked_source_contexts')
+ linked_group=next(item for item in linked if item['test_classification']['kind']=='non_test')
+ assert {item['target'] for item in linked_group['supporting_targets']}=={'netstandard2.1','net10.0'},linked_group
+ methods=parity({'op':'symbols','name':'Target','limit':1})
+ assert len(methods['symbols'])==1 and not methods['truncated'],methods
+ method=methods['symbols'][0];assert len(method['supporting_targets'])==2,method
+ references=parity({'op':'references','symbol_id':method['id']})['occurrences']
+ assert len(references)==1 and len(references[0]['supporting_targets'])==2,references
+ for support in method['supporting_targets']:
+  scoped=parity({'op':'references','symbol_id':method['id'],'compilation_id':support['compilation_id']})['occurrences']
+  assert scoped and all(item['compilation_id']==support['compilation_id'] and not item.get('supporting_targets') for item in scoped),scoped
+ helper=parity({'op':'symbols','name':'Helper'})['symbols'][0]
+ callees=parity({'op':'callees','symbol_id':helper['id']})['graph']['findings']
+ target_finding=next(item for item in callees if item['symbol']['name']=='Target')
+ assert len(target_finding['supporting_targets'])==2,target_finding
+ for support in target_finding['supporting_targets']:
+  assert support['paths'] and all(edge['compilation_id']==support['compilation_id'] for path in support['paths'] for edge in path),support
+ grouped_page=stable(query('cli',{'op':'symbols','name':'Target','limit':1,'page_size':1}))
+ assert grouped_page['page']['sections']['symbols']['total']==1 and len(grouped_page['symbols'][0]['supporting_targets'])==2,grouped_page
+ for language in ['node','dotnet']:
+  assert stable(query(language,{'op':'next_page','cursor':grouped_page['page']['cursor']}))==grouped_page
+ CHECKS.append('grouped_limits_support_followups_concrete_paths_and_atomic_pages')
+
  target=parity({'op':'symbols','name':'target'})['symbols'][0]['id']
  for mode,expected in [('only','suite.test.ts'),('exclude','prod.ts')]:
   refs=parity({'op':'references','symbol_id':target,'tests':mode})['occurrences']
@@ -100,21 +127,42 @@ try:
  assert pin['generation']==old_generation and len(pin['contexts'][0]['declarations'])==2,pin
  CHECKS.append('immutable_filtered_pages_and_pinned_context_across_rename')
  stop()
- with sqlite3.connect(DATABASE) as db:
-  db.execute("UPDATE compilations SET test_classification_json=''")
+ with sqlite3.connect(physical()) as db:
+  db.execute("UPDATE compilations SET test_classification_json='',target_family='',target_equivalence_policy=0")
+  db.execute("UPDATE symbols SET declaration_key='',grouping_key=''")
   db.execute("UPDATE unit_artifacts SET test_classification_json=''")
   db.execute('UPDATE symbols SET test_mask=1')
-  db.execute("UPDATE reports SET capabilities_json=json_remove(capabilities_json,'$.test_classification')")
+  db.execute("UPDATE reports SET capabilities_json=json_remove(capabilities_json,'$.test_classification','$.target_equivalence')")
   before=db.execute('SELECT current_generation FROM state').fetchone()[0]
   prep=Path(DATABASE).with_suffix('.preparation.json');prep_hash=hashlib.sha256(prep.read_bytes()).hexdigest() if prep.exists() else None
  value('watch',W);upgraded=ready(before+1)
- with sqlite3.connect(DATABASE) as db:
-  policies=db.execute("SELECT json_extract(c.test_classification_json,'$.policy_version') FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=?",[upgraded['generation']]).fetchall()
-  assert policies and all(p==(1,) for p in policies),policies
+ with sqlite3.connect(physical()) as db:
+  policies=db.execute("SELECT json_extract(c.test_classification_json,'$.policy_version'),c.language,c.target_equivalence_policy FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=?",[upgraded['generation']]).fetchall()
+  assert policies and all(p[0]==1 and (p[1]!='csharp' or p[2]==1) for p in policies),policies
  assert prep_hash==(hashlib.sha256(prep.read_bytes()).hexdigest() if prep.exists() else None),'policy backfill altered restoration checkpoints'
  assert parity({'op':'symbols','name':'testEntry','tests':'only'})['symbols'], 'policy backfill lost positive findings'
  stop();value('watch',W);assert ready()['generation']==upgraded['generation'],'completed backfill repeated on restart'
  CHECKS.append('policy_only_backfill_without_restore_and_noop_restart')
+ fresh=parity({'op':'symbols','name':'target'});snapshot=fresh['snapshot'];generation=fresh['generation'];symbol=fresh['symbols'][0]
+ old_page=stable(query('cli',{'op':'symbols','name':'target','page_size':1}));old_cursor=old_page['page']['cursor']
+ with sqlite3.connect(physical()) as db:assert db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()==(0,0,0)
+ with physical().open('r+b') as file:file.write(b'broken-db-header');file.flush();os.fsync(file.fileno())
+ fault=query('cli',{'op':'symbols','name':'target','freshness_wait_ms':0})
+ assert fault.get('error',{}).get('code')=='index_corrupt',fault
+ recovered=ready(generation+1)
+ for language in ['cli','node','dotnet']:
+  invalid=query(language,{'op':'next_page','cursor':old_cursor})
+  assert invalid.get('error',{}).get('code')=='cursor_invalidated',invalid
+  invalid=query(language,{'op':'symbol_context','symbol_id':symbol['id'],'snapshot':snapshot})
+  assert invalid.get('error',{}).get('code')=='snapshot_invalidated',invalid
+ replacement=parity({'op':'symbols','name':'target'})
+ assert replacement['snapshot']!=snapshot and replacement['generation']==recovered['generation'],replacement
+ assert parity({'op':'symbol_context','symbol_id':replacement['symbols'][0]['id'],'snapshot':replacement['snapshot']})['contexts'],replacement
+ for language in ['cli','node','dotnet']:
+  invalid=query(language,{'op':'symbol_context','symbol_id':replacement['symbols'][0]['id'],'generation':replacement['generation']})
+  assert invalid.get('error',{}).get('code')=='invalid_request',invalid
+ CHECKS.append('native_corruption_report_rebuild_invalidates_cursors_and_snapshots')
+
  passed=True
 finally:
  stop()

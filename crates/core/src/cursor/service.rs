@@ -768,7 +768,9 @@ mod tests {
         );
         call(&service, &db, action("finish", Some(&borrowed))).unwrap();
         service.stop();
+        // Complete deferred owner activation before probing the private old pin.
         let replacement = CursorService::new(&root, [db.clone()]).unwrap();
+        replacement.sweep().unwrap();
         assert!(!Path::new(&stored.result_path).exists());
         assert!(matches!(
             call(&replacement, &db, action("borrow", Some(&stored))),
