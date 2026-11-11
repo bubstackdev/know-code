@@ -1,8 +1,9 @@
 """Install archives, restore dependencies, then test with checkout/network access denied."""
 from pathlib import Path
-import argparse,atexit,hashlib,json,os,selectors,shutil,socket,subprocess,tarfile,time,zipfile
+import argparse,atexit,hashlib,json,os,selectors,shutil,socket,subprocess,sys,tarfile,time,zipfile
 ROOT=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');args=parser.parse_args()
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256');args=parser.parse_args()
+assert bool(args.signed_team_id)==bool(args.signed_signer_sha256),'signed mode requires both Team ID and pinned signer SHA-256'
 PACKAGES=args.packages.resolve();PREFIX=args.prefix.resolve();assert PREFIX!=ROOT and ROOT not in PREFIX.parents,'package test prefix must be outside checkout';PREFIX.mkdir(parents=True,exist_ok=False)
 CHECKOUTS=sorted({ROOT,*[p.resolve() for p in args.deny_checkout]})
 assert all(root!=PREFIX and root not in PREFIX.parents and (root/'LICENSE').is_file() for root in CHECKOUTS),'each denied checkout must exist and exclude the test prefix'
@@ -91,12 +92,23 @@ print(json.dumps({'network':results,'unix_bind_connect_accept':True,'roslyn_guid
  finally:
   for listener in listeners:listener.close()
 
+# Authenticate signed distributions before any native execution. Unsigned local
+# candidates retain the existing path and do not count toward the signing gate.
+SIGNING=None
+if args.signed_team_id:
+ PHASE='signature_verification'
+ SIGNING=json.loads(command(sys.executable,ROOT/'scripts/sign_packages.py','verify','--packages',PACKAGES,'--work-dir',PREFIX/'signature-verification','--team-id',args.signed_team_id,'--signer-sha256',args.signed_signer_sha256,sandbox=False).stdout)
+ assert SIGNING['verified'] and SIGNING['notarization']=='not_performed'
+ checks.append('authenticated_receipt_and_final_archive_Developer_ID_signatures')
+ PHASE='dependency_setup'
+
 # Review integrity and archive inventory before installation.
 manifest=json.loads((PACKAGES/'manifest.json').read_text());assert manifest['candidate']
 shutil.copy2(PACKAGES/'manifest.json',PREFIX/'candidate-manifest.json')
 for artifact in manifest['artifacts']:
  source=PACKAGES/artifact['file'];assert hashlib.sha256(source.read_bytes()).hexdigest()==artifact['sha256']
  shutil.copy2(source,FEED/source.name)
+ assert hashlib.sha256((FEED/source.name).read_bytes()).hexdigest()==artifact['sha256']
 archive=next(FEED.glob('know-code-runtime-*.tar.gz'))
 with tarfile.open(archive) as tar:
  for item in tar.getmembers():
@@ -329,5 +341,5 @@ finally:manifest_file.write_bytes(saved)
 invalid=PREFIX/'invalid-resources';invalid.mkdir();failure=command(HOST,'runtime-info',check=False,env=dict(ENV,KNOW_CODE_RUNTIME_DIR=str(invalid)));assert failure.returncode and 'manifest' in failure.stderr
 bare=PREFIX/'bare';bare.mkdir();shutil.copy2(bundle/'bin/know-code',bare/'know-code');failure=command(bare/'know-code','runtime-info',check=False);assert failure.returncode and 'not found' in failure.stderr
 checks+=['missing_resource_no_checkout_fallback','manifest_protocol_mismatch','invalid_override_no_silent_fallback','bare_executable_actionable_error']
-result={'passed':True,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json')}
+result={'passed':True,'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json')}
 (PREFIX/'result.json').write_text(json.dumps(result,indent=2)+'\n');report=ROOT/'.artifacts/packaging/installed-test.json';report.parent.mkdir(parents=True,exist_ok=True);report.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
