@@ -269,6 +269,15 @@ fn migrate_project_links(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// These child/probe keys are shared by publication and cursor reclamation.
+/// Compatible retained stores need the same repair as newly created stores.
+pub(crate) fn ensure_cleanup_indexes(connection: &Connection) -> Result<()> {
+    connection.execute_batch("CREATE INDEX IF NOT EXISTS unit_artifact_owner ON unit_artifacts(owner_generation,artifact_id);
+        CREATE INDEX IF NOT EXISTS artifact_content ON artifacts(content_hash);
+        CREATE INDEX IF NOT EXISTS generation_unit_owner ON generation_units(owner_generation,compilation_id);")?;
+    Ok(())
+}
+
 pub(crate) fn reclaim(connection: &Connection) -> Result<()> {
     connection.execute_batch("DELETE FROM compilations WHERE NOT EXISTS(SELECT 1 FROM generation_units u WHERE u.owner_generation=compilations.generation AND u.compilation_id=compilations.id);
       DELETE FROM artifacts WHERE NOT EXISTS(SELECT 1 FROM unit_artifacts u WHERE u.owner_generation=artifacts.generation AND u.artifact_id=artifacts.id);
@@ -411,6 +420,7 @@ impl Writer {
         if version < 8 {
             tx.execute_batch("ALTER TABLE compilations ADD COLUMN target_family TEXT NOT NULL DEFAULT ''; ALTER TABLE compilations ADD COLUMN target_equivalence_policy INTEGER NOT NULL DEFAULT 0; ALTER TABLE symbols ADD COLUMN declaration_key TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN grouping_key TEXT NOT NULL DEFAULT ''; CREATE INDEX symbol_grouping ON symbols(grouping_key) WHERE grouping_key<>''; PRAGMA user_version=8;")?;
         }
+        ensure_cleanup_indexes(&tx)?;
         crate::testing::create_views(&tx, SCHEMA_VERSION)?;
         tx.execute_batch("CREATE INDEX IF NOT EXISTS occurrence_artifact ON occurrences(artifact_key);
           CREATE INDEX IF NOT EXISTS relationship_source ON relationships(source_key,resolution,kind);
@@ -1304,5 +1314,87 @@ mod retention_overlap_tests {
     #[test]
     fn reference_validation_and_fact_insertion_serialize_concurrent_pins() {
         overlap(false);
+    }
+}
+
+#[cfg(test)]
+mod cleanup_index_tests {
+    use super::*;
+    #[test]
+    fn cleanup_indexes_cover_owner_and_foreign_key_probes_and_preserve_retained_facts() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        ensure_cleanup_indexes(&connection).unwrap();
+        ensure_cleanup_indexes(&connection).unwrap();
+        for (query, index) in [
+            (
+                "SELECT 1 FROM unit_artifacts WHERE owner_generation=1 AND artifact_id='live'",
+                "unit_artifact_owner",
+            ),
+            (
+                "SELECT 1 FROM artifacts WHERE content_hash='live'",
+                "artifact_content",
+            ),
+            (
+                "SELECT 1 FROM generation_units WHERE owner_generation=1 AND compilation_id='a'",
+                "generation_unit_owner",
+            ),
+        ] {
+            let mut plan = connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {query}"))
+                .unwrap();
+            let rows = plan
+                .query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(
+                rows.iter()
+                    .any(|row| row.starts_with("SEARCH") && row.contains(index)),
+                "{rows:?}"
+            );
+            assert!(!rows.iter().any(|row| row.starts_with("SCAN")), "{rows:?}");
+        }
+        connection.execute_batch("INSERT INTO generations VALUES(1),(2);
+            INSERT INTO compilations(generation,id) VALUES(1,'a'),(1,'b');
+            INSERT INTO generation_units VALUES(2,'a',1),(1,'b',1);
+            INSERT INTO contents VALUES('live',X'61'),('old',X'62');
+            INSERT INTO artifacts(generation,id,content_hash) VALUES(1,'live','live'),(1,'old','old');
+            INSERT INTO unit_artifacts VALUES(1,'a','live'),(1,'b','old');
+            UPDATE state SET current_generation=2;").unwrap();
+        reclaim(&connection).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM contents", [], |r| r.get::<_, u64>(0))
+                .unwrap(),
+            2,
+            "retained old manifest must preserve its source"
+        );
+        connection
+            .execute("DELETE FROM generation_units WHERE generation=1", [])
+            .unwrap();
+        reclaim(&connection).unwrap();
+        let remaining: String = connection
+            .query_row("SELECT hash FROM contents", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, "live");
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM compilations", [], |r| r
+                    .get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(
+            connection
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none()
+        );
     }
 }
