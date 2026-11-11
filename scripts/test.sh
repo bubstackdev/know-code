@@ -20,6 +20,7 @@ node tests/sdk-metadata.mjs
 node tests/csharp_context.mjs
 node tests/csharp_target_grouping.mjs
 python3 tests/e2e.py
+python3 tests/query_admission.py
 python3 tests/test_classification.py
 python3 tests/recovery.py
 python3 tests/upgrades.py
