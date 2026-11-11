@@ -472,6 +472,9 @@ pub struct RefreshOptions<'a> {
     pub settings: &'a crate::protocol::WorkspaceAnalysisSettings,
     pub cursors: Option<&'a crate::cursor::CursorService>,
     pub destination: Option<&'a crate::recovery::Candidate>,
+    /// Coordinator resource preflight after analysis and before publication
+    /// admission. Runs outside the cursor fence and serving transaction.
+    pub before_publish: Option<&'a dyn Fn() -> Result<()>>,
 }
 
 pub fn preparation_fingerprint(inputs: &Snapshot, settings_paths: &[PathBuf]) -> String {
@@ -523,6 +526,7 @@ pub fn refresh_controlled(
         settings,
         cursors,
         destination,
+        before_publish,
     } = options;
     if identity(root)? != expected_identity {
         return Err(Error::Provider(
@@ -703,6 +707,9 @@ pub fn refresh_controlled(
                 return Err(Error::Provider(
                     "workspace identity changed during analysis; publication discarded".into(),
                 ));
+            }
+            if let Some(check) = before_publish {
+                check()?;
             }
             Ok(())
         },

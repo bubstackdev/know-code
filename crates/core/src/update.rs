@@ -269,6 +269,7 @@ pub(crate) fn index_published(
             | Error::IndexCorrupt { .. }
             | Error::IndexRecovering(_)
             | Error::ResourceLimited(_)
+            | Error::DiskPressure(_)
             | Error::Cancelled
             | Error::Sqlite(_)
             | Error::Io(_) => error,
