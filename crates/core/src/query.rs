@@ -324,10 +324,16 @@ impl ReadView {
     pub fn readiness(path: impl AsRef<Path>) -> Result<(u64, bool)> {
         let execution = crate::execution::Execution::new(Default::default(), None)?;
         let view = Self::open_controlled(path, execution)?;
-        Ok((
-            view.generation,
-            view.needs_test_classification()? || view.needs_target_equivalence()?,
-        ))
+        let result = (|| {
+            view.check()?;
+            let readiness = (
+                view.generation,
+                view.needs_test_classification()? || view.needs_target_equivalence()?,
+            );
+            view.check()?;
+            Ok(readiness)
+        })();
+        crate::index_result(&view.health, result)
     }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::open_reserved(path.as_ref(), None, None)
@@ -353,11 +359,7 @@ impl ReadView {
             }
         };
         let reservation = scope.try_reserve()?;
-        let view = Self::open_selected(
-            path,
-            execution.with_permit(reservation.submit()?),
-            pin,
-        )?;
+        let view = Self::open_selected(path, execution.with_permit(reservation.submit()?), pin)?;
         *view.execution.lock().unwrap() = None;
         Ok(view)
     }

@@ -981,7 +981,10 @@ mod tests {
         assert_eq!(read_page(&failed)["symbols"], before["symbols"]);
         assert!(crate::recovery::begin_upgrade(&db, false, 1, 2).is_err());
         let pin = pin_for(&service, &initial);
-        assert_eq!(saved_source(&pin.open_fixture_view().unwrap()), "needle legacy π😀");
+        assert_eq!(
+            saved_source(&pin.open_fixture_view().unwrap()),
+            "needle legacy π😀"
+        );
         assert_eq!(
             rusqlite::Connection::open(crate::recovery::selected_path(&db).unwrap())
                 .unwrap()
@@ -1056,7 +1059,10 @@ mod tests {
         let again = call(&service, &db, action("borrow", Some(&stored))).unwrap();
         assert_eq!(read_page(&again), before);
         call(&service, &db, action("finish", Some(&again))).unwrap();
-        assert_eq!(saved_source(&pin.open_fixture_view().unwrap()), "needle legacy π😀");
+        assert_eq!(
+            saved_source(&pin.open_fixture_view().unwrap()),
+            "needle legacy π😀"
+        );
     }
     #[test]
     fn healthy_cutover_pressure_waits_for_active_read_then_evicts_idle_cursor() {
@@ -1220,7 +1226,10 @@ mod tests {
             call(&replacement, &db, action("borrow", Some(&stored))),
             Err(Error::CursorInvalidated)
         ));
-        assert!(matches!(pin.open_fixture_view(), Err(Error::CursorInvalidated)));
+        assert!(matches!(
+            pin.open_fixture_view(),
+            Err(Error::CursorInvalidated)
+        ));
     }
     #[test]
     fn failed_file_cleanup_keeps_reservation_pin_and_retries() {
@@ -1446,7 +1455,10 @@ mod tests {
         assert!(!Path::new(&stored.result_path).exists());
         assert!(service.lock().unwrap().registry.entries.is_empty());
         let request = serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap();
-        let result = crate::query::fixture_view(&db).unwrap().query(request).unwrap();
+        let result = crate::query::fixture_view(&db)
+            .unwrap()
+            .query(request)
+            .unwrap();
         assert_eq!(result.generation, next_generation);
         assert_eq!(result.source.unwrap().text, "replacement source");
     }

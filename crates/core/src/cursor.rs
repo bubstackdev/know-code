@@ -667,10 +667,7 @@ impl GenerationPin {
     pub fn open_view(&self) -> Result<ReadView> {
         ReadView::open_pinned(self)
     }
-    pub fn open_view_in_scope(
-        &self,
-        scope: &crate::admission::AdmissionScope,
-    ) -> Result<ReadView> {
+    pub fn open_view_in_scope(&self, scope: &crate::admission::AdmissionScope) -> Result<ReadView> {
         ReadView::open_pinned_in_scope(self, scope)
     }
     #[cfg(test)]
@@ -1077,7 +1074,10 @@ mod lifecycle_tests {
         drop(view);
         assert_eq!(retention.retained_usage(None, None).unwrap().units, 1);
         retention.release(&pin).unwrap();
-        assert!(matches!(pin.open_fixture_view(), Err(Error::CursorInvalidated)));
+        assert!(matches!(
+            pin.open_fixture_view(),
+            Err(Error::CursorInvalidated)
+        ));
         assert_eq!(
             connection
                 .query_row("SELECT count(*) FROM contents", [], |r| r.get::<_, i32>(0))
@@ -1147,7 +1147,10 @@ mod lifecycle_tests {
         cursors.sweep_at(Duration::from_millis(239_499)).unwrap();
         assert_eq!(source(&saved), "original source");
         cursors.sweep_at(Duration::from_millis(239_500)).unwrap();
-        assert!(matches!(saved.open_fixture_view(), Err(Error::CursorInvalidated)));
+        assert!(matches!(
+            saved.open_fixture_view(),
+            Err(Error::CursorInvalidated)
+        ));
         let active = cursors.admit_at(&path, at(300)).unwrap();
         for time in [400, 500, 600, 700, 800, 899] {
             let read = cursors.borrow_at(&path, active, at(1), at(time)).unwrap();

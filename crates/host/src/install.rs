@@ -405,10 +405,12 @@ fn compatible_info(a: &Value, b: &Value) -> Result<()> {
     if b["resource_control_version"] != know_code_core::resource::CONTROL_VERSION {
         return Err("target runtime lacks the required recorded cancellation boundary; use a compatible runtime".into());
     }
-    if !a["index_lifecycle_version"].as_u64().is_some_and(|version| {
-        matches!(version, 1 | 2)
-            || version == u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
-    })
+    if !a["index_lifecycle_version"]
+        .as_u64()
+        .is_some_and(|version| {
+            matches!(version, 1 | 2)
+                || version == u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
+        })
         || a["resource_control_version"] != know_code_core::resource::CONTROL_VERSION
         || a["analysis_settings_version"] != know_code_core::settings::VERSION
         || a["worker_protocol"] != b["worker_protocol"]

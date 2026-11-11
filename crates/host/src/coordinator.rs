@@ -2556,10 +2556,19 @@ mod live_lifetime_tests {
             .unwrap();
         let generation = writer.publish().unwrap();
         assert!(
-            ReadView::open_in_scope(&database, &know_code_core::admission::AdmissionScope::at(database.parent().unwrap().join("query-admission")).unwrap())
+            ReadView::open_in_scope(
+                &database,
+                &know_code_core::admission::AdmissionScope::at(
+                    Path::new(&database)
+                        .parent()
+                        .unwrap()
+                        .join("query-admission")
+                )
                 .unwrap()
-                .needs_test_classification()
-                .unwrap()
+            )
+            .unwrap()
+            .needs_test_classification()
+            .unwrap()
         );
         let mut retry = cancellation_job();
         retry.root = root;
@@ -2583,7 +2592,21 @@ mod live_lifetime_tests {
         assert!(
             matches!(error.downcast_ref::<know_code_core::Error>(),Some(know_code_core::Error::Remote{code,..}) if code=="cancelled")
         );
-        assert_eq!(ReadView::open_in_scope(&database, &know_code_core::admission::AdmissionScope::at(database.parent().unwrap().join("query-admission")).unwrap()).unwrap().generation, generation);
+        assert_eq!(
+            ReadView::open_in_scope(
+                &database,
+                &know_code_core::admission::AdmissionScope::at(
+                    Path::new(&database)
+                        .parent()
+                        .unwrap()
+                        .join("query-admission")
+                )
+                .unwrap()
+            )
+            .unwrap()
+            .generation,
+            generation
+        );
     }
     #[test]
     fn cancellation_capture_detects_undelivered_save_with_preserved_mtime() {

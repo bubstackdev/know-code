@@ -247,7 +247,9 @@ pub fn query_json_reserved(
         }
     };
     let execution = match execution::Execution::new(start, request.deadline_ms) {
-        Ok(execution) => execution.with_cancellation(cancellation).with_permit(permit),
+        Ok(execution) => execution
+            .with_cancellation(cancellation)
+            .with_permit(permit),
         Err(error) => {
             return execution::error_json(
                 error.code(),

@@ -617,15 +617,22 @@ mod tests {
         let scope = crate::admission::AdmissionScope::at(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../.artifacts/query-request-boundary")
-                .join(format!("{}-{}", std::process::id(), continuous_time().unwrap().as_nanos())),
-        ).unwrap();
-        let rejected = crate::query_json_in_scope("unused", &request, Default::default(), None, Some(&scope));
+                .join(format!(
+                    "{}-{}",
+                    std::process::id(),
+                    continuous_time().unwrap().as_nanos()
+                )),
+        )
+        .unwrap();
+        let rejected =
+            crate::query_json_in_scope("unused", &request, Default::default(), None, Some(&scope));
         assert!(rejected.len() <= DEFAULT_RESPONSE_BYTES as usize);
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "invalid_request");
         let request =
             serde_json::json!({"response_max_bytes":1024,"x".repeat(5000):true}).to_string();
-        let rejected = crate::query_json_in_scope("unused", &request, Default::default(), None, Some(&scope));
+        let rejected =
+            crate::query_json_in_scope("unused", &request, Default::default(), None, Some(&scope));
         assert!(
             rejected.len() <= 1024,
             "pre-validation error ignored requested minimum"
