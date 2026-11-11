@@ -427,3 +427,41 @@ fn pressure_probe() {
         std::panic::resume_unwind(payload);
     }
 }
+
+/// Interactive owned-fixture reader; no production export or alternate engine.
+#[test]
+#[ignore = "managed coordinator fixture supplies owned database and query scope"]
+fn hold_managed_read_view() {
+    use std::io::{BufRead, Write};
+    let Some(database) = std::env::var_os("KNOW_CODE_WAL_HOLDER_DATABASE") else {
+        return;
+    };
+    let scope =
+        std::env::var_os("KNOW_CODE_QUERY_SCOPE").expect("holder requires an explicit owned scope");
+    let scope = AdmissionScope::at(scope).unwrap();
+    let mut view = Some(ReadView::open_in_scope(PathBuf::from(database), &scope).unwrap());
+    println!(
+        "KC_WAL_HOLDER {}",
+        json!({"ready":true,"generation":view.as_ref().unwrap().generation})
+    );
+    std::io::stdout().flush().unwrap();
+    for line in std::io::stdin().lock().lines() {
+        let request: Value = serde_json::from_str(&line.unwrap()).unwrap();
+        if request["op"] == "release" {
+            drop(view.take());
+            println!("KC_WAL_HOLDER {}", json!({"released":true}));
+            std::io::stdout().flush().unwrap();
+            break;
+        }
+        let result = view
+            .as_ref()
+            .unwrap()
+            .query(serde_json::from_value(request).unwrap());
+        let response = match result {
+            Ok(result) => json!({"result":result}),
+            Err(error) => json!({"error":{"code":error.code(),"message":error.to_string()}}),
+        };
+        println!("KC_WAL_HOLDER {response}");
+        std::io::stdout().flush().unwrap();
+    }
+}

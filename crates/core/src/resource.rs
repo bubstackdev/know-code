@@ -78,6 +78,7 @@ impl Limits {
 enum Stop {
     Cancelled,
     Limited(String),
+    DiskPressure(String),
     Failed { code: String, message: String },
 }
 impl Stop {
@@ -85,6 +86,7 @@ impl Stop {
         match self {
             Self::Cancelled => Error::Cancelled,
             Self::Limited(s) => Error::ResourceLimited(s.clone()),
+            Self::DiskPressure(s) => Error::DiskPressure(s.clone()),
             Self::Failed { code, message } => Error::Remote {
                 code: code.clone(),
                 message: message.clone(),
@@ -560,13 +562,15 @@ fn monitor_loop(
             last_disk = now;
             let check = inner.disk.lock().unwrap().clone();
             if let Some(check) = check {
-                let current = settings.lock().unwrap();
+                // Filesystem census/checkpoint work must not hold the settings lock.
+                let current = settings.lock().unwrap().clone();
                 if let Err(error) = check(&current) {
                     let reason = match error {
                         Error::ResourceLimited(message) => Stop::Limited(message),
+                        Error::DiskPressure(message) => Stop::DiskPressure(message),
                         error => Stop::Failed {
                             code: error.code().into(),
-                            message: format!("replacement disk guard failed: {error}"),
+                            message: format!("temporary disk guard failed: {error}"),
                         },
                     };
                     control.stop(reason);

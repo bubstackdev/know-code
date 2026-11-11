@@ -47,10 +47,102 @@ struct Entry {
     watch_pending: bool,
     pending: bool,
     cancel_pending: bool,
+    disk_pause: Option<DiskPause>,
     recovery_blocked: bool,
     recovery_explicit: bool,
     recovering: bool,
     upgrade_format: Option<i32>,
+}
+/// Durable deferred work, separate from a failed saved-input baseline. A
+/// post-cleanup sample prevents our own rollback from authorizing a retry loop.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiskPause {
+    message: String,
+    previous_outcome: String,
+    force: bool,
+    retry_preparation: bool,
+    recovery_explicit: bool,
+    used_bytes: u64,
+    free_bytes: u64,
+    used_reclaim: u64,
+    free_reclaim: u64,
+    limit_bytes: u64,
+    reserve_bytes: u64,
+}
+impl DiskPause {
+    fn improved(&self, usage: &recovery::DiskUsage) -> bool {
+        let used = self.used_reclaim == 0
+            || self
+                .used_bytes
+                .checked_sub(self.used_reclaim)
+                .is_some_and(|ceiling| usage.used_bytes <= ceiling);
+        let free = self.free_reclaim == 0
+            || self
+                .free_bytes
+                .checked_add(self.free_reclaim)
+                .is_some_and(|floor| usage.free_bytes >= floor);
+        used && free
+    }
+}
+#[derive(Clone)]
+struct DiskOrigin {
+    used_reclaim: u64,
+    free_reclaim: u64,
+    limit_bytes: u64,
+    reserve_bytes: u64,
+}
+impl DiskOrigin {
+    fn capture(usage: &recovery::DiskUsage, limits: &Limits) -> Self {
+        let ceiling = limits.rebuild_disk_mib * 1024 * 1024;
+        let floor = limits.min_free_disk_mib * 1024 * 1024;
+        let mut used_reclaim = if usage.used_bytes >= ceiling {
+            usage.used_bytes - ceiling + 1
+        } else {
+            0
+        };
+        let free_reclaim = if usage.free_bytes <= floor {
+            floor - usage.free_bytes + 1
+        } else {
+            0
+        };
+        // If a concurrent reclamation overtook the failing sample, require
+        // charged-byte progress rather than granting a free-space-jitter retry.
+        if used_reclaim == 0 && free_reclaim == 0 {
+            used_reclaim = 1;
+        }
+        Self {
+            used_reclaim,
+            free_reclaim,
+            limit_bytes: ceiling,
+            reserve_bytes: floor,
+        }
+    }
+}
+fn display_disk_pause(entry: &mut Entry) {
+    if let Some(pause) = &entry.disk_pause {
+        entry.status.phase = "resource_limited".into();
+        entry.status.outcome_code = "disk_pressure".into();
+        entry.status.error = pause.message.clone();
+        entry.status.progress = Some(Progress {
+            stage: "disk_pressure".into(),
+            project_path: String::new(),
+            message: pause.message.clone(),
+        });
+    }
+}
+fn release_disk_pause(entry: &mut Entry) {
+    if let Some(pause) = entry.disk_pause.take() {
+        entry.status.outcome_code = pause.previous_outcome;
+        entry.status.error = entry.analysis_error.clone();
+        entry.status.progress = None;
+        entry.force |= pause.force;
+        entry.retry_preparation |= pause.retry_preparation;
+        entry.recovery_explicit |= pause.recovery_explicit;
+        if pause.recovery_explicit {
+            entry.recovery_blocked = false;
+        }
+    }
 }
 struct LiveStatus {
     value: WorkspaceStatus,
@@ -129,6 +221,7 @@ struct Job {
     upgrade_format: Option<i32>,
 }
 enum JobOutput {
+    DiskPaused(DiskPause),
     Indexed(u64, Snapshot, Vec<PathBuf>),
     CancellationBaseline(Snapshot, Vec<PathBuf>, bool),
 }
@@ -212,7 +305,7 @@ fn restore_recovery(entry: &mut Entry) -> AnyResult<()> {
         entry.status.error = error;
         if !matches!(
             entry.status.outcome_code.as_str(),
-            "resource_limited" | "cancelled"
+            "resource_limited" | "disk_pressure" | "cancelled"
         ) {
             entry.status.outcome_code = if upgrade_failure(&database)? {
                 "index_upgrade_failed"
@@ -221,7 +314,10 @@ fn restore_recovery(entry: &mut Entry) -> AnyResult<()> {
             }
             .into();
         }
-        entry.status.phase = if entry.status.outcome_code == "resource_limited" {
+        entry.status.phase = if matches!(
+            entry.status.outcome_code.as_str(),
+            "resource_limited" | "disk_pressure"
+        ) {
             "resource_limited"
         } else if upgrade_failure(&database)? {
             "upgrade_failed"
@@ -274,11 +370,14 @@ fn observe_bad(shared: &Shared, entry: &mut Entry, incarnation: &str) -> AnyResu
         entry.analysis_error = error;
         if !matches!(
             entry.status.outcome_code.as_str(),
-            "resource_limited" | "cancelled"
+            "resource_limited" | "disk_pressure" | "cancelled"
         ) {
             entry.status.outcome_code = "index_recovering".into();
         }
-        entry.status.phase = if entry.status.outcome_code == "resource_limited" {
+        entry.status.phase = if matches!(
+            entry.status.outcome_code.as_str(),
+            "resource_limited" | "disk_pressure"
+        ) {
             "resource_limited"
         } else {
             "recovery_failed"
@@ -308,6 +407,7 @@ fn observe_bad(shared: &Shared, entry: &mut Entry, incarnation: &str) -> AnyResu
 // are not evidence that its derived SQLite data is corrupt and never authorize
 // replacement or an automatic retry.
 fn block_lifecycle_error(entry: &mut Entry, error: &(dyn std::error::Error + 'static)) {
+    entry.disk_pause = None;
     entry.pending = false;
     entry.force = false;
     entry.recovery_blocked = true;
@@ -338,26 +438,6 @@ fn observe_selected_health(shared: &Shared, entry: &mut Entry) -> bool {
             block_lifecycle_error(entry, error.as_ref());
             false
         }
-    }
-}
-
-fn maintain_retired_indexes(entry: &mut Entry) {
-    if entry.recovering {
-        return;
-    }
-    let database = PathBuf::from(&entry.status.database);
-    let result = (|| -> know_code_core::Result<bool> {
-        if !recovery::has_retired(&database)? {
-            return Ok(false);
-        }
-        recovery::cleanup(&database, entry.status.generation)?;
-        recovery::has_retired(&database)
-    })();
-    match result {
-        Ok(false) if entry.status.progress.as_ref().is_some_and(|p|p.stage=="cleanup_pending")=>entry.status.progress=None,
-        Ok(false)=>{},
-        Ok(true)=>entry.status.progress=Some(Progress{stage:"cleanup_pending".into(),project_path:String::new(),message:"retired index files await reader release or legacy-reader verification and remain charged".into()}),
-        Err(error)=>entry.status.progress=Some(Progress{stage:"cleanup_pending".into(),project_path:String::new(),message:format!("retired index cleanup is pending and remains charged: {error}")}),
     }
 }
 
@@ -429,11 +509,16 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
           UPDATE workspaces SET cancel_pending=1,failed_input_hash='' WHERE outcome_code='cancelled';
           COMMIT;")?;
     }
+    if !columns.contains("disk_pause") {
+        registry.execute_batch(
+            "ALTER TABLE workspaces ADD COLUMN disk_pause TEXT NOT NULL DEFAULT ''",
+        )?;
+    }
     let discovery = crate::discovery::Discovery::open(&registry)?;
     let mut entries = BTreeMap::new();
     {
         let mut query = registry.prepare(
-            "SELECT w.database,w.root,w.configuration,w.generation,'{}',w.error,COALESCE(i.identity,''),w.failed_input_hash,w.outcome_code,w.cancel_pending FROM workspaces w LEFT JOIN identities i ON i.database=w.database",
+            "SELECT w.database,w.root,w.configuration,w.generation,'{}',w.error,COALESCE(i.identity,''),w.failed_input_hash,w.outcome_code,w.cancel_pending,w.disk_pause FROM workspaces w LEFT JOIN identities i ON i.database=w.database",
         )?;
         for row in query.query_map([], |r| {
             Ok((
@@ -447,6 +532,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 r.get::<_, String>(7)?,
                 r.get::<_, String>(8)?,
                 r.get::<_, bool>(9)?,
+                r.get::<_, String>(10)?,
             ))
         })? {
             let (
@@ -460,7 +546,13 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 failed_input_hash,
                 outcome_code,
                 pending_cancel,
+                encoded_disk_pause,
             ) = row?;
+            let disk_pause: Option<DiskPause> = if encoded_disk_pause.is_empty() {
+                None
+            } else {
+                Some(serde_json::from_str(&encoded_disk_pause)?)
+            };
             let cancel_pending =
                 pending_cancel || (outcome_code == "cancelled" && failed_input_hash.is_empty());
             let identity = if identity.is_empty() {
@@ -515,6 +607,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     watch_pending: true,
                     pending: true,
                     cancel_pending,
+                    disk_pause,
                     recovery_blocked: false,
                     recovery_explicit: false,
                     recovering: false,
@@ -528,6 +621,18 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     for entry in entries.values_mut() {
         if let Err(error) = restore_recovery(entry) {
             block_lifecycle_error(entry, error.as_ref());
+        }
+        if let Some(pause) = entry.disk_pause.as_ref() {
+            if !entry.cancel_pending && (!entry.recovery_blocked || pause.recovery_explicit) {
+                entry.pending = true;
+                entry.recovery_explicit |= pause.recovery_explicit;
+                if pause.recovery_explicit {
+                    entry.recovery_blocked = false;
+                }
+                display_disk_pause(entry);
+            } else {
+                entry.disk_pause = None;
+            }
         }
     }
     let cursors = Arc::new(know_code_core::cursor::CursorService::new(
@@ -602,6 +707,8 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     let mut pending_unwatch = Vec::new();
     let mut running = false;
     let mut last_presence = Instant::now() - Duration::from_secs(10);
+    let mut last_disk = Instant::now() - Duration::from_secs(10);
+    let mut disk_after = String::new();
     loop {
         let mut removals = std::mem::take(&mut pending_unwatch);
         let _ = shared.cursors.sweep();
@@ -640,10 +747,13 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             mark_rescan(&shared);
             shared.publisher.overflow_handled(seen);
         }
+        if last_disk.elapsed() >= Duration::from_secs(2) {
+            maintain_disk(&shared, data, &mut disk_after)?;
+            last_disk = Instant::now();
+        }
         if last_presence.elapsed() >= Duration::from_secs(2) {
             let mut entries = shared.entries.lock().unwrap();
             for entry in entries.values_mut() {
-                maintain_retired_indexes(entry);
                 observe_selected_health(&shared, entry);
                 let root = PathBuf::from(&entry.status.workspace_root);
                 let exists = root.is_dir();
@@ -781,6 +891,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         .filter(|(_, e)| {
                             e.status.available
                                 && e.pending
+                                && e.disk_pause.is_none()
                                 && e.queued.elapsed() >= Duration::from_millis(100)
                         })
                         .min_by_key(|(_, e)| priority(e, Instant::now()))
@@ -984,6 +1095,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         None
                     } else {
                         match done.result {
+                            Ok(JobOutput::DiskPaused(pause)) => {
+                                entry.pending = true;
+                                entry.disk_pause = Some(pause);
+                                display_disk_pause(entry);
+                                None
+                            }
                             Ok(JobOutput::CancellationBaseline(inputs, newer, verified)) => {
                                 entry
                                     .special_inputs
@@ -1023,6 +1140,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 None
                             }
                             Ok(JobOutput::Indexed(generation, inputs, newer)) => {
+                                entry.disk_pause = None;
                                 entry.recovery_blocked = false;
                                 entry.upgrade_format = None;
                                 entry.status.generation = generation;
@@ -1079,7 +1197,10 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                     }
                                     if entry.pending {
                                         "cancelling"
-                                    } else if error.code == "resource_limited" {
+                                    } else if matches!(
+                                        error.code.as_str(),
+                                        "resource_limited" | "disk_pressure"
+                                    ) {
                                         "resource_limited"
                                     } else {
                                         "failed"
@@ -1094,7 +1215,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 } else {
                                     match error.code.as_str() {
                                         "cancelled" => "cancelled",
-                                        "resource_limited" => "resource_limited",
+                                        "resource_limited" | "disk_pressure" => "resource_limited",
                                         _ => "failed",
                                     }
                                 }
@@ -1102,7 +1223,10 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 if recovery_failed {
                                     entry.status.phase = if entry.recovery_explicit {
                                         "queued"
-                                    } else if error.code == "resource_limited" {
+                                    } else if matches!(
+                                        error.code.as_str(),
+                                        "resource_limited" | "disk_pressure"
+                                    ) {
                                         "resource_limited"
                                     } else if error.code == "cancelled" {
                                         "cancelled"
@@ -1136,7 +1260,6 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         }
                         return Err(error);
                     }
-                    maintain_retired_indexes(entry);
                 };
                 {
                     let entries = shared.entries.lock().unwrap();
@@ -1173,6 +1296,36 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
     Ok(())
 }
 
+fn guard_temporary_disk(
+    job: &Job,
+    data: &Path,
+    origin: &Arc<Mutex<Option<DiskOrigin>>>,
+    disk: &mut Option<Arc<recovery::DiskBudget>>,
+) -> AnyResult<()> {
+    let guard = Arc::new(recovery::DiskBudget::new(Path::new(&job.database), data)?);
+    *disk = Some(Arc::clone(&guard));
+    if let Err(error) = guard.check(&job.session.limits(), false) {
+        if matches!(error, know_code_core::Error::DiskPressure(_)) {
+            let usage = guard.usage(false)?;
+            *origin.lock().unwrap() = Some(DiskOrigin::capture(&usage, &job.session.limits()));
+        }
+        return Err(error.into());
+    }
+    let stopped = Arc::clone(origin);
+    job.session.control().guard_disk(move |limits| {
+        let result = guard.check_sampled(limits);
+        if matches!(result, Err(know_code_core::Error::DiskPressure(_))) {
+            let usage = guard.usage(false)?;
+            stopped
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| DiskOrigin::capture(&usage, limits));
+        }
+        result
+    });
+    Ok(())
+}
+
 fn execute(
     job: Job,
     installation: &Path,
@@ -1183,6 +1336,8 @@ fn execute(
     let control = job.session.control();
     let mut candidate: Option<recovery::Candidate> = None;
     let mut disk: Option<Arc<recovery::DiskBudget>> = None;
+    let mut analysis_started = false;
+    let origin = Arc::new(Mutex::new(None::<DiskOrigin>));
     let result = (|| -> AnyResult<JobOutput> {
         control.check()?;
         if workspace::identity(&job.root)? != job.identity {
@@ -1192,6 +1347,9 @@ fn execute(
         let data = control::root_for_database(database)
             .ok_or("workspace database has no central data root")?;
         let settings_paths = settings::paths(&job.root, data);
+        if job.recovering && !job.cancel_baseline {
+            guard_temporary_disk(&job, data, &origin, &mut disk)?;
+        }
         if job.recovering {
             candidate = Some(if let Some(format) = job.upgrade_format {
                 recovery::begin_upgrade(
@@ -1203,11 +1361,6 @@ fn execute(
             } else {
                 recovery::begin_rebuild(database, job.recovery_explicit, job.previous_generation)?
             });
-            let guard = Arc::new(recovery::DiskBudget::new(database, data)?);
-            guard.check(&job.session.limits(), false)?;
-            let sampled = Arc::clone(&guard);
-            control.guard_disk(move |limits| sampled.check(limits, false));
-            disk = Some(guard);
             progress(Progress {
                 stage: if job.upgrade_format.is_some() {
                     "upgrading"
@@ -1335,6 +1488,12 @@ fn execute(
             workspace::affected_projects(database, &job.root, &changes)?
         };
         let preparation_fingerprint = workspace::preparation_fingerprint(&before, &settings_paths);
+        if !job.recovering {
+            // No-op reconciliation and unchanged failed/cancelled inputs above
+            // are not write work and must not acquire new retry authorization.
+            guard_temporary_disk(&job, data, &origin, &mut disk)?;
+        }
+        analysis_started = true;
         let generation = workspace::refresh_controlled(
             &job.root,
             database,
@@ -1390,6 +1549,37 @@ fn execute(
         };
         Ok(JobOutput::Indexed(generation, before, newer))
     })();
+    // Writer/staging owners have unwound before this sample. A deferred job
+    // never overwrites analyzer/cancellation fingerprints or allocates another
+    // recovery attempt. Allocated replacements continue through fail_rebuild.
+    if candidate.is_none()
+        && let Err(error) = &result
+        && let Some(know_code_core::Error::DiskPressure(message)) =
+            error.downcast_ref::<know_code_core::Error>()
+    {
+        let usage = disk
+            .as_ref()
+            .expect("pressure has a pool guard")
+            .usage(false)?;
+        let cause = origin
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| DiskOrigin::capture(&usage, &job.session.limits()));
+        return Ok(JobOutput::DiskPaused(DiskPause {
+            used_reclaim: cause.used_reclaim,
+            free_reclaim: cause.free_reclaim,
+            limit_bytes: cause.limit_bytes,
+            reserve_bytes: cause.reserve_bytes,
+            message: message.clone(),
+            previous_outcome: job.previous_error_code.clone(),
+            force: job.force,
+            retry_preparation: !analysis_started && job.retry_preparation,
+            recovery_explicit: job.recovery_explicit,
+            used_bytes: usage.used_bytes,
+            free_bytes: usage.free_bytes,
+        }));
+    }
     if let Err(error) = &result
         && job.recovering
         && candidate.is_some()
@@ -1429,6 +1619,7 @@ fn priority(entry: &Entry, now: Instant) -> (u8, Instant) {
     )
 }
 fn begin_cancellation(entry: &mut Entry) {
+    release_disk_pause(entry);
     // Cancel revokes earlier queued refresh authorization. A later refresh
     // sets it again under the same entries lock and remains valid.
     entry.recovery_explicit = false;
@@ -1472,6 +1663,10 @@ fn queue(entry: &mut Entry, paths: Option<Vec<PathBuf>>, force: bool) {
         }
     } else {
         entry.rehash = true;
+    }
+    if entry.disk_pause.is_some() {
+        display_disk_pause(entry);
+        return;
     }
     if !matches!(
         entry.status.phase.as_str(),
@@ -1526,17 +1721,54 @@ fn special_inputs(root: &str, inputs: &Snapshot) -> BTreeSet<PathBuf> {
         })
         .collect()
 }
+struct PersistedEntry {
+    status: WorkspaceStatus,
+    configuration: String,
+    identity: String,
+    analysis_error: String,
+    failed_input_hash: String,
+    cancel_pending: bool,
+    disk_pause: String,
+}
+impl PersistedEntry {
+    fn capture(entry: &Entry) -> AnyResult<Self> {
+        Ok(Self {
+            status: entry.status.snapshot(),
+            configuration: entry.configuration.clone(),
+            identity: entry.identity.clone(),
+            analysis_error: entry.analysis_error.clone(),
+            failed_input_hash: entry.failed_input_hash.clone(),
+            cancel_pending: entry.cancel_pending,
+            disk_pause: entry
+                .disk_pause
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
 fn persist(shared: &Shared, entry: &Entry, inputs: Option<&Snapshot>) -> AnyResult<()> {
+    persist_record(
+        &mut shared.registry.lock().unwrap(),
+        &PersistedEntry::capture(entry)?,
+        inputs,
+    )
+}
+fn persist_record(
+    registry: &mut Connection,
+    entry: &PersistedEntry,
+    inputs: Option<&Snapshot>,
+) -> AnyResult<()> {
     let status = &entry.status;
     let configuration = &entry.configuration;
     let identity = &entry.identity;
     let analysis_error = &entry.analysis_error;
     let failed_input_hash = &entry.failed_input_hash;
     let cancel_pending = entry.cancel_pending;
-    let mut registry = shared.registry.lock().unwrap();
     let tx = registry.transaction()?;
     let encoded = inputs.map(serde_json::to_string).transpose()?;
-    tx.execute("INSERT INTO workspaces(database,root,configuration,generation,inputs,error,failed_input_hash,outcome_code,cancel_pending) VALUES(?,?,?,?,'{}',?,?,?,?) ON CONFLICT(database) DO UPDATE SET root=excluded.root,configuration=excluded.configuration,generation=excluded.generation,error=excluded.error,failed_input_hash=excluded.failed_input_hash,outcome_code=excluded.outcome_code,cancel_pending=excluded.cancel_pending",params![status.database,status.workspace_root,configuration,status.generation,analysis_error,failed_input_hash,status.outcome_code,cancel_pending])?;
+    tx.execute("INSERT INTO workspaces(database,root,configuration,generation,inputs,error,failed_input_hash,outcome_code,cancel_pending,disk_pause) VALUES(?,?,?,?,'{}',?,?,?,?,?) ON CONFLICT(database) DO UPDATE SET root=excluded.root,configuration=excluded.configuration,generation=excluded.generation,error=excluded.error,failed_input_hash=excluded.failed_input_hash,outcome_code=excluded.outcome_code,cancel_pending=excluded.cancel_pending,disk_pause=excluded.disk_pause",params![status.database,status.workspace_root,configuration,status.generation,analysis_error,failed_input_hash,status.outcome_code,cancel_pending,entry.disk_pause])?;
     tx.execute("INSERT INTO manifests VALUES(?,COALESCE(?,'{}')) ON CONFLICT(database) DO UPDATE SET inputs=COALESCE(?,manifests.inputs)",params![status.database,encoded,encoded])?;
     if let Some(inputs) = inputs {
         tx.execute(
@@ -1555,6 +1787,137 @@ fn persist(shared: &Shared, entry: &Entry, inputs: Option<&Snapshot>) -> AnyResu
         params![status.database, identity],
     )?;
     tx.commit()?;
+    Ok(())
+}
+/// One bounded round-robin maintenance batch. File census and SQLite never
+/// run under entries/cursor/settings locks. Registry ordering is retained by a
+/// nonblocking registry handoff before dropping entries for the durable write.
+fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<()> {
+    let requests = {
+        let entries = shared.entries.lock().unwrap();
+        entries
+            .range((
+                std::ops::Bound::Excluded(after.clone()),
+                std::ops::Bound::Unbounded,
+            ))
+            .chain(entries.range(..=after.clone()))
+            .filter(|(_, entry)| entry.status.available && !entry.recovering)
+            .take(16)
+            .map(|(db, entry)| {
+                (
+                    db.clone(),
+                    entry.registration,
+                    entry.status.generation,
+                    entry.disk_pause.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    if let Some((last, ..)) = requests.last() {
+        *after = last.clone();
+    }
+    let limits = shared.resources.limits();
+    let mut sample = None;
+    for (database, registration, generation, pause) in requests {
+        let path = Path::new(&database);
+        let cleanup = recovery::cleanup(path, generation).and_then(|_| recovery::has_retired(path));
+        let checkpoint = know_code_core::store::maintain_index(path);
+        let retired = cleanup.as_ref().is_ok_and(|retained| *retained);
+        let failure = match cleanup {
+            Err(error) => Some(error),
+            Ok(_) => match checkpoint {
+                Err(
+                    know_code_core::Error::Busy(_)
+                    | know_code_core::Error::NotReady
+                    | know_code_core::Error::UpdateRequired(_)
+                    | know_code_core::Error::IndexCorrupt { .. },
+                ) => None,
+                Err(error) => Some(error),
+                Ok(_) => None,
+            },
+        };
+        let decision = if let Some(pause) = &pause {
+            if sample.is_none() {
+                sample =
+                    Some(recovery::DiskBudget::new(path, data).and_then(|pool| pool.usage(false)));
+            }
+            match sample.as_ref().unwrap() {
+                Ok(usage) => Ok((pause.improved(usage)
+                    || pause.limit_bytes != limits.rebuild_disk_mib * 1024 * 1024
+                    || pause.reserve_bytes != limits.min_free_disk_mib * 1024 * 1024)
+                    && usage.used_bytes < limits.rebuild_disk_mib * 1024 * 1024
+                    && usage.free_bytes > limits.min_free_disk_mib * 1024 * 1024),
+                Err(error) => Err(error.to_string()),
+            }
+        } else {
+            Ok(false)
+        };
+        if pause.is_none() {
+            let mut entries = shared.entries.lock().unwrap();
+            if let Some(entry) = entries
+                .get_mut(&database)
+                .filter(|e| e.registration == registration && e.disk_pause.is_none())
+            {
+                if retired || failure.is_some() {
+                    entry.status.progress = Some(Progress {
+                        stage: "cleanup_pending".into(),
+                        project_path: String::new(),
+                        message: failure.as_ref().map_or_else(
+                            || "retired index files await readers and remain charged".into(),
+                            |error| format!("temporary files remain charged: {error}"),
+                        ),
+                    });
+                } else if entry
+                    .status
+                    .progress
+                    .as_ref()
+                    .is_some_and(|p| p.stage == "cleanup_pending")
+                {
+                    entry.status.progress = None;
+                }
+            }
+            continue;
+        }
+        if failure.is_none() && !decision.as_ref().is_ok_and(|resume| *resume) && decision.is_ok() {
+            continue;
+        }
+        let mut entries = shared.entries.lock().unwrap();
+        let Some(entry) = entries
+            .get_mut(&database)
+            .filter(|e| e.registration == registration && e.disk_pause == pause)
+        else {
+            continue;
+        };
+        let Ok(mut registry) = shared.registry.try_lock() else {
+            continue;
+        };
+        if let Some(error) = failure {
+            // Accounting/access failures are not evidence of available space.
+            // Preserve the private pause and show the typed failure, no launch.
+            entry.status.error = error.to_string();
+            entry.status.outcome_code = error.code().into();
+        } else if let Err(message) = decision {
+            entry.status.error = format!("temporary disk accounting failed: {message}");
+            entry.status.outcome_code = "io_error".into();
+        } else if entry.disk_pause.is_some()
+            && !entry.cancel_pending
+            && (!entry.recovery_blocked
+                || entry
+                    .disk_pause
+                    .as_ref()
+                    .is_some_and(|p| p.recovery_explicit))
+        {
+            release_disk_pause(entry);
+            entry.pending = true;
+            entry.status.phase = "queued".into();
+        } else {
+            continue;
+        }
+        let saved = PersistedEntry::capture(entry)?;
+        drop(entries);
+        persist_record(&mut registry, &saved, None)?;
+        shared.changed.notify_all();
+    }
     Ok(())
 }
 fn register_workspace(
@@ -1653,6 +2016,7 @@ fn register_workspace(
             watch_pending: true,
             pending: true,
             cancel_pending: false,
+            disk_pause: None,
             recovery_blocked: false,
             recovery_explicit: false,
             recovering: false,
@@ -1669,10 +2033,12 @@ fn register_workspace(
             restore_recovery(entry)?;
         }
         if settings_changed {
+            release_disk_pause(entry);
             queue(entry, None, true);
         }
         entry.status.requested_settings = settings::resolve(&root, data, &entry.configuration).ok();
         if request.operation == "refresh" {
+            release_disk_pause(entry);
             entry.recovery_explicit = true;
             entry.recovery_blocked = false;
             if entry.cancel_pending {
@@ -1861,11 +2227,21 @@ fn serve(
                     let mut entries = shared.entries.lock().unwrap();
                     let active = shared.active_job.lock().unwrap();
                     for (db, entry) in entries.iter_mut() {
+                        if entry.disk_pause.is_some()
+                            && !entry.cancel_pending
+                            && !entry.recovery_blocked
+                        {
+                            release_disk_pause(entry);
+                            entry.pending = true;
+                            entry.status.phase = "queued".into();
+                        }
                         if !entry.recovery_blocked
-                            && (entry.status.outcome_code == "resource_limited"
-                                || active.as_ref().is_some_and(|(running, control)| {
-                                    running == db && control.resource_limited()
-                                }))
+                            && (matches!(
+                                entry.status.outcome_code.as_str(),
+                                "resource_limited" | "disk_pressure"
+                            ) || active.as_ref().is_some_and(|(running, control)| {
+                                running == db && control.resource_limited()
+                            }))
                         {
                             queue(entry, None, true);
                         }
@@ -2138,6 +2514,126 @@ pub fn managed_login_plist(executable: &Path, data: &Path, label: &str, path: &s
 #[cfg(test)]
 mod live_lifetime_tests {
     use super::*;
+    fn pause_fixture() -> DiskPause {
+        DiskPause {
+            message: "owned disk pressure".into(),
+            previous_outcome: "provider_error".into(),
+            force: false,
+            retry_preparation: false,
+            recovery_explicit: false,
+            used_bytes: 100,
+            free_bytes: 1000,
+            used_reclaim: 20,
+            free_reclaim: 0,
+            limit_bytes: 200,
+            reserve_bytes: 500,
+        }
+    }
+    #[test]
+    fn disk_pause_does_not_retry_on_free_jitter_own_cleanup_or_insufficient_reclamation() {
+        let pause = pause_fixture();
+        assert!(!pause.improved(&recovery::DiskUsage {
+            used_bytes: 100,
+            free_bytes: 1000000
+        }));
+        assert!(!pause.improved(&recovery::DiskUsage {
+            used_bytes: 99,
+            free_bytes: 1000000
+        }));
+        assert!(pause.improved(&recovery::DiskUsage {
+            used_bytes: 80,
+            free_bytes: 1000
+        }));
+        let intrinsic = DiskPause {
+            used_bytes: 0,
+            ..pause.clone()
+        };
+        assert!(!intrinsic.improved(&recovery::DiskUsage {
+            used_bytes: 0,
+            free_bytes: 1000000
+        }));
+        let reserve = DiskPause {
+            used_reclaim: 0,
+            free_reclaim: 100,
+            ..pause
+        };
+        assert!(!reserve.improved(&recovery::DiskUsage {
+            used_bytes: 0,
+            free_bytes: 1099
+        }));
+        assert!(reserve.improved(&recovery::DiskUsage {
+            used_bytes: 0,
+            free_bytes: 1100
+        }));
+        let encoded = serde_json::to_vec(&reserve).unwrap();
+        let restored: DiskPause = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(reserve, restored);
+    }
+    #[test]
+    fn paused_work_preserves_failed_baseline_queue_age_and_cancel_revokes_grants() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/disk-pause-state")
+            .join(format!("{}-{:?}", std::process::id(), Instant::now()));
+        std::fs::create_dir_all(&root).unwrap();
+        let publisher = Arc::new(Publisher::new(&root));
+        let mut entry = Entry {
+            registration: 1,
+            analysis_error: "provider failed".into(),
+            failed_input_hash: "failed-saved-input".into(),
+            status: LiveStatus::new(
+                WorkspaceStatus {
+                    available: true,
+                    phase: "queued".into(),
+                    outcome_code: "provider_error".into(),
+                    ..Default::default()
+                },
+                &publisher,
+            ),
+            configuration: String::new(),
+            identity: String::new(),
+            special_inputs: BTreeSet::new(),
+            dirty: BTreeSet::new(),
+            force: false,
+            rehash: false,
+            retry_preparation: false,
+            queued: Instant::now(),
+            active: Instant::now(),
+            watch_pending: false,
+            pending: true,
+            cancel_pending: false,
+            disk_pause: Some(DiskPause {
+                force: true,
+                retry_preparation: true,
+                recovery_explicit: true,
+                ..pause_fixture()
+            }),
+            recovery_blocked: false,
+            recovery_explicit: false,
+            recovering: false,
+            upgrade_format: None,
+        };
+        display_disk_pause(&mut entry);
+        let age = entry.queued;
+        for _ in 0..3 {
+            queue(&mut entry, None, false);
+        }
+        assert_eq!(entry.queued, age);
+        assert_eq!(entry.status.outcome_code, "disk_pressure");
+        assert_eq!(entry.failed_input_hash, "failed-saved-input");
+        assert_eq!(entry.analysis_error, "provider failed");
+        release_disk_pause(&mut entry);
+        assert_eq!(entry.status.outcome_code, "provider_error");
+        assert!(entry.force && entry.retry_preparation && entry.recovery_explicit);
+        entry.disk_pause = Some(DiskPause {
+            force: true,
+            retry_preparation: true,
+            recovery_explicit: true,
+            ..pause_fixture()
+        });
+        begin_cancellation(&mut entry);
+        assert!(entry.disk_pause.is_none() && entry.cancel_pending && entry.pending);
+        assert!(!entry.force && !entry.retry_preparation && !entry.recovery_explicit);
+    }
     fn cancellation_job() -> Job {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../.artifacts/cancel-unit")
@@ -2368,6 +2864,7 @@ mod live_lifetime_tests {
             watch_pending: false,
             pending: false,
             cancel_pending: false,
+            disk_pause: None,
             recovery_blocked: true,
             recovery_explicit: false,
             recovering: false,
@@ -2756,6 +3253,7 @@ mod live_lifetime_tests {
                 watch_pending: false,
                 pending: false,
                 cancel_pending: false,
+                disk_pause: None,
                 recovery_blocked: false,
                 recovery_explicit: false,
                 recovering: false,
