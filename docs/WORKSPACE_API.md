@@ -72,3 +72,6 @@ These checks establish this development API slice, not a published or complete 0
 ## Explicit background indexing cancellation
 
 Node `workspace.cancelIndexing()` and .NET `workspace.CancelIndexingAsync()` stop shared workspace analysis and return its current status. They are explicit operations affecting every consumer of that workspace. Saved changes or refresh resume work. Disposing/closing clients and canceling an individual request do not cancel the background job. `outcome_code` distinguishes cancellation/resource exhaustion, with coherent stale fallback or not-ready when no prior index exists. See [resource policy, publication ordering and limits](RESOURCE_CONTROL.md). Older running coordinators need an explicit update before these operations are available. Native query cancellation remains separate unfinished work.
+
+
+Managed upgrade lifecycle 2 keeps readable old facts explicitly stale during a bounded side-by-side rebuild and preserves healthy pinned cursors. A failed/interrupted automatic attempt waits for explicit refresh; normal saves or queries do not retry it. Lifecycle-1 coordinators require a runtime update; ordinary SDK clients never replace a connected incompatible peer. Runtime installation has a separate narrow bridge for quiescence. See [upgrade policy and acceptance status](INDEX_UPGRADES.md).
