@@ -2454,7 +2454,10 @@ mod live_lifetime_tests {
     #[test]
     fn maintenance_is_owned_expiring_and_reports_running_jobs_without_visible_rows() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.artifacts/at")
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/at")
             .join(format!("lease-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let shared = Arc::new(Shared {
@@ -2523,8 +2526,7 @@ mod live_lifetime_tests {
             .unwrap()
             .join(".artifacts/at")
             .join(format!(
-                "host-{}-{:x}",
-                std::process::id(),
+                "{:x}",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
