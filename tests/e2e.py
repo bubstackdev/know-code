@@ -181,12 +181,19 @@ with sqlite3.connect(physical_database(DATABASE)) as connection:
     assert connection.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
     assert connection.execute('PRAGMA foreign_key_check').fetchall() == []
 
-# A malformed worker project must not replace the previously published graph.
+# An expected project configuration failure publishes fresh healthy siblings,
+# with unavailable context evidence and no prior failed-project facts.
 config = WORKSPACE / 'typescript/tsconfig.json'
 saved_config = config.read_text()
 config.write_text('{ invalid JSON')
-run([HOST, 'index', WORKSPACE], success=False)
-assert equivalent({'op': 'symbols', 'name': 'Greet'})['result']['generation'] == initial['generation']
+unavailable, _ = index()
+unavailable_result = equivalent({'op': 'symbols', 'name': 'Greet'})['result']
+assert unavailable_result['generation'] == unavailable['generation'] > initial['generation']
+assert unavailable_result['freshness'] == 'current' and unavailable_result['symbols'], unavailable_result
+unavailable_ts = [c for c in unavailable_result['coverage'] if c['language'] == 'typescript']
+assert unavailable_ts and all(c['status'] == 'unavailable' and c['diagnostics'] and not c['inferred'] for c in unavailable_ts), unavailable_ts
+assert all(c['status'] == 'complete' for c in unavailable_result['coverage'] if c['language'] == 'csharp'), unavailable_result
+assert not equivalent({'op': 'symbols', 'name': 'greet'})['result'].get('symbols'), 'failed TS context retained old facts or used inference'
 config.write_text(saved_config)
 
 # A compiler diagnostic is a completed partial analysis, not a crashed worker.
