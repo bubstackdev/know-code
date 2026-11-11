@@ -1063,11 +1063,23 @@ mod tests {
         let initial = service.lock().unwrap().registry.retained_bytes().unwrap();
         let candidate = indexed_replacement(&db, false);
         let prepared = crate::recovery::prepare_rebuild(&candidate, &Control::default()).unwrap();
+        let control = Control::test_managed();
+        let publication = control.publication();
         let generation = service
-            .publish_replacement(&db, &Control::default(), || {
-                crate::recovery::finish_prepared_rebuild(&prepared, &Control::default(), || Ok(()))
+            .publish_replacement(&db, &control, || {
+                crate::recovery::finish_prepared_rebuild(&prepared, &publication, || {
+                    // This is the actual nested cutover boundary under the
+                    // cursor fence. A new CPU pause must not park it here.
+                    control.test_pause(true);
+                    publication.check()
+                })
             })
             .unwrap();
+        assert!(control.committed());
+        assert!(
+            !control.cancel(),
+            "completed selector commit wins late cancellation"
+        );
         assert!(generation > stored.generation);
         assert!(service.lock().unwrap().registry.retained_bytes().unwrap() > initial);
         let borrowed = call(&service, &db, action("borrow", Some(&stored))).unwrap();

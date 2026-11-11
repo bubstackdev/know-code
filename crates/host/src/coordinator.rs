@@ -1664,7 +1664,7 @@ fn execute(
             let publication = control.publication();
             let cutover = || {
                 recovery::finish_prepared_rebuild(&prepared, &publication, || {
-                    control.check()?;
+                    publication.check()?;
                     if workspace::identity(&job.root)? != job.identity {
                         return Err(know_code_core::Error::Provider(
                             "workspace identity changed before replacement cutover".into(),
