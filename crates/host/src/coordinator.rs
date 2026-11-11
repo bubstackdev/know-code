@@ -1598,7 +1598,7 @@ fn execute(
         // freely reclaimable own staging first, before retaining the baseline.
         // A real held snapshot may keep the checkpoint busy until its owner
         // releases it; that is genuine externally reclaimed headroom.
-        let baseline_pending = if job.recovering {
+        let baseline_pending = if !analysis_started {
             false
         } else {
             match know_code_core::store::maintain_index(Path::new(&job.database)) {
@@ -1618,8 +1618,16 @@ fn execute(
             .unwrap_or_else(|| DiskOrigin::capture(&usage, &job.session.limits()));
         return Ok(JobOutput::DiskPaused(DiskPause {
             baseline_pending,
-            used_reclaim: cause.used_reclaim,
-            free_reclaim: cause.free_reclaim,
+            used_reclaim: if analysis_started {
+                cause.used_reclaim
+            } else {
+                0
+            },
+            free_reclaim: if analysis_started {
+                cause.free_reclaim
+            } else {
+                0
+            },
             limit_bytes: cause.limit_bytes,
             reserve_bytes: cause.reserve_bytes,
             message: message.clone(),
@@ -2617,6 +2625,18 @@ mod live_lifetime_tests {
             ..pause.clone()
         };
         assert!(!intrinsic.improved(&recovery::DiskUsage {
+            used_bytes: 0,
+            free_bytes: 1000000
+        }));
+        // Preflight allocated no writer/staging; an external reader can release
+        // before the final sample is captured at zero. Healthy space suffices,
+        // while the active intrinsic-footprint pause above remains fenced.
+        let preflight = DiskPause {
+            used_reclaim: 0,
+            free_reclaim: 0,
+            ..intrinsic
+        };
+        assert!(preflight.improved(&recovery::DiskUsage {
             used_bytes: 0,
             free_bytes: 1000000
         }));
