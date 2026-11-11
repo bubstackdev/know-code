@@ -32,6 +32,8 @@ type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 static REGISTRATION: AtomicU64 = AtomicU64::new(1);
 struct Entry {
     registration: u64,
+    project_trusted: bool,
+    trust_epoch: u64,
     analysis_error: String,
     failed_input_hash: String,
     status: LiveStatus,
@@ -52,6 +54,26 @@ struct Entry {
     recovery_explicit: bool,
     recovering: bool,
     upgrade_format: Option<i32>,
+}
+impl Entry {
+    /// Permission is a presentation/scheduling overlay, never an analysis
+    /// failure or a saved cancellation baseline.
+    fn snapshot(&self) -> WorkspaceStatus {
+        let mut status = self.status.snapshot();
+        if let Some(settings) = status.requested_settings.as_mut() {
+            settings.project_execution_allowed = self.project_trusted;
+        }
+        if !self.project_trusted && !self.cancel_pending && status.available {
+            status.phase = "trust_required".into();
+            status.outcome_code = "trust_required".into();
+            status.error = format!(
+                "project execution is not trusted for {}; grant personal trust with know-code trust WORKSPACE before analysis (package install scripts remain separately controlled)",
+                status.workspace_root
+            );
+            status.progress = None;
+        }
+        status
+    }
 }
 /// Durable deferred work, separate from a failed saved-input baseline. A
 /// post-cleanup sample prevents our own rollback from authorizing a retry loop.
@@ -221,6 +243,7 @@ enum Event {
 }
 struct Job {
     registration: u64,
+    trust_epoch: u64,
     database: String,
     root: PathBuf,
     configuration: String,
@@ -246,8 +269,16 @@ enum JobOutput {
     Indexed(u64, Snapshot, Vec<PathBuf>),
     CancellationBaseline(Snapshot, Vec<PathBuf>, bool),
 }
+#[derive(Clone, Copy, Default)]
+struct DeferredAuthorization {
+    force: bool,
+    retry_preparation: bool,
+    recovery_explicit: bool,
+}
 struct JobResult {
     registration: u64,
+    trust_epoch: u64,
+    authorization: DeferredAuthorization,
     input_hash: String,
     database: String,
     epoch: u64,
@@ -603,6 +634,9 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 database.clone(),
                 Entry {
                     registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
+                    project_trusted: settings::project_execution_allowed(Path::new(&root), data)
+                        .unwrap_or(false),
+                    trust_epoch: 0,
                     analysis_error: error.clone(),
                     failed_input_hash,
                     status: LiveStatus::new(
@@ -787,6 +821,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             for entry in entries.values_mut() {
                 observe_selected_health(&shared, entry);
                 let root = PathBuf::from(&entry.status.workspace_root);
+                let trusted = settings::project_execution_allowed(&root, data).unwrap_or(false);
+                if entry.project_trusted && !trusted {
+                    revoke_entry_execution(shared.as_ref(), entry);
+                } else {
+                    entry.project_trusted = trusted;
+                }
                 let exists = root.is_dir();
                 let matches =
                     exists && workspace::identity(&root).is_ok_and(|id| id == entry.identity);
@@ -922,6 +962,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         .filter(|(_, e)| {
                             e.status.available
                                 && e.pending
+                                && (e.project_trusted || e.cancel_pending)
                                 && e.disk_pause.is_none()
                                 && e.queued.elapsed() >= Duration::from_millis(100)
                         })
@@ -930,6 +971,14 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 };
                 next.map(|database| -> AnyResult<Option<Job>> {
                     let entry = entries.get_mut(&database).unwrap();
+                    entry.project_trusted = settings::project_execution_allowed(
+                        Path::new(&entry.status.workspace_root),
+                        data,
+                    )
+                    .unwrap_or(false);
+                    if !entry.project_trusted && !entry.cancel_pending {
+                        return Ok(None);
+                    }
                     let bad = match recovery::is_bad(Path::new(&database)) {
                         Ok(bad) => bad,
                         Err(error) => {
@@ -991,6 +1040,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     .ok();
                     let job = Job {
                         registration: entry.registration,
+                        trust_epoch: entry.trust_epoch,
                         database: database.clone(),
                         root: PathBuf::from(&entry.status.workspace_root),
                         configuration: entry.configuration.clone(),
@@ -1034,6 +1084,12 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     finish_job(&sender, database.clone(), || {
                         let epoch = job.epoch;
                         let registration = job.registration;
+                        let trust_epoch = job.trust_epoch;
+                        let authorization = DeferredAuthorization {
+                            force: job.force,
+                            retry_preparation: job.retry_preparation,
+                            recovery_explicit: job.recovery_explicit,
+                        };
                         let cancel_baseline = job.cancel_baseline;
                         let recovering = job.recovering;
                         let upgrading = job.upgrade_format.is_some();
@@ -1087,6 +1143,8 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         });
                         JobResult {
                             registration,
+                            trust_epoch,
+                            authorization,
                             database,
                             epoch,
                             result,
@@ -1132,6 +1190,22 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         None
                     } else if done.cancel_baseline && !entry.cancel_pending {
                         // Explicit refresh superseded this capture.
+                        None
+                    } else if done.result.as_ref().is_err_and(|error| {
+                        error.code == "trust_required"
+                            || (done.trust_epoch != entry.trust_epoch && error.code == "cancelled")
+                    }) {
+                        if done
+                            .result
+                            .as_ref()
+                            .is_err_and(|error| error.code == "trust_required")
+                            && done.trust_epoch == entry.trust_epoch
+                        {
+                            entry.project_trusted = false;
+                        }
+                        if let Err(error) = defer_permission_interruption(entry, &done) {
+                            block_lifecycle_error(entry, error.as_ref());
+                        }
                         None
                     } else {
                         match done.result {
@@ -1302,7 +1376,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                 {
                     let entries = shared.entries.lock().unwrap();
                     for entry in entries.values() {
-                        shared.publisher.publish(&entry.status);
+                        shared.publisher.publish(&entry.snapshot());
                     }
                 }
                 shared.changed.notify_all();
@@ -1385,6 +1459,10 @@ fn execute(
         let data = control::root_for_database(database)
             .ok_or("workspace database has no central data root")?;
         let settings_paths = settings::paths(&job.root, data);
+        if !job.cancel_baseline {
+            settings::project_execution_grant(&job.root, data)?;
+            control.check()?;
+        }
         if job.recovering && !job.cancel_baseline {
             guard_temporary_disk(&job, data, &origin, &mut disk)?;
         }
@@ -2016,6 +2094,124 @@ fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<
     }
     Ok(())
 }
+// Revocation is not a user cancellation. Preserve its saved-input baseline,
+// retry flags and failure history; only the active control is interrupted.
+fn revoke_entry_execution(shared: &Shared, entry: &mut Entry) {
+    entry.project_trusted = false;
+    entry.trust_epoch = entry.trust_epoch.wrapping_add(1);
+    entry.status.publisher.invalidate(&entry.status.database);
+    if let Some((_, control)) = shared
+        .active_job
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(database, _)| database == &entry.status.database)
+    {
+        control.cancel();
+        entry.pending = true;
+    }
+}
+
+fn defer_permission_interruption(entry: &mut Entry, done: &JobResult) -> AnyResult<()> {
+    let allocated_failure =
+        done.recovering && recovery::failure(Path::new(&done.database))?.is_some();
+    if allocated_failure {
+        // An allocated replacement still consumes its attempt even when trust
+        // was revoked. Only a later explicit refresh can retry that failure.
+        entry.recovery_blocked = !entry.recovery_explicit;
+        entry.pending = entry.recovery_explicit;
+        entry.force |= entry.recovery_explicit;
+        entry.status.phase = if entry.pending {
+            "queued"
+        } else {
+            "recovery_failed"
+        }
+        .into();
+    } else {
+        // No publication/failed-input baseline was produced. Return only the
+        // exact authorizations consumed by this interrupted job.
+        entry.pending = true;
+        entry.force |= done.authorization.force;
+        entry.retry_preparation |= done.authorization.retry_preparation;
+        if !entry.recovery_blocked || entry.recovery_explicit {
+            entry.recovery_explicit |= done.authorization.recovery_explicit;
+        }
+        entry.status.phase = "queued".into();
+    }
+    entry.status.error = entry.analysis_error.clone();
+    entry.status.progress = None;
+    Ok(())
+}
+
+fn set_workspace_execution(
+    shared: &Shared,
+    data: &Path,
+    request: &ControlRequest,
+) -> AnyResult<WorkspaceStatus> {
+    let allowed: bool =
+        serde_json::from_str(request.settings_json.as_deref().ok_or_else(|| {
+            know_code_core::Error::InvalidRequest("trust requires an explicit boolean grant".into())
+        })?)
+        .map_err(know_code_core::Error::from)?;
+    let mut entries = shared.entries.lock().unwrap();
+    let root = if !request.database.is_empty() {
+        PathBuf::from(
+            &entries
+                .get(&request.database)
+                .ok_or("workspace is not registered")?
+                .status
+                .workspace_root,
+        )
+    } else {
+        let root = PathBuf::from(&request.workspace_root);
+        if root.as_os_str().is_empty() {
+            return Err(know_code_core::Error::InvalidRequest(
+                "trust requires a workspace root or registered database".into(),
+            )
+            .into());
+        }
+        match std::fs::canonicalize(&root) {
+            Ok(root) => root,
+            Err(_) if !allowed && root.is_absolute() => root,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let database = workspace::database_path(&root, data)
+        .to_string_lossy()
+        .into_owned();
+    if let Some(entry) = entries.get_mut(&database) {
+        if allowed {
+            if workspace::identity(&root)? != entry.identity {
+                return Err("workspace identity changed; cannot grant execution to the previous registration".into());
+            }
+            settings::set_project_execution(&root, data, true)?;
+            entry.project_trusted = true;
+            entry.status.publisher.invalidate(&entry.status.database);
+        } else {
+            settings::revoke_project_execution(&root, data)?;
+            revoke_entry_execution(shared, entry);
+        }
+        entry.status.requested_settings = settings::resolve(&root, data, &entry.configuration).ok();
+        persist(shared, entry, None)?;
+        return Ok(entry.snapshot());
+    }
+    // Granting permission is intentionally independent of enrollment: parent
+    // discovery can later register this identity through its normal path.
+    if allowed {
+        settings::set_project_execution(&root, data, true)?;
+    } else {
+        settings::revoke_project_execution(&root, data)?;
+    }
+    Ok(WorkspaceStatus {
+        workspace_root: root.to_string_lossy().into_owned(),
+        database,
+        phase: "unregistered".into(),
+        available: root.is_dir(),
+        requested_settings: settings::resolve(&root, data, "").ok(),
+        ..Default::default()
+    })
+}
+
 fn register_workspace(
     shared: &Shared,
     data: &Path,
@@ -2046,7 +2242,7 @@ fn register_workspace(
                             .into(),
                     );
                 }
-                return Ok(entry.status.snapshot());
+                return Ok(entry.snapshot());
             }
         }
         if entries
@@ -2088,6 +2284,8 @@ fn register_workspace(
         )?;
         let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
             registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
+            project_trusted: settings::project_execution_allowed(&root, data).unwrap_or(false),
+            trust_epoch: 0,
             analysis_error: String::new(),
             failed_input_hash: String::new(),
             status: LiveStatus::new(
@@ -2132,6 +2330,7 @@ fn register_workspace(
             release_disk_pause(entry);
             queue(entry, None, true);
         }
+        entry.project_trusted = settings::project_execution_allowed(&root, data).unwrap_or(false);
         entry.status.requested_settings = settings::resolve(&root, data, &entry.configuration).ok();
         if request.operation == "refresh" {
             release_disk_pause(entry);
@@ -2160,7 +2359,7 @@ fn register_workspace(
                 [root.to_string_lossy().as_ref()],
             )?;
         }
-        entry.status.snapshot()
+        entry.snapshot()
     };
     Ok(persistent)
 }
@@ -2181,7 +2380,7 @@ fn wait_for_workspace(shared: &Shared, request: &ControlRequest) -> AnyResult<Wo
         if entry.registration != registration {
             return Err("workspace registration changed while waiting; start a new wait".into());
         }
-        let status = &entry.status;
+        let status = entry.snapshot();
         let reconciling = entry.pending
             || shared
                 .active_job
@@ -2192,7 +2391,11 @@ fn wait_for_workspace(shared: &Shared, request: &ControlRequest) -> AnyResult<Wo
         if status.published_epoch >= target
             || matches!(
                 status.phase.as_str(),
-                "failed" | "unavailable" | "resource_limited" | "recovery_failed"
+                "failed"
+                    | "unavailable"
+                    | "resource_limited"
+                    | "recovery_failed"
+                    | "trust_required"
             )
             || (status.phase == "cancelled" && !reconciling)
             || shared.stop.load(Ordering::Acquire)
@@ -2214,7 +2417,7 @@ fn wait_for_workspace(shared: &Shared, request: &ControlRequest) -> AnyResult<Wo
     if entry.registration != registration {
         return Err("workspace registration changed while waiting; start a new wait".into());
     }
-    Ok(entry.status.snapshot())
+    Ok(entry.snapshot())
 }
 
 fn serve(
@@ -2241,6 +2444,15 @@ fn serve(
         if request.index_lifecycle_version != protocol::INDEX_LIFECYCLE_VERSION {
             return Err(know_code_core::Error::UpdateRequired("update the coordinator and native libraries together; index lifecycle safety is incompatible".into()).into());
         }
+        if request.operation == "trust" {
+            let status = set_workspace_execution(shared, data, &request)?;
+            wake(sender, shared, Event::Wake);
+            shared.changed.notify_all();
+            return Ok(ControlResponse {
+                workspaces: vec![status],
+                ..Default::default()
+            });
+        }
         if request.operation == "index-corrupt" {
             let report = request
                 .corruption
@@ -2253,7 +2465,7 @@ fn serve(
                 .get_mut(&request.database)
                 .ok_or("workspace is not registered")?;
             observe_bad(shared, entry, &report.incarnation)?;
-            let status = entry.status.snapshot();
+            let status = entry.snapshot();
             persist(shared, entry, None)?;
             drop(entries);
             wake(sender, shared, Event::Wake);
@@ -2288,7 +2500,6 @@ fn serve(
                         .unwrap()
                         .get(&request.database)
                         .ok_or(know_code_core::Error::CursorInvalidated)?
-                        .status
                         .snapshot(),
                 )
             };
@@ -2356,7 +2567,7 @@ fn serve(
                             "analyzing" | "recovering" | "cancelling"
                         )
                     })
-                    .map(|e| e.status.snapshot())
+                    .map(|e| e.snapshot())
                     .collect(),
                 analysis_running: shared.analysis_running.load(Ordering::Acquire),
                 ..Default::default()
@@ -2431,7 +2642,7 @@ fn serve(
             wake(sender, shared, Event::Wake);
             shared.changed.notify_all();
             return Ok(ControlResponse {
-                workspaces: vec![entry.status.snapshot()],
+                workspaces: vec![entry.snapshot()],
                 ..Default::default()
             });
         }
@@ -2452,7 +2663,7 @@ fn serve(
                 settings::resolve(root, data, &entry.configuration)?
             };
             entry.status.requested_settings = Some(effective);
-            let status = entry.status.snapshot();
+            let status = entry.snapshot();
             wake(sender, shared, Event::Wake);
             shared.changed.notify_all();
             return Ok(ControlResponse {
@@ -2479,6 +2690,7 @@ fn serve(
             }
             shared.cursors.unregister(Path::new(&database))?;
             settings::revoke_scripts(Path::new(&request.workspace_root), data)?;
+            settings::revoke_project_execution(Path::new(&request.workspace_root), data)?;
             let mut registry = shared.registry.lock().unwrap();
             let tx = registry.transaction()?;
             tx.execute(
@@ -2526,7 +2738,7 @@ fn serve(
         let workspaces = entries
             .values()
             .filter(|e| request.database.is_empty() || e.status.database == request.database)
-            .map(|e| e.status.snapshot())
+            .map(|e| e.snapshot())
             .collect();
         drop(entries);
         Ok(ControlResponse {
@@ -2631,6 +2843,165 @@ pub fn managed_login_plist(executable: &Path, data: &Path, label: &str, path: &s
 #[cfg(test)]
 mod live_lifetime_tests {
     use super::*;
+    fn permission_entry(root: &Path, database: &str) -> Entry {
+        let publisher = Arc::new(Publisher::new(root));
+        Entry {
+            registration: 1,
+            project_trusted: false,
+            trust_epoch: 0,
+            analysis_error: "prior dependency setup failed".into(),
+            failed_input_hash: "saved-failure".into(),
+            status: LiveStatus::new(
+                WorkspaceStatus {
+                    workspace_root: root.to_string_lossy().into(),
+                    database: database.into(),
+                    phase: "failed".into(),
+                    available: true,
+                    outcome_code: "analysis_error".into(),
+                    error: "prior dependency setup failed".into(),
+                    ..Default::default()
+                },
+                &publisher,
+            ),
+            configuration: String::new(),
+            identity: String::new(),
+            special_inputs: BTreeSet::new(),
+            dirty: BTreeSet::new(),
+            force: false,
+            rehash: false,
+            retry_preparation: false,
+            queued: Instant::now(),
+            active: Instant::now(),
+            watch_pending: false,
+            pending: false,
+            cancel_pending: false,
+            disk_pause: None,
+            recovery_blocked: false,
+            recovery_explicit: false,
+            recovering: false,
+            upgrade_format: None,
+        }
+    }
+    #[test]
+    fn permission_overlay_preserves_failed_input_and_durable_outcome() {
+        let job = cancellation_job();
+        let mut entry = permission_entry(&job.root, &job.database);
+        let queued = entry.queued;
+        assert_eq!(entry.snapshot().phase, "trust_required");
+        let saved = PersistedEntry::capture(&entry).unwrap();
+        assert_eq!(saved.status.outcome_code, "analysis_error");
+        assert_eq!(saved.analysis_error, "prior dependency setup failed");
+        assert_eq!(saved.failed_input_hash, "saved-failure");
+        entry.project_trusted = true;
+        assert_eq!(entry.snapshot().phase, "failed");
+        assert!(!entry.pending && !entry.force && !entry.retry_preparation);
+        assert_eq!(entry.queued, queued);
+        entry.project_trusted = false;
+        begin_cancellation(&mut entry);
+        assert_eq!(entry.snapshot().phase, "cancelling");
+        assert!(entry.cancel_pending && entry.pending);
+    }
+    #[test]
+    fn revoked_job_after_regrant_defers_only_its_original_authorization() {
+        let job = cancellation_job();
+        let mut entry = permission_entry(&job.root, &job.database);
+        entry.trust_epoch = 1;
+        entry.project_trusted = true;
+        let done = JobResult {
+            registration: 1,
+            trust_epoch: 0,
+            authorization: DeferredAuthorization {
+                force: true,
+                retry_preparation: false,
+                recovery_explicit: true,
+            },
+            input_hash: "incomplete-work".into(),
+            database: job.database,
+            epoch: 1,
+            result: Err(Failure {
+                code: "cancelled".into(),
+                message: "permission revoked".into(),
+                index_fault: None,
+            }),
+            cancel_baseline: false,
+            recovering: false,
+        };
+        defer_permission_interruption(&mut entry, &done).unwrap();
+        assert!(entry.pending && entry.force && entry.recovery_explicit);
+        assert!(!entry.retry_preparation && !entry.cancel_pending);
+        assert_eq!(entry.failed_input_hash, "saved-failure");
+        assert_eq!(entry.analysis_error, "prior dependency setup failed");
+        assert_eq!(entry.status.outcome_code, "analysis_error");
+    }
+    #[test]
+    fn revoked_allocated_replacement_requires_explicit_retry_after_regrant() {
+        let job = recovery_job();
+        let candidate =
+            recovery::begin_rebuild(Path::new(&job.database), false, job.previous_generation)
+                .unwrap();
+        recovery::fail_rebuild(Path::new(&job.database), "permission revoked").unwrap();
+        let mut entry = permission_entry(&job.root, &job.database);
+        entry.project_trusted = true;
+        entry.trust_epoch = 1;
+        let done = JobResult {
+            registration: 1,
+            trust_epoch: 0,
+            authorization: DeferredAuthorization {
+                force: true,
+                retry_preparation: true,
+                recovery_explicit: true,
+            },
+            input_hash: String::new(),
+            database: job.database.clone(),
+            epoch: 1,
+            result: Err(Failure {
+                code: "cancelled".into(),
+                message: "permission revoked".into(),
+                index_fault: None,
+            }),
+            cancel_baseline: false,
+            recovering: true,
+        };
+        defer_permission_interruption(&mut entry, &done).unwrap();
+        assert!(entry.recovery_blocked && !entry.pending && !entry.recovery_explicit);
+        assert!(!entry.force && !entry.retry_preparation);
+        assert_eq!(entry.failed_input_hash, "saved-failure");
+        assert!(
+            recovery::failure(Path::new(&job.database))
+                .unwrap()
+                .is_some()
+        );
+        drop(candidate);
+    }
+    #[test]
+    fn untrusted_rebuild_is_fenced_before_attempt_allocation() {
+        let job = recovery_job();
+        let database = job.database.clone();
+        let data = control::root_for_database(Path::new(&database)).unwrap();
+        settings::revoke_project_execution(&job.root, data).unwrap();
+        let error = execute(
+            job,
+            Path::new("/no/compiler/installation"),
+            &mut String::new(),
+            &mut |_| {},
+            None,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            error
+                .downcast_ref::<know_code_core::Error>()
+                .unwrap()
+                .code(),
+            "trust_required"
+        );
+        assert!(recovery::failure(Path::new(&database)).unwrap().is_none());
+        assert!(
+            recovery::replacement_reason(Path::new(&database))
+                .unwrap()
+                .is_none()
+        );
+    }
     #[test]
     fn queued_wait_is_safe_when_enrollment_is_removed_or_replaced() {
         for replaced in [false, true] {
@@ -2646,6 +3017,8 @@ mod live_lifetime_tests {
             let active = Instant::now() - Duration::from_secs(60);
             let entry = Entry {
                 registration: 1,
+                project_trusted: true,
+                trust_epoch: 0,
                 analysis_error: String::new(),
                 failed_input_hash: String::new(),
                 status: LiveStatus::new(
@@ -2827,6 +3200,8 @@ mod live_lifetime_tests {
         let publisher = Arc::new(Publisher::new(&root));
         let mut entry = Entry {
             registration: 1,
+            project_trusted: true,
+            trust_epoch: 0,
             analysis_error: "provider failed".into(),
             failed_input_hash: "failed-saved-input".into(),
             status: LiveStatus::new(
@@ -2923,6 +3298,7 @@ mod live_lifetime_tests {
         let data = root.parent().unwrap().join("d");
         Job {
             registration: 1,
+            trust_epoch: 0,
             database: workspace::database_path(&root, &data)
                 .to_string_lossy()
                 .into_owned(),
@@ -2952,6 +3328,8 @@ mod live_lifetime_tests {
         job.recovering = true;
         job.previous_error.clear();
         job.previous_error_code.clear();
+        let data = control::root_for_database(Path::new(&job.database)).unwrap();
+        settings::set_project_execution(&job.root, data, true).unwrap();
         let parent = Path::new(&job.database).parent().unwrap();
         std::fs::create_dir_all(parent).unwrap();
         recovery::adopt(Path::new(&job.database), 0).unwrap();
@@ -3115,6 +3493,8 @@ mod live_lifetime_tests {
         let publisher = Arc::new(Publisher::new(&data));
         let mut entry = Entry {
             registration: 1,
+            project_trusted: true,
+            trust_epoch: 0,
             analysis_error: String::new(),
             failed_input_hash: String::new(),
             status: LiveStatus::new(
@@ -3513,6 +3893,8 @@ mod live_lifetime_tests {
             database.clone(),
             Entry {
                 registration: 1,
+                project_trusted: true,
+                trust_epoch: 0,
                 analysis_error: String::new(),
                 failed_input_hash: String::new(),
                 status: LiveStatus::new(status.clone(), &publisher),
@@ -3571,7 +3953,7 @@ mod live_lifetime_tests {
         let entry = entries.get_mut(&database).unwrap();
         assert!(entry.active > now);
         assert_eq!(entry.queued, now - Duration::from_secs(6));
-        assert_eq!(entry.status.snapshot(), status);
+        assert_eq!(entry.snapshot(), status);
         assert_eq!(
             know_code_core::live::current(&root, &database).unwrap(),
             status
