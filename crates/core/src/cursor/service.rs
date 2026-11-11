@@ -107,7 +107,14 @@ impl CursorService {
                     Ok(retention) => {
                         initialized.insert((database, retention.health.incarnation().to_owned()));
                     }
-                    Err(Error::IndexCorrupt { .. } | Error::IndexRecovering(_)) => {}
+                    // Unreadable stores cannot be initialized by this runtime.
+                    // Keep their version error local; retrying them as shared
+                    // pin cleanup would block healthy sibling pagination.
+                    Err(
+                        Error::IndexCorrupt { .. }
+                        | Error::IndexRecovering(_)
+                        | Error::UpdateRequired(_),
+                    ) => {}
                     Err(error) => {
                         cleanup_pending.insert(database, error.to_string());
                     }
@@ -574,7 +581,9 @@ impl CursorService {
     }
     /// Serialize a selector cutover with cursor admission and shared retention
     /// pressure. Healthy old pins remain valid on their original incarnation.
-    /// The callback must acquire lifecycle metadata locks only after admission.
+    /// Prevalidate/checkpoint/fsync the candidate before entering this fence.
+    /// The callback is only the short selector commit; never scan SQLite or
+    /// wait for lifecycle locks before calling this method.
     pub fn publish_replacement<T>(
         &self,
         database: &Path,
@@ -835,6 +844,50 @@ mod tests {
             .unwrap()
             .text
     }
+    #[test]
+    fn unreadable_format1_startup_does_not_block_healthy_sibling_paging() {
+        let legacy = crate::cursor::lifecycle_tests::legacy_database()
+            .canonicalize()
+            .unwrap();
+        let connection = rusqlite::Connection::open(&legacy).unwrap();
+        // Actual historical schema1, using the same conversion as the existing
+        // publication migration fixture; not a fake label on a modern store.
+        connection.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE generation_units; DROP TABLE unit_artifacts; ALTER TABLE compilations DROP COLUMN dependencies_json; ALTER TABLE compilations DROP COLUMN input_paths_json; PRAGMA user_version=1;").unwrap();
+        crate::recovery::adopt(&legacy, 1).unwrap();
+        let healthy = crate::cursor::lifecycle_tests::database()
+            .canonicalize()
+            .unwrap();
+        let root = legacy.parent().unwrap().join("coordinator");
+        std::fs::create_dir_all(&root).unwrap();
+        let service = CursorService::new(&root, [legacy.clone(), healthy.clone()]).unwrap();
+        assert!(service.lock().unwrap().cleanup_pending.is_empty());
+        let page = ready_symbols(&service, &healthy);
+        assert!(read_page(&page)["symbols"].as_array().unwrap().is_empty());
+        assert!(matches!(
+            call(&service, &legacy, action("admit", None)),
+            Err(Error::UpdateRequired(_))
+        ));
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE name='cursor_generation_pins'",
+                    [],
+                    |r| r.get::<_, i32>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let again = call(&service, &healthy, action("borrow", Some(&page))).unwrap();
+        assert_eq!(read_page(&again), read_page(&page));
+        call(&service, &healthy, action("finish", Some(&again))).unwrap();
+    }
+
     #[test]
     fn format2_pages_remain_available_during_failed_upgrade_without_migration() {
         let (db, service) = legacy_fixture();

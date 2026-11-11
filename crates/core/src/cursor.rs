@@ -730,8 +730,8 @@ fn open_writer_controlled(
         connection.execute_batch(
             "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048;",
         )?;
-        let version: u32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(2..=crate::store::SCHEMA_VERSION as u32).contains(&version) {
+        let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if !crate::store::READABLE_FORMATS.contains(&version) {
             return Err(Error::UpdateRequired(format!(
                 "index format {version} cannot retain cursor generations"
             )));
