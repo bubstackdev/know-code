@@ -269,3 +269,123 @@ fn ready_upgrade_waits_for_publication_and_interruption_consumes_its_attempt() {
     drop(old);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn failed_start_settles_its_exact_receipt_and_allows_explicit_retry_without_restart() {
+    use std::os::unix::fs::PermissionsExt;
+    for failure in ["directory_sync", "mkdir"] {
+        let (root, logical) = fixture(2, Some(12));
+        let old = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        let indexes = logical.parent().unwrap().join("indexes");
+        if failure == "directory_sync" {
+            FAIL_NEXT_DIRECTORY_SYNC.with(|flag| flag.set(true));
+        } else {
+            fs::set_permissions(&indexes, fs::Permissions::from_mode(0o500)).unwrap();
+        }
+        let result = begin_upgrade(&logical, false, 2, 2);
+        fs::set_permissions(&indexes, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(result, Err(Error::Io(_))), "{failure}: {result:?}");
+        let reason = RebuildReason::Upgrade {
+            source_format: 2,
+            target_format: 8,
+        };
+        assert_eq!(failure_reason(&logical).unwrap(), Some(reason));
+        assert!(load(&logical).unwrap().unwrap().pending.is_none());
+        assert!(matches!(
+            begin_upgrade(&logical, false, 2, 2),
+            Err(Error::IndexRecovering(_))
+        ));
+        assert!(old.check().is_ok());
+        let retry = begin_upgrade(&logical, true, 2, 2).unwrap();
+        assert_eq!(retry.reason, reason);
+        assert_eq!(retry.minimum_generation, 13);
+        drop(old);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn unsupported_or_unmanaged_sources_never_authorize_replacement_or_rewrite_receipts() {
+    for format in [-1, 0, 3, 7, 8, 999] {
+        let (root, logical) = fixture(format, Some(12));
+        let physical = selected_path(&logical).unwrap();
+        if ![3, 7, 8].contains(&format) {
+            // The probe may inspect SQLite's stable version header, but must
+            // not interpret an unknown source's tables to find a generation.
+            Connection::open(&physical)
+                .unwrap()
+                .execute_batch("DROP TABLE state;")
+                .unwrap();
+            assert_eq!(selected_format(&logical).unwrap(), Some((format, 0)));
+        }
+        let receipt = fs::read(state_path(&logical)).unwrap();
+        let bytes = fs::read(&physical).unwrap();
+        for explicit in [false, true] {
+            assert!(matches!(
+                begin_upgrade(&logical, explicit, 2, format),
+                Err(Error::UpdateRequired(_))
+            ));
+            assert!(matches!(
+                begin_upgrade(&logical, explicit, 2, 2),
+                Err(Error::UpdateRequired(_))
+            ));
+            assert_eq!(fs::read(state_path(&logical)).unwrap(), receipt);
+            assert_eq!(fs::read(&physical).unwrap(), bytes);
+        }
+        assert!(!is_bad(&logical).unwrap());
+        assert_eq!(failure_reason(&logical).unwrap(), None);
+        assert_eq!(
+            fs::read_dir(logical.parent().unwrap().join("indexes"))
+                .unwrap()
+                .count(),
+            1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    let (root, logical) = fixture(2, Some(12));
+    fs::remove_file(state_path(&logical)).unwrap();
+    assert!(matches!(
+        selected_format(&logical),
+        Err(Error::InvalidRequest(_))
+    ));
+    assert!(matches!(
+        begin_upgrade(&logical, true, 0, 2),
+        Err(Error::InvalidRequest(_))
+    ));
+    assert!(!state_path(&logical).exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn invalid_target_or_mutated_candidate_cannot_checkpoint_unowned_paths_or_publish() {
+    let (root, logical) = fixture(2, Some(12));
+    let old = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+    let candidate = begin_upgrade(&logical, false, 2, 2).unwrap();
+    candidate_database(&candidate, 13);
+    let mut different = candidate.clone();
+    different.database = old.physical_path().into();
+    assert!(matches!(
+        prepare_rebuild(&different, &Control::default()),
+        Err(Error::InvalidRequest(_))
+    ));
+    let different = Connection::open(&candidate.database).unwrap();
+    different.execute_batch("PRAGMA user_version=999;").unwrap();
+    drop(different);
+    assert!(matches!(
+        prepare_rebuild(&candidate, &Control::default()),
+        Err(Error::UpdateRequired(_))
+    ));
+    assert!(
+        load(&logical)
+            .unwrap()
+            .unwrap()
+            .pending
+            .unwrap()
+            .ready_generation
+            .is_none()
+    );
+    assert!(old.check().is_ok());
+    assert_eq!(selected_format(&logical).unwrap(), Some((2, 12)));
+    drop(old);
+    fs::remove_dir_all(root).unwrap();
+}

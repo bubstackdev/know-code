@@ -869,9 +869,43 @@ fn begin_replacement(
     });
     state.failed = None;
     state.failed_reason = None;
-    save(logical, &state)?;
-    create_incarnation(logical, &index)?;
+    let started = (|| -> Result<()> {
+        save(logical, &state)?;
+        create_incarnation(logical, &index)
+    })();
+    if let Err(error) = started {
+        // A selector rename may be visible even when its directory sync failed.
+        // Still under the lifecycle lock, settle only this exact owned receipt;
+        // a refusal before publication must never rewrite an older failure.
+        if let Err(recording) = fail_owned_start(&candidate, &error.to_string()) {
+            return Err(Error::Remote {
+                code: error.code().into(),
+                message: format!(
+                    "{error}; replacement failure receipt could not be recorded: {recording}; explicit refresh is required"
+                ),
+            });
+        }
+        return Err(error);
+    }
     Ok(candidate)
+}
+fn fail_owned_start(candidate: &Candidate, message: &str) -> Result<()> {
+    let Some(mut state) = load(&candidate.logical)? else {
+        return Ok(());
+    };
+    let Some(pending) = state
+        .pending
+        .as_ref()
+        .filter(|p| p.index.id == candidate.incarnation)
+    else {
+        return Ok(());
+    };
+    check_candidate_receipt(candidate, pending)?;
+    let pending = state.pending.take().unwrap();
+    state.failed = Some(message.chars().take(4096).collect());
+    state.failed_reason = Some(pending.reason);
+    state.retired.push(pending.index);
+    save(&candidate.logical, &state)
 }
 pub fn fail_rebuild(logical: &Path, message: &str) -> Result<()> {
     let _lock = lock(logical)?;
