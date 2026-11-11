@@ -74,14 +74,24 @@ fn open(path: &Path, create: bool) -> Result<File> {
     regular(path, &file.metadata()?)?;
     Ok(file)
 }
-fn lock(file: &File, shared: bool, message: &str) -> Result<()> {
+/// The acquiring owner releases the lock even if an unrelated fork inherited
+/// its open file description before CLOEXEC could close the child's copy.
+/// Construct only after successful acquisition; failed attempts own no lock.
+#[derive(Debug)]
+struct HeldLock(File);
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+fn lock(file: File, shared: bool, message: &str) -> Result<HeldLock> {
     let result = if shared {
         file.try_lock_shared()
     } else {
         file.try_lock()
     };
     match result {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(HeldLock(file)),
         Err(std::fs::TryLockError::WouldBlock) => Err(Error::Busy(message.into())),
         Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
     }
@@ -135,14 +145,13 @@ impl AdmissionScope {
         }
         Ok(Self { path })
     }
-    fn guard(&self, shared: bool) -> Result<File> {
+    fn guard(&self, shared: bool) -> Result<HeldLock> {
         let file = open(&self.path.join(GUARD), true)?;
         lock(
-            &file,
+            file,
             shared,
             "query admission policy is in use; retry the operation",
-        )?;
-        Ok(file)
+        )
     }
     fn read_policy(&self) -> Result<Policy> {
         let mut file = match open(&self.path.join(POLICY), false) {
@@ -198,12 +207,11 @@ impl AdmissionScope {
         let mut slots = Vec::new();
         for index in 0..previous.max_active_queries.max(max_active_queries) {
             let file = scope.slot(index)?;
-            lock(
-                &file,
+            slots.push(lock(
+                file,
                 false,
                 "query admission configuration requires quiescence; active queries remain",
-            )?;
-            slots.push(file);
+            )?);
         }
         let policy = Policy {
             version: VERSION,
@@ -228,7 +236,7 @@ impl AdmissionScope {
                 Ok(()) => {
                     return Ok(Reservation {
                         lease: Arc::new(Lease {
-                            _slot: file,
+                            _slot: HeldLock(file),
                             submitted: AtomicBool::new(false),
                         }),
                     });
@@ -246,7 +254,7 @@ impl AdmissionScope {
 
 #[derive(Debug)]
 struct Lease {
-    _slot: File,
+    _slot: HeldLock,
     submitted: AtomicBool,
 }
 /// Public ownership may be placed in Arc by a host, but can submit only once.
@@ -276,7 +284,7 @@ pub(crate) struct Permit {
 mod tests {
     use super::*;
     use std::{
-        os::fd::AsRawFd,
+        os::fd::{AsRawFd, FromRawFd, OwnedFd},
         process::{Child, Command, Stdio},
         sync::atomic::AtomicU64,
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -554,7 +562,7 @@ mod tests {
     fn close_on_exec_and_unwind_release_without_explicit_unlock() {
         let scope = fixture();
         let reservation = scope.try_reserve().unwrap();
-        let flags = unsafe { libc::fcntl(reservation.lease._slot.as_raw_fd(), libc::F_GETFD) };
+        let flags = unsafe { libc::fcntl(reservation.lease._slot.0.as_raw_fd(), libc::F_GETFD) };
         assert!(flags >= 0 && flags & libc::FD_CLOEXEC != 0);
         let _child = child(&scope, "idle");
         drop(reservation);
@@ -568,6 +576,161 @@ mod tests {
             panic!("owned fixture unwind");
         });
         assert!(outcome.is_err());
+        let four = (0..4)
+            .map(|_| scope.try_reserve().unwrap())
+            .collect::<Vec<_>>();
+        busy(scope.try_reserve());
+        drop(four);
+    }
+    struct Forked {
+        pid: libc::pid_t,
+        release: Option<OwnedFd>,
+    }
+    impl Drop for Forked {
+        fn drop(&mut self) {
+            // EOF releases the child on every parent unwind path. Bound cleanup
+            // too, in case a separate concurrent fork briefly inherited a pipe.
+            drop(self.release.take());
+            let until = Instant::now() + Duration::from_secs(2);
+            loop {
+                let done = unsafe { libc::waitpid(self.pid, std::ptr::null_mut(), libc::WNOHANG) };
+                if done == self.pid {
+                    return;
+                }
+                if done < 0
+                    && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted
+                {
+                    return;
+                }
+                if Instant::now() >= until {
+                    unsafe {
+                        libc::kill(self.pid, libc::SIGKILL);
+                    }
+                    loop {
+                        let done = unsafe { libc::waitpid(self.pid, std::ptr::null_mut(), 0) };
+                        if done == self.pid
+                            || (done < 0
+                                && std::io::Error::last_os_error().kind()
+                                    != std::io::ErrorKind::Interrupted)
+                        {
+                            break;
+                        }
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+    fn fork_with_inherited_descriptors() -> Forked {
+        fn pipe() -> [OwnedFd; 2] {
+            let mut fds = [-1; 2];
+            assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+            // Owned descriptors exist before any assertion can unwind.
+            let owned = unsafe { [OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])] };
+            for fd in &owned {
+                assert_eq!(
+                    unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) },
+                    0
+                );
+            }
+            owned
+        }
+        let [ready_read, ready_write] = pipe();
+        let [release_read, release_write] = pipe();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0);
+        if pid == 0 {
+            // Multithreaded-test child: only async-signal-safe syscalls. Never
+            // allocate, unwind, run a Rust destructor, or touch inherited locks.
+            unsafe {
+                libc::close(ready_read.as_raw_fd());
+                libc::close(release_write.as_raw_fd());
+                let mut byte = 1u8;
+                let sent = libc::write(ready_write.as_raw_fd(), (&byte as *const u8).cast(), 1);
+                libc::close(ready_write.as_raw_fd());
+                let received =
+                    libc::read(release_read.as_raw_fd(), (&mut byte as *mut u8).cast(), 1);
+                libc::close(release_read.as_raw_fd());
+                libc::_exit(if sent == 1 && received >= 0 { 0 } else { 2 });
+            }
+        }
+        // Construct unwind cleanup before readiness checking or assertions.
+        let child = Forked {
+            pid,
+            release: Some(release_write),
+        };
+        drop(ready_write);
+        drop(release_read);
+        let flags = unsafe { libc::fcntl(ready_read.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0);
+        assert_eq!(
+            unsafe {
+                libc::fcntl(
+                    ready_read.as_raw_fd(),
+                    libc::F_SETFL,
+                    flags | libc::O_NONBLOCK,
+                )
+            },
+            0
+        );
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut byte = 0u8;
+            let count =
+                unsafe { libc::read(ready_read.as_raw_fd(), (&mut byte as *mut u8).cast(), 1) };
+            if count == 1 {
+                assert_eq!(byte, 1);
+                break;
+            }
+            assert!(
+                count < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock,
+                "child exited before readiness"
+            );
+            assert!(Instant::now() < until, "forked child did not become ready");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        child
+    }
+    #[test]
+    fn preexec_fork_copies_cannot_retain_released_policy_or_slot_ownership() {
+        let scope = fixture();
+        let reservation = scope.try_reserve().unwrap();
+        let permit = reservation.submit().unwrap();
+        let last = permit.clone();
+        let guard = scope.guard(false).unwrap();
+        let configured = (1..4)
+            .map(|index| {
+                let file = scope.slot(index).unwrap();
+                lock(file, false, "fixture configure slots").unwrap()
+            })
+            .collect::<Vec<_>>();
+        let child = fork_with_inherited_descriptors();
+        drop(guard);
+        drop(configured);
+        // Policy/configuration locks end with their parent owners, although
+        // the child still holds copies of all their open file descriptions.
+        let other = (0..3)
+            .map(|_| scope.try_reserve().unwrap())
+            .collect::<Vec<_>>();
+        busy(scope.try_reserve());
+        drop(reservation);
+        drop(permit);
+        busy(scope.try_reserve());
+        drop(last);
+        let replacement = scope.try_reserve().unwrap();
+        busy(scope.try_reserve());
+        assert_eq!(
+            unsafe { libc::waitpid(child.pid, std::ptr::null_mut(), libc::WNOHANG) },
+            0,
+            "child must still be blocked before exec/exit"
+        );
+        drop(child);
+        // Closing the child's old copies must not unlock independently opened
+        // reservations acquired after the original parent lease was released.
+        busy(scope.try_reserve());
+        drop((replacement, other));
         let four = (0..4)
             .map(|_| scope.try_reserve().unwrap())
             .collect::<Vec<_>>();
