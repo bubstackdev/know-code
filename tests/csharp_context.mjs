@@ -53,6 +53,37 @@ function success(result) {
   assert.equal(result.messages.at(-1).complete.success,true);
   assert(result.reports.every(r=>r.status==='complete'),JSON.stringify(result.reports));
 }
+function unavailableContext(result, projects, code, message) {
+  assert.equal(result.status,0,result.error);
+  assert.equal(result.messages[0].provider.analysisPolicyVersion,1);
+  assert.equal(result.messages.at(-1).complete.success,true);
+  const expected=projects.map(p=>path.relative(workspace,p).replaceAll(path.sep,'/')).sort();
+  assert.deepEqual(result.compilations.map(c=>c.projectPath).sort(),expected,'every requested project needs unavailable context evidence');
+  assert.equal(result.reports.length,projects.length);
+  assert.equal(result.preparations.length,0,'unavailable solution selection must not restore a fallback context');
+  assert.equal(result.symbols.length,0,'unavailable solution selection emitted compiler symbols');
+  assert(!result.messages.some(m=>m.source||m.facts),'unavailable solution selection emitted source or graph facts');
+  for (const compilation of result.compilations) {
+    assert.equal(compilation.language,'csharp');
+    assert.equal(compilation.compilerVersion,'unavailable');
+    assert.equal(compilation.target,'','unknown targets must not be fabricated');
+    assert.equal(compilation.configuration,'','unavailable selection must not substitute a configuration');
+    assert.equal(compilation.options.context,'unavailable');
+    assert.equal(compilation.options.setup_failure,code);
+    assert.equal(compilation.options.target_known,false);
+    assert(!Object.hasOwn(compilation.options,'build_context'),'unavailable selection claimed an evaluated build context');
+    assert(compilation.inputPaths.includes(path.join(workspace,compilation.projectPath)));
+    const reports=result.reports.filter(r=>r.compilationId===compilation.id);
+    assert.equal(reports.length,1,'unavailable project needs exactly one matching report');
+    const report=reports[0];assert.equal(report.status,'unavailable');
+    for (const capability of ['calls','dependencies','dispatch','project_links','target_equivalence'])
+      assert.equal(report.capabilities[capability],'unavailable');
+    assert.equal(report.diagnostics.length,1);
+    const diagnostic=report.diagnostics[0];assert.equal(diagnostic.code,code);
+    assert.equal(diagnostic.severity,'error');assert.equal(diagnostic.path,compilation.projectPath);
+    assert.match(diagnostic.message,message);
+  }
+}
 const workspace=path.join(run,'workspace');
 write(path.join(workspace,'Directory.Build.props'),`<Project><PropertyGroup>
   <Configuration Condition="'$(Configuration)' == ''">Repository</Configuration>
@@ -137,7 +168,7 @@ checks.push('unchanged_context_preparation_reused');
 
 write(path.join(workspace,'Other.sln'),solution());
 result=invoke(workspace,projects,{});
-assert.notEqual(result.status,0); assert.match(result.error,/multiple solution files/); assert.equal(result.compilations.length,0);
+unavailableContext(result,projects,'solution_selection_required',/multiple solution files require one workspace solution_path selection; no solution contexts were expanded/);
 checks.push('multiple_solutions_require_selection');
 result=invoke(workspace,projects,{solutionPath:selected}); success(result);
 assert.equal(result.compilations.length,4);
@@ -148,7 +179,8 @@ assert(result.compilations.every(c=>c.configuration==='Release'&&c.options.platf
 assert.equal(result.compilations.find(c=>c.projectPath==='Outside/Outside.csproj').options.build_context.origin,'workspace_override');
 checks.push('explicit_override_selects_solution_context_and_direct_project_defaults');
 result=invoke(workspace,projects,{solutionPath:path.join(workspace,'missing.sln')});
-assert.notEqual(result.status,0);assert.match(result.error,/selected solution is unavailable/);assert.equal(result.compilations.length,0);
+unavailableContext(result,projects,'solution_unavailable',/selected solution is unavailable/);
+assert(result.reports.every(r=>r.diagnostics[0].message.includes(path.join(workspace,'missing.sln'))),'diagnostics must identify the unavailable explicit selection');
 checks.push('missing_selected_solution_no_substitution');
 
 write(selected,solution('Debug','Any CPU'));
