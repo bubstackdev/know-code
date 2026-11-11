@@ -8,6 +8,33 @@ use std::{
 };
 
 pub const SCHEMA_VERSION: i32 = 8;
+/// Closed managed-upgrade catalog. Unknown formats never authorize replacement.
+/// Unmanaged Writer migrations retain their existing behavior.
+pub const READABLE_FORMATS: &[i32] = &[2, 3, 4, 5, 6, 7, 8];
+pub const MIGRATION_FORMATS: &[i32] = &[3, 4, 5, 6, 7];
+pub const REBUILD_FORMATS: &[i32] = &[1, 2];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpgradeAction {
+    Current,
+    Migrate,
+    Rebuild { readable: bool },
+    Unsupported,
+}
+
+pub fn upgrade_action(format: i32) -> UpgradeAction {
+    if format == SCHEMA_VERSION {
+        UpgradeAction::Current
+    } else if REBUILD_FORMATS.contains(&format) {
+        UpgradeAction::Rebuild {
+            readable: READABLE_FORMATS.contains(&format),
+        }
+    } else if MIGRATION_FORMATS.contains(&format) {
+        UpgradeAction::Migrate
+    } else {
+        UpgradeAction::Unsupported
+    }
+}
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS generations(id INTEGER PRIMARY KEY);
