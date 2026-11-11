@@ -160,9 +160,6 @@ PHASE='network_denied_runtime';PHASES.append({'phase':PHASE,'started_ns':time.ti
 assert not DATA.exists(),'an index/coordinator appeared before first offline registration'
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0
 checks+=['project_dependencies_restored_before_registration','fresh_initial_index_starts_under_network_denial']
-assert WORKSPACE.resolve().is_relative_to(PREFIX) and DATA.resolve().is_relative_to(PREFIX)
-command(HOST,'trust',WORKSPACE) # Real CLI under the existing denied-network/checkout policy.
-checks.append('explicit_project_trust_granted_offline_before_registration')
 
 def read_json_line(process,selector,buffer,context):
  until=time.monotonic()+30
@@ -196,6 +193,9 @@ def ready(client,after=1):
   s=client.send('wait',wait_ms=1000);assert not isinstance(s.get('error'),dict),s;assert s['phase']!='failed',s
   if s['phase']=='idle' and s['observed_epoch']==s['published_epoch'] and s['generation']>=after:return s
  raise AssertionError(s)
+assert WORKSPACE.resolve().is_relative_to(PREFIX) and DATA.resolve().is_relative_to(PREFIX)
+command(HOST,'trust',WORKSPACE) # Real CLI under the existing denied-network/checkout policy.
+checks.append('explicit_project_trust_granted_offline_before_registration')
 node=Client('node');initial=ready(node);net=Client('net');assert net.opened['opened']['database']==initial['database'];DATABASE=initial['database'];MIN_GENERATION=initial['generation']
 def checked_result(envelope):
  assert isinstance(envelope,dict) and 'error' not in envelope and isinstance(envelope.get('result'),dict),envelope
