@@ -1,3 +1,4 @@
+pub mod admission;
 pub mod control;
 pub mod cursor;
 pub mod execution;
@@ -36,6 +37,8 @@ pub enum Error {
     Cancelled,
     #[error("{0}")]
     ResourceLimited(String),
+    #[error("{0}")]
+    Busy(String),
     #[error("derived index is corrupt; recovery required: {message}")]
     IndexCorrupt {
         database: std::path::PathBuf,
@@ -80,6 +83,7 @@ impl Error {
             Self::CursorLimit => "cursor_limit",
             Self::Cancelled => "cancelled",
             Self::ResourceLimited(_) => "resource_limited",
+            Self::Busy(_) => "busy",
             Self::IndexCorrupt { .. } => "index_corrupt",
             Self::IndexRecovering(_) => "index_recovering",
             Self::InvalidRequest(_) | Self::Json(_) => "invalid_request",
