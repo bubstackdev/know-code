@@ -802,15 +802,20 @@ pub fn run(args: &[String]) -> Result<Value> {
             home,
             data: absolute(control::data_root()?)?,
             label,
-            path: format!(
-                "{}:{}",
-                layout.prefix.join("bin").display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
+            path: know_code_core::update::trusted_path(&std::env::join_paths(
+                std::iter::once(layout.prefix.join("bin")).chain(std::env::split_paths(
+                    &std::env::var_os("PATH").unwrap_or_default(),
+                )),
+            )?)?
+            .into_string()
+            .map_err(|_| "toolchain PATH must be valid UTF-8")?,
             login: !no_login,
             control_version: current_lifecycle(),
         }
     };
+    s.path = know_code_core::update::trusted_path(std::ffi::OsStr::new(&s.path))?
+        .into_string()
+        .map_err(|_| "toolchain PATH must be valid UTF-8")?;
     if let Some(selected) = layout.selected(&layout.current)? {
         let version = info(&selected)?["index_lifecycle_version"]
             .as_u64()

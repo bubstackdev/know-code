@@ -6,10 +6,59 @@ use crate::{
 };
 use std::{
     collections::BTreeMap,
+    ffi::{OsStr, OsString},
     io::{BufReader, Read},
-    path::Path,
+    os::unix::ffi::OsStrExt,
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
 };
+
+/// PATH shared by top-level compiler workers, their nested tools and installed
+/// login jobs. Empty/relative entries must never select the workspace directory.
+pub fn trusted_path(value: &OsStr) -> Result<OsString> {
+    if value.as_bytes().contains(&0) {
+        return Err(Error::InvalidRequest("toolchain PATH contains NUL".into()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let paths = std::env::split_paths(value)
+        .filter(|path| path.is_absolute() && seen.insert(path.clone()))
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return Err(Error::InvalidRequest("toolchain PATH has no absolute directories; configure an absolute PATH entry for installed tools".into()));
+    }
+    std::env::join_paths(paths)
+        .map_err(|error| Error::InvalidRequest(format!("invalid toolchain PATH: {error}")))
+}
+fn worker_executable(program: &str, path: &OsStr) -> Result<PathBuf> {
+    let selected = Path::new(program);
+    let mut components = selected.components();
+    let candidates = if selected.is_absolute() {
+        vec![selected.to_owned()]
+    } else if matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+    {
+        std::env::split_paths(path)
+            .map(|dir| dir.join(selected))
+            .collect()
+    } else {
+        return Err(Error::InvalidRequest(
+            "worker executable must be absolute or a toolchain PATH name".into(),
+        ));
+    };
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let absolute = std::fs::canonicalize(&candidate)?;
+        let bytes = std::ffi::CString::new(absolute.as_os_str().as_bytes())
+            .map_err(|_| Error::InvalidRequest("worker executable path contains NUL".into()))?;
+        if unsafe { libc::access(bytes.as_ptr(), libc::X_OK) } == 0 {
+            return Ok(absolute);
+        }
+    }
+    Err(Error::Provider(format!(
+        "cannot locate executable {program} on the absolute toolchain PATH; install the required toolchain separately and configure an absolute PATH entry"
+    )))
+}
 
 pub struct WorkerCommand {
     pub program: String,
@@ -86,6 +135,7 @@ pub(crate) fn index_published(
             .check_root(Path::new(&worker.request.workspace_root))?;
     }
     let execution_grants: Vec<_> = workers.iter().map(|w| w.execution_grant.clone()).collect();
+    let path = trusted_path(&std::env::var_os("PATH").unwrap_or_default())?;
     let mut writer = match publication {
         Publication::Replacement(candidate) => Writer::open_destination(
             database,
@@ -120,11 +170,13 @@ pub(crate) fn index_published(
         worker.request.preparations = preparations.values().cloned().collect();
         let job_id = format!("{}-{number}", writer.generation);
         control.check()?;
+        let executable = worker_executable(&worker.program, &path)?;
         let mut child = control
             .spawn(
-                Command::new(&worker.program)
+                Command::new(executable)
                     .args(&worker.args)
                     .current_dir(&worker.request.workspace_root)
+                    .env("PATH", &path)
                     .env("DOTNET_CLI_TELEMETRY_OPTOUT", "1")
                     .env("DOTNET_NOLOGO", "1")
                     .env(
@@ -300,5 +352,65 @@ pub(crate) fn index_published(
         Publication::Replacement(_) => writer.publish_controlled(&control.staging()),
         Publication::Serving(Some(cursors)) => cursors.publish(database, writer, control),
         Publication::Serving(None) => writer.publish_controlled(control),
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn path_ignores_cwd_relative_and_empty_entries_without_losing_absolute_priority() {
+        let clean = trusted_path(OsStr::new(":.:bin:/usr/bin::/bin:/usr/bin")).unwrap();
+        assert_eq!(clean, OsStr::new("/usr/bin:/bin"));
+        assert!(matches!(
+            trusted_path(OsStr::new(":.:bin")),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(matches!(
+            trusted_path(OsStr::new("/usr/bin\0hidden")),
+            Err(Error::InvalidRequest(_))
+        ));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/trusted-path")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let bin = root.join("tools");
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        for path in [bin.join("owned-tool"), workspace.join("owned-tool")] {
+            std::fs::write(&path, b"#!/bin/sh\nexit 0\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let selected =
+            std::env::join_paths([Path::new("."), Path::new("relative"), bin.as_path()]).unwrap();
+        let clean = trusted_path(&selected).unwrap();
+        assert_eq!(
+            worker_executable("owned-tool", &clean).unwrap(),
+            std::fs::canonicalize(bin.join("owned-tool")).unwrap()
+        );
+        assert!(matches!(
+            worker_executable("./owned-tool", &clean),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert!(
+            worker_executable(
+                "owned-tool",
+                &trusted_path(OsStr::new("/usr/bin:/bin")).unwrap()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            worker_executable(bin.join("owned-tool").to_str().unwrap(), &clean).unwrap(),
+            std::fs::canonicalize(bin.join("owned-tool")).unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
