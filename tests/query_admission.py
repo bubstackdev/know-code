@@ -139,6 +139,12 @@ try:
  ffi.kc_query_json_reserved.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_uint64,ctypes.c_void_p,ctypes.c_void_p]
  ffi.kc_query_json_reserved.restype=ctypes.c_void_p
  ffi.kc_query_json.argtypes=[ctypes.c_char_p,ctypes.c_char_p];ffi.kc_query_json.restype=ctypes.c_void_p
+ ffi.kc_query_json_elapsed.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_uint64];ffi.kc_query_json_elapsed.restype=ctypes.c_void_p
+ ffi.kc_query_json_cancellable.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_uint64,ctypes.c_void_p]
+ ffi.kc_query_json_cancellable.restype=ctypes.c_void_p
+ ffi.kc_query_cancel_new.restype=ctypes.c_void_p
+ ffi.kc_query_cancel.argtypes=[ctypes.c_void_p];ffi.kc_query_cancel.restype=None
+ ffi.kc_query_cancel_free.argtypes=[ctypes.c_void_p];ffi.kc_query_cancel_free.restype=None
  ffi.kc_workspace_json.argtypes=[ctypes.c_char_p];ffi.kc_workspace_json.restype=ctypes.c_void_p
  ffi.kc_string_free.argtypes=[ctypes.c_void_p];ffi.kc_string_free.restype=None
  assert ffi.kc_query_contract_version()==7 and ffi.kc_query_max_request_bytes()==262144
@@ -149,6 +155,15 @@ try:
  inodes={p.name:(p.stat().st_dev,p.stat().st_ino) for p in guard_and_slots}
  _,problem=reserve();error(problem,'busy')
  error(decode(ffi.kc_query_json(os.fsencode(MISSING),b'{"op":"symbols"}')),'busy')
+ # Invalid UTF-8 must not even be converted before automatic admission.
+ error(decode(ffi.kc_query_json(os.fsencode(MISSING),b'\xff')),'busy')
+ error(decode(ffi.kc_query_json_elapsed(os.fsencode(MISSING),b'\xff',0)),'busy')
+ cancellation=ffi.kc_query_cancel_new()
+ try:
+  error(decode(ffi.kc_query_json_cancellable(os.fsencode(MISSING),b'\xff',0,cancellation)),'busy')
+  ffi.kc_query_cancel(cancellation)
+  error(decode(ffi.kc_query_json_cancellable(os.fsencode(MISSING),b'\xff',0,cancellation)),'cancelled')
+ finally:ffi.kc_query_cancel_free(cancellation)
  assert not MISSING.exists(),'saturated query opened/created absent index'
  error(value('queries','--max-active','2'),'busy')
  assert value('queries')['result']==policy
@@ -174,6 +189,18 @@ try:
  assert control('refresh')['status']['database']==database
  refreshed=ready(initial['generation']+1)
  assert control('cancel')['status']['database']==database
+ until=time.monotonic()+10;cancelled=None
+ while time.monotonic()<until:
+  cancelled=control('status')['status']
+  assert cancelled['generation']==refreshed['generation'],cancelled
+  if cancelled['phase']=='cancelled':break
+  assert cancelled['phase']=='cancelling',cancelled
+  time.sleep(.05)
+ assert cancelled and cancelled['phase']=='cancelled',cancelled
+ # An accepted cancellation is not its final saved-input baseline. Wait for
+ # that boundary before the new save; do not hide missed saves with refresh.
+ assert control('status')['status']['phase']=='cancelled'
+ DETAILS['cancelled_before_save']=cancelled
  NEW=OLD.replace('"before"','"after"');SOURCE.write_text(NEW)
  current=ready(refreshed['generation']+1)
  assert current['generation']>initial['generation']
@@ -200,6 +227,16 @@ try:
  assert len(exact.encode())==maximum
  for text,code in [(exact,'not_ready'),(exact[:-2]+'x'+exact[-2:],'invalid_request')]:
   handle=acquire();error(reserved(handle,text),code);release(handle)
+ cancellation=ffi.kc_query_cancel_new()
+ try:
+  for text,code in [(exact,'not_ready'),(exact[:-2]+'x'+exact[-2:],'invalid_request')]:
+   encoded=text.encode();db=os.fsencode(MISSING)
+   error(decode(ffi.kc_query_json(db,encoded)),code)
+   error(decode(ffi.kc_query_json_elapsed(db,encoded,0)),code)
+   error(decode(ffi.kc_query_json_cancellable(db,encoded,0,cancellation)),code)
+  for pointer in [None,b'\xff']:
+   error(decode(ffi.kc_query_json(os.fsencode(MISSING),pointer)),'invalid_request')
+ finally:ffi.kc_query_cancel_free(cancellation)
  DETAILS['node_bytes']=node('bytes')
  CHECKS.append('FFI_and_Node_exact_256KiB_UTF8_nonBMP_boundary_and_oversize_before_open')
  DETAILS['node_release']=node('failure-release')

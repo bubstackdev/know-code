@@ -2,7 +2,9 @@
 uint32_t kc_abi_version(void);
 /* Query policy 7: shared fail-fast admission before host dispatch. */
 uint32_t kc_query_contract_version(void);
-/* UTF-8 inputs. One owned UTF-8 JSON result; release using kc_string_free. */
+/* NUL-terminated inputs checked for UTF-8. Query requests are scanned only up
+ * to kc_query_max_request_bytes()+1 after admission. One owned UTF-8 JSON
+ * result; release using kc_string_free. NULL inputs return invalid_request. */
 char *kc_query_json(const char *database, const char *request);
 /* Same ownership; elapsed_ms charges host preparation/async queue time. */
 char *kc_query_json_elapsed(const char *database, const char *request, uint64_t elapsed_ms);
