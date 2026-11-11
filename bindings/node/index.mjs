@@ -7,33 +7,54 @@ function abortError(signal) {
   return error;
 }
 function checkAborted(signal) { if (signal?.aborted) throw abortError(signal); }
-async function query(database, request, {signal} = {}) {
+function checkQueryContract() {
+  if (typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 7
+      || typeof native.QueryReservation !== 'function' || typeof native.queryJsonReserved !== 'function'
+      || typeof native.queryMaxRequestBytes !== 'function')
+    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; shared query admission is missing or incompatible.');
+}
+/** Select one shared scope for an embedding/server host; default queries use the account scope. */
+export class QueryLimitScope {
+  constructor(directory) { this.directory = directory; Object.freeze(this); }
+}
+async function query(database, request, {signal} = {}, queryLimitScope) {
   checkAborted(signal);
   const start = performance.now();
-  if (typeof native.queryJsonElapsed !== 'function' || typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 6)
-    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; graph source projection is missing or incompatible.');
-  const encoded = JSON.stringify(request);
-  const elapsed = () => Math.min(Math.floor(performance.now() - start), 0xffffffff);
-  if (!signal) return JSON.parse(await native.queryJsonElapsed(database, encoded, elapsed()));
-  checkAborted(signal);
-  if (typeof native.QueryCancellation !== 'function' || typeof native.queryJsonCancellable !== 'function')
-    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; cancellable query exports are missing.');
-  const cancellation = new native.QueryCancellation();
-  const cancel = () => cancellation.cancel();
-  signal.addEventListener('abort', cancel, {once:true});
+  checkQueryContract();
+  // Acquire before invoking user serialization or allocating host-queue work.
+  const reservation = new native.QueryReservation(queryLimitScope?.directory);
+  let cancel;
   try {
     checkAborted(signal);
-    // Await the native task itself: cancelling the caller never detaches work.
-    const response = JSON.parse(await native.queryJsonCancellable(database, encoded, elapsed(), cancellation));
-    if (response.error?.code === 'cancelled') throw abortError(signal);
+    if (reservation.errorJson) return JSON.parse(reservation.errorJson);
+    const encoded = JSON.stringify(request);
+    const maximum = native.queryMaxRequestBytes();
+    if (Buffer.byteLength(encoded, 'utf8') > maximum)
+      return {error:{code:'invalid_request',message:`serialized query request exceeds ${maximum} UTF-8 bytes`}};
+    checkAborted(signal);
+    const cancellation = signal ? new native.QueryCancellation() : undefined;
+    if (signal) {
+      cancel = () => cancellation.cancel();
+      signal.addEventListener('abort', cancel, {once:true});
+      checkAborted(signal);
+    }
+    const elapsed = Math.min(Math.floor(performance.now() - start), 0xffffffff);
+    // Both task and wrapper own the charge: abort never detaches native work,
+    // and native completion never releases the wrapper's JSON parsing budget.
+    const response = JSON.parse(await native.queryJsonReserved(database, encoded, elapsed, reservation, cancellation));
+    if (response.error?.code === 'cancelled' && signal) throw abortError(signal);
     return response;
-  } finally { signal.removeEventListener('abort', cancel); }
+  } finally {
+    if (cancel) signal.removeEventListener('abort', cancel);
+    reservation.release();
+  }
 }
 
 export class Index {
-  constructor(database) { this.database = database; }
+  #queryLimitScope;
+  constructor(database, queryLimitScope) { this.database = database; this.#queryLimitScope = queryLimitScope; }
   async query(request, options) {
-    return query(this.database, request, options);
+    return query(this.database, request, options, this.#queryLimitScope);
   }
 }
 
@@ -53,7 +74,8 @@ export class Workspace {
   #descriptor;
   #executable;
   #closed = false;
-  constructor(token, descriptor) {
+  #queryLimitScope;
+  constructor(token, descriptor, queryLimitScope) {
     if (token !== createWorkspace) throw new TypeError('Use Workspace.open(root, options).');
     if (descriptor.status.progress) Object.freeze(descriptor.status.progress);
     if (descriptor.status.requested_settings) {
@@ -64,13 +86,14 @@ export class Workspace {
     }
     Object.freeze(descriptor.status);
     this.#descriptor = descriptor;
+    this.#queryLimitScope = queryLimitScope;
     this.#executable = descriptor.coordinator_executable;
   }
   static async open(root, options = {}) {
     const {configuration, dataDirectory, coordinatorExecutable} = options;
     const descriptor = await control({op:'open',workspace_root:root,data_directory:dataDirectory,
       coordinator_executable:coordinatorExecutable,configuration});
-    return createWorkspace(descriptor);
+    return createWorkspace(descriptor, options.queryLimitScope);
   }
   get root() { return this.#descriptor.status.workspace_root; }
   get initialStatus() { return this.#descriptor.status; }
@@ -90,8 +113,8 @@ export class Workspace {
   async query(request, options) {
     checkAborted(options?.signal);
     this.#checkOpen();
-    return checked(await query(this.#descriptor.status.database, request, options));
+    return checked(await query(this.#descriptor.status.database, request, options, this.#queryLimitScope));
   }
   close() { this.#closed = true; }
 }
-function createWorkspace(descriptor) { return new Workspace(createWorkspace,descriptor); }
+function createWorkspace(descriptor, queryLimitScope) { return new Workspace(createWorkspace,descriptor,queryLimitScope); }

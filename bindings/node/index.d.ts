@@ -133,8 +133,10 @@ export interface QueryOptions {
   /** Cancels only this query. Rejects with Error name AbortError/code ABORT_ERR after native work exits. */
   signal?: AbortSignal;
 }
+/** Explicit shared embedding/server-host scope. Omit to use the account-wide scope. */
+export class QueryLimitScope {readonly directory: string; constructor(directory: string)}
 export class Index {
-  constructor(database: string);
+  constructor(database: string, queryLimitScope?: QueryLimitScope);
   query(request: QueryRequest, options?: QueryOptions): Promise<QueryResponse>;
 }
 
@@ -157,7 +159,7 @@ export interface PersonalWorkspaceSettings {
   csharp?: {configuration?: string | null; solution?: string | null};
   allow_install_scripts?: boolean;
 }
-export interface WorkspaceOptions {configuration?: string; dataDirectory?: string; coordinatorExecutable?: string}
+export interface WorkspaceOptions {configuration?: string; dataDirectory?: string; coordinatorExecutable?: string; queryLimitScope?: QueryLimitScope}
 export class KnowCodeError extends Error {readonly code: string; constructor(code: string, message: string)}
 export class Workspace {
   private constructor();

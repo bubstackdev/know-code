@@ -5,41 +5,54 @@ using System.Diagnostics;
 
 namespace KnowCode;
 
-public sealed class Index(string database)
+/// <summary>One shared embedding/server-host scope. Omit to use the account-wide scope.</summary>
+public sealed record QueryLimitScope(string Directory);
+
+public sealed class Index(string database, QueryLimitScope? queryLimitScope = null)
 {
-    public Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-    {
-        if (cancellationToken.IsCancellationRequested) return Task.FromCanceled<JsonDocument>(cancellationToken);
-        var started = Stopwatch.GetTimestamp();
-        return QueryCoreAsync(JsonSerializer.Serialize(request, Native.JsonOptions), started, cancellationToken);
-    }
+    public Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
+        QueryCoreAsync(() => JsonSerializer.Serialize(request, Native.JsonOptions), Stopwatch.GetTimestamp(), cancellationToken);
 
     // Coarse native calls run off the caller's synchronization context.
     public Task<JsonDocument> QueryJsonAsync(string request, CancellationToken cancellationToken = default) =>
-        QueryCoreAsync(request, Stopwatch.GetTimestamp(), cancellationToken);
+        QueryCoreAsync(() => request, Stopwatch.GetTimestamp(), cancellationToken);
     /// <summary>Reads a frozen cursor page with optional per-request deadline and response-byte budgets.</summary>
     public Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        QueryCoreAsync(() => JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
+            DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions), Stopwatch.GetTimestamp(), cancellationToken);
+
+    private async Task<JsonDocument> QueryCoreAsync(Func<string> serialize, long started, CancellationToken cancellationToken)
     {
-        if (cancellationToken.IsCancellationRequested) return Task.FromCanceled<JsonDocument>(cancellationToken);
-        return QueryJsonAsync(JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
-            DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions), cancellationToken);
-    }
-    private async Task<JsonDocument> QueryCoreAsync(string request, long started, CancellationToken cancellationToken)
-    {
+        cancellationToken.ThrowIfCancellationRequested();
+        // This synchronous native call runs before user serialization and before
+        // cancellation registrations or Task.Run can retain queued requests.
+        var acquired = Native.Reserve(queryLimitScope);
+        using var reservation = acquired.Reservation;
+        if (cancellationToken.IsCancellationRequested)
+        {
+            acquired.Error?.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        if (acquired.Error is not null) return acquired.Error;
+        var request = serialize();
+        var maximum = Native.QueryMaxRequestBytes();
+        if (System.Text.Encoding.UTF8.GetByteCount(request) > maximum)
+            return JsonSerializer.SerializeToDocument(new { Error = new { Code = "invalid_request",
+                Message = $"serialized query request exceeds {maximum} UTF-8 bytes" } }, Native.JsonOptions);
         cancellationToken.ThrowIfCancellationRequested();
         using var cancellation = cancellationToken.CanBeCanceled ? Native.CreateQueryCancellation() : null;
         using var registration = cancellationToken.CanBeCanceled
             ? cancellationToken.UnsafeRegister(static state => Native.QueryCancel((QueryCancellationHandle)state!), cancellation)
             : default;
         // Do not cancel Task.Run itself: queued/active native work must finish
-        // before its registration and safe handle can be released.
+        // before its registration, reservation and safe handles can be released.
         var result = await Task.Run(() => Native.Invoke(() => {
-            Native.CheckQueryContract();
             var elapsed = (ulong)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            return cancellation is null ? Native.QueryElapsed(database, request, elapsed)
-                : Native.QueryCancellable(database, request, elapsed, cancellation);
+            return Native.QueryReserved(database, request, elapsed, cancellation, reservation!);
         })).ConfigureAwait(false);
+        // Native.Invoke copies, parses and frees the native result while this
+        // method still owns the reservation. Delivered documents are caller-owned.
         if (result.RootElement.TryGetProperty("error", out var error)
             && error.GetProperty("code").GetString() == "cancelled")
         {
@@ -48,6 +61,13 @@ public sealed class Index(string database)
         }
         return result;
     }
+}
+
+internal sealed class QueryReservationHandle : SafeHandle
+{
+    internal QueryReservationHandle(nint value) : base(nint.Zero, true) { SetHandle(value); }
+    public override bool IsInvalid => handle == nint.Zero;
+    protected override bool ReleaseHandle() { Native.QueryReservationFree(handle); return true; }
 }
 
 internal sealed class QueryCancellationHandle : SafeHandle
@@ -95,8 +115,27 @@ internal static partial class Native
     };
     internal static void CheckQueryContract()
     {
-        if (QueryContractVersion() != 6)
-            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; graph source projection is missing or incompatible.");
+        if (QueryContractVersion() != 7)
+            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; shared query admission is missing or incompatible.");
+    }
+    internal static (QueryReservationHandle? Reservation, JsonDocument? Error) Reserve(QueryLimitScope? scope)
+    {
+        try
+        {
+            if (AbiVersion() != 1) throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; native ABI is incompatible.");
+            CheckQueryContract();
+            var error = QueryReserve(scope?.Directory, out var handle);
+            if (error == nint.Zero)
+            {
+                if (handle == nint.Zero) throw new KnowCodeException("internal_error", "Know Code returned no query reservation.");
+                return (new QueryReservationHandle(handle), null);
+            }
+            try { return (null, JsonDocument.Parse(Marshal.PtrToStringUTF8(error)
+                ?? throw new KnowCodeException("internal_error", "Know Code returned a null reservation error."))); }
+            finally { Free(error); }
+        }
+        catch (EntryPointNotFoundException error) { throw new KnowCodeException("update_required", $"Update the Know Code managed/native packages together: {error.Message}"); }
+        catch (DllNotFoundException error) { throw new KnowCodeException("native_library_unavailable", $"Install the matching Know Code native library: {error.Message}"); }
     }
     internal static QueryCancellationHandle CreateQueryCancellation()
     {
@@ -140,6 +179,15 @@ internal static partial class Native
     internal static partial nint Query(string database, string request);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_elapsed", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint QueryElapsed(string database, string request, ulong elapsedMs);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_max_request_bytes")]
+    internal static partial uint QueryMaxRequestBytes();
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_reserve", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint QueryReserve(string? scope, out nint reservation);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_reservation_free")]
+    internal static partial void QueryReservationFree(nint reservation);
+    [LibraryImport("know_code_ffi", EntryPoint = "kc_query_json_reserved", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial nint QueryReserved(string database, string request, ulong elapsedMs,
+        QueryCancellationHandle? cancellation, QueryReservationHandle reservation);
     [LibraryImport("know_code_ffi", EntryPoint = "kc_query_cancel_new")]
     internal static partial nint QueryCancelNew();
     // SafeHandle parameters retain ownership across the native call and a

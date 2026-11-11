@@ -1,5 +1,65 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--scoped-query")
+{
+    using var result = await new KnowCode.Index(args[1], new KnowCode.QueryLimitScope(args[2])).QueryJsonAsync(args[3]);
+    Console.WriteLine(result.RootElement.GetRawText());
+    return;
+}
+if (args[0] == "--admission-queue")
+{
+    // Hold the host pool so accepted requests retain their reservations while
+    // queued; saturation and pre-cancellation must complete without pool work.
+    var slots = int.Parse(args[3]);
+    ThreadPool.GetMinThreads(out var minimum, out var minimumIo);
+    ThreadPool.GetMaxThreads(out var maximum, out var maximumIo);
+    if (!ThreadPool.SetMinThreads(1, minimumIo) || !ThreadPool.SetMaxThreads(1, maximumIo))
+        throw new Exception("Could not isolate fixture worker pool");
+    using var entered = new ManualResetEventSlim();
+    using var release = new ManualResetEventSlim();
+    using var cancellation = new CancellationTokenSource();
+    var blocker = Task.Run(() => { entered.Set(); release.Wait(TimeSpan.FromSeconds(30)); });
+    var pending = new List<Task<JsonDocument>>();
+    try {
+        if (!entered.Wait(TimeSpan.FromSeconds(5))) throw new Exception("Fixture pool did not block");
+        var admissionIndex = new KnowCode.Index(args[1], new KnowCode.QueryLimitScope(args[2]));
+        for (var i = 0; i < slots; i++)
+            pending.Add(admissionIndex.QueryAsync(new KnowCode.QueryRequest("symbols"), i == 0 ? cancellation.Token : default));
+        void Busy()
+        {
+            var rejected = admissionIndex.QueryAsync(new KnowCode.QueryRequest("symbols"));
+            if (!rejected.IsCompleted) throw new Exception("Saturation entered the host queue");
+            using var rejectedResponse = rejected.GetAwaiter().GetResult();
+            if (rejectedResponse.RootElement.GetProperty("error").GetProperty("code").GetString() != "busy")
+                throw new Exception(rejectedResponse.RootElement.GetRawText());
+        }
+        Busy();
+        cancellation.Cancel();
+        if (pending[0].IsCompleted) throw new Exception("Cancellation detached queued native work");
+        Busy();
+        try {
+            admissionIndex.QueryAsync(new KnowCode.QueryRequest("symbols"), cancellation.Token).GetAwaiter().GetResult().Dispose();
+            throw new Exception("Pre-cancellation lost to saturation");
+        } catch (OperationCanceledException) { }
+        release.Set();
+        ThreadPool.SetMaxThreads(maximum, maximumIo);
+        ThreadPool.SetMinThreads(minimum, minimumIo);
+        for (var i = 0; i < pending.Count; i++) {
+            try { using var result = await pending[i].WaitAsync(TimeSpan.FromSeconds(20)); }
+            catch (OperationCanceledException) when (i == 0) { }
+        }
+        using var next = await admissionIndex.QueryAsync(new KnowCode.QueryRequest("symbols"));
+        if (next.RootElement.TryGetProperty("error", out var error) && error.GetProperty("code").GetString() == "busy")
+            throw new Exception("Reservation leaked after host completion");
+        Console.WriteLine("{\"passed\":true,\"check\":\"DotNet_early_shared_admission_and_queued_cancellation\"}");
+    } finally {
+        release.Set();
+        ThreadPool.SetMaxThreads(maximum, maximumIo);
+        ThreadPool.SetMinThreads(minimum, minimumIo);
+        await blocker.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+    return;
+}
 if (args[0] == "--typed-graph-source")
 {
     if (args.Length != 6) throw new ArgumentException("Expected DATABASE OP SYMBOL_ID default|true|false SOURCE_MAX_BYTES|-");
@@ -111,7 +171,8 @@ if (args[0] == "--workspace")
     KnowCode.Workspace workspace;
     void Print(object value) => Console.WriteLine(JsonSerializer.Serialize(value,new JsonSerializerOptions {PropertyNamingPolicy=JsonNamingPolicy.SnakeCaseLower}));
     void Failure(KnowCode.KnowCodeException error) => Print(new { Error = new { error.Code, error.Message } });
-    try { workspace = await KnowCode.Workspace.OpenAsync(args[1],new KnowCode.WorkspaceOptions(Field("configuration"),Field("dataDirectory"),Field("coordinatorExecutable"))); }
+    try { workspace = await KnowCode.Workspace.OpenAsync(args[1],new KnowCode.WorkspaceOptions(Field("configuration"),Field("dataDirectory"),Field("coordinatorExecutable"),
+        Field("queryLimitScope") is { } scope ? new KnowCode.QueryLimitScope(scope) : null)); }
     catch(KnowCode.KnowCodeException error) { Failure(error);return; }
     using(workspace)
     {

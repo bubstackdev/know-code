@@ -1,6 +1,6 @@
 #include <stdint.h>
 uint32_t kc_abi_version(void);
-/* Query policy 3: deadlines, byte caps, portable cursors and cancellation. */
+/* Query policy 7: shared fail-fast admission before host dispatch. */
 uint32_t kc_query_contract_version(void);
 /* UTF-8 inputs. One owned UTF-8 JSON result; release using kc_string_free. */
 char *kc_query_json(const char *database, const char *request);
@@ -15,6 +15,16 @@ void kc_query_cancel(const KcQueryCancel *handle);
 void kc_query_cancel_free(KcQueryCancel *handle);
 char *kc_query_json_cancellable(const char *database, const char *request,
                                uint64_t elapsed_ms, const KcQueryCancel *handle);
+/* Synchronous early reservation: NULL scope selects the account/default scope.
+ * Success returns NULL and sets *out; failure sets *out=NULL and returns owned
+ * error JSON. Keep the handle through host parsing; submit exactly once. */
+typedef struct QueryReservation KcQueryReservation;
+uint32_t kc_query_max_request_bytes(void);
+char *kc_query_reserve(const char *scope, KcQueryReservation **out);
+void kc_query_reservation_free(KcQueryReservation *handle);
+char *kc_query_json_reserved(const char *database, const char *request,
+                             uint64_t elapsed_ms, const KcQueryCancel *cancellation,
+                             const KcQueryReservation *reservation);
 /* Workspace registration/status/refresh/wait; same ownership as query results. */
 char *kc_workspace_json(const char *request);
 void kc_string_free(char *value);

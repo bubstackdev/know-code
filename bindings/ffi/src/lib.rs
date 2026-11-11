@@ -1,6 +1,7 @@
 use std::{
     ffi::{CStr, CString, c_char},
     panic::{UnwindSafe, catch_unwind},
+    sync::Arc,
 };
 
 #[unsafe(no_mangle)]
@@ -10,6 +11,91 @@ pub extern "C" fn kc_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn kc_query_contract_version() -> u32 {
     know_code_core::execution::QUERY_CONTRACT_VERSION
+}
+
+/// One single-use core reservation. The caller may retain it through host parsing.
+pub struct QueryReservation(Arc<know_code_core::admission::Reservation>);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kc_query_max_request_bytes() -> u32 {
+    know_code_core::admission::MAX_REQUEST_BYTES as u32
+}
+/// # Safety
+/// scope is null (account/default scope) or a valid NUL-terminated UTF-8 path.
+/// out must be writable. On success returns null and writes an owned handle;
+/// on failure writes null and returns owned JSON released with kc_string_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_reserve(
+    scope: *const c_char,
+    out: *mut *mut QueryReservation,
+) -> *mut c_char {
+    if out.is_null() {
+        return response(|| {
+            know_code_core::error_json("invalid_request", "null reservation output")
+        });
+    }
+    unsafe { *out = std::ptr::null_mut() };
+    let result = catch_unwind(|| {
+        let scope = if scope.is_null() {
+            know_code_core::admission::AdmissionScope::local()
+        } else {
+            let path = unsafe { input(scope) }?;
+            know_code_core::admission::AdmissionScope::at(path)
+        }
+        .map_err(|e| know_code_core::error_json(e.code(), &e.to_string()))?;
+        scope
+            .try_reserve()
+            .map_err(|e| know_code_core::error_json(e.code(), &e.to_string()))
+    });
+    match result {
+        Ok(Ok(reservation)) => {
+            unsafe { *out = Box::into_raw(Box::new(QueryReservation(Arc::new(reservation)))) };
+            std::ptr::null_mut()
+        }
+        Ok(Err(error)) => response(|| error),
+        Err(_) => {
+            response(|| know_code_core::error_json("internal_error", "native reservation panicked"))
+        }
+    }
+}
+/// # Safety
+/// Handle must be null or owned from kc_query_reserve, freed exactly once after
+/// calls using it return. A result delivered to the caller is outside its charge.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_reservation_free(handle: *mut QueryReservation) {
+    if !handle.is_null() {
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+/// # Safety
+/// UTF-8 inputs follow kc_query_json. Reservation must remain live during this
+/// call and may submit only once. Cancellation may be null or a live handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kc_query_json_reserved(
+    database: *const c_char,
+    request: *const c_char,
+    elapsed_ms: u64,
+    cancellation: *const QueryCancel,
+    reservation: *const QueryReservation,
+) -> *mut c_char {
+    let start = know_code_core::execution::QueryStart::with_elapsed_ms(elapsed_ms);
+    response(
+        || match unsafe { (input(database), input(request), reservation.as_ref()) } {
+            (Ok(database), Ok(request), Some(reservation)) => {
+                let reservation = Arc::clone(&reservation.0);
+                let cancellation = unsafe { cancellation.as_ref() }.map(|c| c.0.clone());
+                know_code_core::query_json_reserved(
+                    database,
+                    request,
+                    start,
+                    cancellation,
+                    &reservation,
+                )
+            }
+            (Err(error), _, _) | (_, Err(error), _) => error,
+            (_, _, None) => know_code_core::error_json("invalid_request", "null query reservation"),
+        },
+    )
 }
 
 pub struct QueryCancel(know_code_core::execution::QueryCancellation);

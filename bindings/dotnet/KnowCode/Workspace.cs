@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace KnowCode;
 
-public sealed record WorkspaceOptions(string? Configuration = null, string? DataDirectory = null, string? CoordinatorExecutable = null);
+public sealed record WorkspaceOptions(string? Configuration = null, string? DataDirectory = null, string? CoordinatorExecutable = null, QueryLimitScope? QueryLimitScope = null);
 public sealed record IndexProgress(string Stage, string ProjectPath, string Message);
 public sealed record CSharpBuildContext(string? Configuration, string? SolutionPath);
 public sealed record NodePreparationPolicy(string CacheDirectory, bool AllowInstallScripts);
@@ -23,10 +23,10 @@ public sealed class Workspace : IDisposable
     private readonly string? executable;
     private readonly Index index;
     private int closed;
-    private Workspace(WorkspaceDescriptor descriptor)
+    private Workspace(WorkspaceDescriptor descriptor, QueryLimitScope? queryLimitScope)
     {
         this.descriptor = descriptor; this.executable = descriptor.CoordinatorExecutable;
-        index = new Index(descriptor.Status.Database);
+        index = new Index(descriptor.Status.Database, queryLimitScope);
     }
     public string Root => descriptor.Status.WorkspaceRoot;
     public WorkspaceStatus InitialStatus => descriptor.Status;
@@ -34,7 +34,7 @@ public sealed class Workspace : IDisposable
     {
         var result = await ControlAsync(new { Op = "open", WorkspaceRoot = root,
             options?.Configuration, options?.DataDirectory, options?.CoordinatorExecutable }).ConfigureAwait(false);
-        return new Workspace(result);
+        return new Workspace(result, options?.QueryLimitScope);
     }
     private void CheckOpen()
     {
