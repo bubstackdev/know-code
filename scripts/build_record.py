@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 PROJECTS=('providers/dotnet','bindings/dotnet/KnowCode','bindings/dotnet/Smoke')
 ROOT_INPUTS=('Cargo.toml','Cargo.lock','package.json','package-lock.json','Directory.Build.props','global.json','rust-toolchain.toml','tests/fixtures/typescript/package.json')
 SCRIPT_INPUTS=('scripts/build.sh','scripts/build_record.py','scripts/generate-protocol.sh')
-PACKAGED_DOCS=('WORKSPACE_API.md','MCP.md','PACKAGING.md','INSTALLATION.md','RESOURCE_CONTROL.md','WORKSPACE_SETTINGS.md','BUILD_PROVENANCE.md','OFFLINE_VALIDATION.md')
+PACKAGED_DOCS=('WORKSPACE_API.md','MCP.md','GRAPH_SOURCE_PROJECTION.md','PACKAGING.md','INSTALLATION.md','RESOURCE_CONTROL.md','WORKSPACE_SETTINGS.md','BUILD_PROVENANCE.md','OFFLINE_VALIDATION.md')
 SKIP={'target','node_modules','bin','obj','.git','.artifacts','__pycache__'}
 FLAGS=('RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','RUSTC','RUSTC_WRAPPER','RUSTC_WORKSPACE_WRAPPER','RUSTDOCFLAGS','CC','CXX','AR','CFLAGS','CXXFLAGS','CPPFLAGS','LDFLAGS','LIBSQLITE3_FLAGS','SQLITE_MAX_VARIABLE_NUMBER','SQLITE_MAX_EXPR_DEPTH','MACOSX_DEPLOYMENT_TARGET','SDKROOT','DEVELOPER_DIR','MSBuildSDKsPath','DOTNET_ROOT','NUGET_PACKAGES','CARGO_HOME','CARGO_TARGET_DIR','RUSTUP_HOME','RUSTUP_TOOLCHAIN','NODE_OPTIONS','NODE_PATH')
 
