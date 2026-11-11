@@ -147,12 +147,16 @@ fn disk_sampling_observes_other_healthy_retired_wal_growth_and_cleanup() {
             > 1024 * 1024
     );
     assert!(
-        matches!(budget.check(&limits, false), Err(Error::ResourceLimited(_))),
+        matches!(budget.check(&limits, false), Err(Error::DiskPressure(_))),
         "retired family growth after budget construction must be observed"
     );
     assert!(
         old.check().is_ok(),
         "upgrade never poisons the old healthy reader"
+    );
+    assert!(
+        matches!(budget.check_sampled(&limits), Err(Error::DiskPressure(_))),
+        "bounded sampling must observe retained WAL growth too"
     );
     drop(bookkeeping);
     let retired = old.physical_path().to_owned();

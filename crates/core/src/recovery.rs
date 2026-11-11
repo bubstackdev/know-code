@@ -9,7 +9,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::{
@@ -22,9 +22,10 @@ use std::{
     path::{Path, PathBuf},
     ptr::NonNull,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 pub const VERSION: u32 = 2;
@@ -1094,7 +1095,7 @@ fn family_bytes(path: &Path) -> Result<u64> {
         let path = family_path(path, suffix);
         match fs::symlink_metadata(&path) {
             Ok(m) => {
-                regular(&path)?;
+                check_regular(&path, &m)?;
                 total = total
                     .checked_add(m.len())
                     .ok_or_else(|| invalid("disk accounting overflow"))?;
@@ -1132,20 +1133,159 @@ pub fn extra_bytes(logical: &Path, cutover: bool) -> Result<u64> {
                 .ok_or_else(|| invalid("disk accounting overflow"))
         })
 }
-/// The sole analysis slot prevents other workspaces from adding charged
-/// incarnations. Capture their paths once, then sample their file sizes: healthy
-/// retired cursor bookkeeping can still grow a DB/WAL while analysis runs.
-#[derive(Clone)]
+/// Apparent on-disk temporary-file bytes, not logical cursor-retention estimates. The
+/// normal selected database payload is permanent index state and is excluded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiskUsage {
+    pub used_bytes: u64,
+    pub free_bytes: u64,
+}
+const DISK_SAMPLE_FAMILIES: usize = 16;
+const DISK_CENSUS_INTERVAL: Duration = Duration::from_secs(5);
+#[derive(Debug)]
+struct SampledFamily {
+    path: PathBuf,
+    full: bool,
+    bytes: u64,
+}
+#[derive(Debug)]
+struct DiskSample {
+    families: Vec<SampledFamily>,
+    active: Vec<(PathBuf, bool)>,
+    next: usize,
+    refreshed: Instant,
+}
+impl DiskSample {
+    fn used(&self) -> Result<u64> {
+        self.families.iter().try_fold(0u64, |sum, family| {
+            sum.checked_add(family.bytes)
+                .ok_or_else(|| invalid("disk accounting overflow"))
+        })
+    }
+}
+fn insert_family(families: &mut BTreeMap<PathBuf, bool>, path: PathBuf, full: bool) {
+    // A physical family is charged once; retirement's full-family charge wins
+    // over serving-sidecar accounting if a cutover snapshot sees both roles.
+    *families.entry(path).or_default() |= full;
+}
+fn disk_family(logical: &Path, index: &Incarnation, allow_missing: bool) -> Result<PathBuf> {
+    let path = physical(logical, index)?;
+    if !index.legacy {
+        for directory_path in [
+            parent(logical)?.join("indexes"),
+            inc_dir(logical, &index.id)?,
+        ] {
+            match directory(&directory_path, false) {
+                Ok(()) => {}
+                // Publication/cleanup can remove a captured family, and a new
+                // pending receipt precedes creation of its private directory.
+                Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    let actual = file_identity(&path)?;
+    if index.file_identity.is_some() && actual.is_some() && actual != index.file_identity {
+        return Err(invalid(
+            "index file identity changed outside the coordinator",
+        ));
+    }
+    if !allow_missing && index.file_identity.is_some() && actual.is_none() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "selected index file disappeared during disk accounting",
+        )
+        .into());
+    }
+    Ok(path)
+}
+struct WorkspaceFamilies {
+    families: BTreeMap<PathBuf, bool>,
+    active: Vec<(PathBuf, bool)>,
+}
+fn serving_families(logical: &Path, cutover: bool) -> Result<WorkspaceFamilies> {
+    let mut families = BTreeMap::new();
+    let Some(state) = load(logical)? else {
+        insert_family(&mut families, logical.to_owned(), false);
+        return Ok(WorkspaceFamilies {
+            families,
+            active: vec![(logical.to_owned(), false)],
+        });
+    };
+    let selected = disk_family(logical, &state.selected, state.initializing)?;
+    let mut active = vec![(selected.clone(), false)];
+    let replacing = cutover && state.pending.is_some();
+    insert_family(&mut families, selected, replacing);
+    for index in &state.retired {
+        insert_family(&mut families, disk_family(logical, index, true)?, true);
+    }
+    if let Some(pending) = &state.pending {
+        let path = disk_family(logical, &pending.index, true)?;
+        active.push((path.clone(), true));
+        insert_family(&mut families, path, !replacing);
+    }
+    active.sort();
+    Ok(WorkspaceFamilies { families, active })
+}
+fn active_families(logical: &Path) -> Result<Vec<(PathBuf, bool)>> {
+    let Some(state) = load(logical)? else {
+        return Ok(vec![(logical.to_owned(), false)]);
+    };
+    let mut paths = vec![(
+        disk_family(logical, &state.selected, state.initializing)?,
+        false,
+    )];
+    if let Some(pending) = &state.pending {
+        paths.push((disk_family(logical, &pending.index, true)?, true));
+    }
+    paths.sort();
+    Ok(paths)
+}
+fn sampled_family_bytes(path: &Path, full: bool) -> Result<u64> {
+    if full {
+        return charged_family(path);
+    }
+    let mut bytes = 0u64;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let sidecar = family_path(path, suffix);
+        match fs::symlink_metadata(&sidecar) {
+            Ok(metadata) => {
+                check_regular(&sidecar, &metadata)?;
+                bytes = bytes
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| invalid("disk accounting overflow"))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(bytes)
+}
+/// One coordinator data-root pool covers serving WALs and unpublished/retired families.
+/// Admission and final checks take a fresh census. During active analysis the
+/// selected/pending families are sampled each time, with bounded rotation over
+/// other families and a full refresh every five seconds. Cached entries hold
+/// paths and last observed sizes, never permanent retired-size reservations.
+#[derive(Clone, Debug)]
 pub struct DiskBudget {
     logical: PathBuf,
     volume: PathBuf,
-    other_families: Vec<PathBuf>,
+    sample: Arc<Mutex<Option<DiskSample>>>,
 }
 impl DiskBudget {
     pub fn new(logical: &Path, data: &Path) -> Result<Self> {
-        let workspaces = data.join("workspaces");
+        directory(&data.join("workspaces"), false)?;
+        Ok(Self {
+            logical: logical.into(),
+            volume: data.into(),
+            sample: Arc::new(Mutex::new(None)),
+        })
+    }
+    fn census(&self, cutover: bool) -> Result<DiskSample> {
+        let workspaces = self.volume.join("workspaces");
         directory(&workspaces, false)?;
-        let mut other_families = vec![];
+        let mut families = BTreeMap::new();
+        let mut logicals = BTreeSet::from([self.logical.clone()]);
         for entry in fs::read_dir(&workspaces)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -1158,45 +1298,113 @@ impl DiskBudget {
                 continue;
             }
             directory(&entry.path(), false)?;
-            let database = entry.path().join("index.db");
-            if database != logical {
-                other_families.extend(extra_families(&database, false)?);
+            logicals.insert(entry.path().join("index.db"));
+        }
+        let mut active = Vec::new();
+        for logical in logicals {
+            let workspace = serving_families(&logical, cutover && logical == self.logical)?;
+            if logical == self.logical {
+                active = workspace.active;
+            }
+            for (path, full) in workspace.families {
+                insert_family(&mut families, path, full);
             }
         }
-        Ok(Self {
-            logical: logical.into(),
-            volume: data.into(),
-            other_families,
+        let families = families
+            .into_iter()
+            .map(|(path, full)| {
+                let bytes = sampled_family_bytes(&path, full)?;
+                Ok(SampledFamily { path, full, bytes })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(DiskSample {
+            families,
+            active,
+            next: 0,
+            refreshed: Instant::now(),
         })
     }
-    pub fn check(&self, limits: &Limits, cutover: bool) -> Result<()> {
-        let other_bytes = self.other_families.iter().try_fold(0u64, |sum, path| {
-            sum.checked_add(charged_family(path)?)
-                .ok_or_else(|| invalid("disk accounting overflow"))
-        })?;
-        let used = other_bytes
-            .checked_add(extra_bytes(&self.logical, cutover)?)
-            .ok_or_else(|| invalid("disk accounting overflow"))?;
-        if used > limits.rebuild_disk_mib * 1024 * 1024 {
-            return Err(Error::ResourceLimited(format!(
-                "temporary indexes use {used} bytes, above rebuild_disk_mib={}",
-                limits.rebuild_disk_mib
-            )));
-        }
+    fn free_bytes(&self) -> Result<u64> {
         let path = std::ffi::CString::new(self.volume.as_os_str().as_bytes())
             .map_err(|_| invalid("invalid volume path"))?;
         let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
             return Err(std::io::Error::last_os_error().into());
         }
-        let free = (stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64);
-        if free < limits.min_free_disk_mib * 1024 * 1024 {
-            return Err(Error::ResourceLimited(format!(
-                "available disk {free} bytes is below min_free_disk_mib={}",
-                limits.min_free_disk_mib
+        Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+    }
+    pub fn usage(&self, cutover: bool) -> Result<DiskUsage> {
+        let mut cache = self
+            .sample
+            .lock()
+            .map_err(|_| invalid("disk sample lock poisoned"))?;
+        let sample = self.census(cutover)?;
+        let used_bytes = sample.used()?;
+        if !cutover {
+            *cache = Some(sample);
+        }
+        Ok(DiskUsage {
+            used_bytes,
+            free_bytes: self.free_bytes()?,
+        })
+    }
+    fn enforce(limits: &Limits, usage: DiskUsage) -> Result<()> {
+        limits.validate()?;
+        if usage.used_bytes > limits.rebuild_disk_mib * 1024 * 1024 {
+            return Err(Error::DiskPressure(format!(
+                "temporary index files use {} bytes, above temporary disk budget (rebuild_disk_mib={})",
+                usage.used_bytes, limits.rebuild_disk_mib
+            )));
+        }
+        if usage.free_bytes < limits.min_free_disk_mib * 1024 * 1024 {
+            return Err(Error::DiskPressure(format!(
+                "available disk {} bytes is below min_free_disk_mib={}",
+                usage.free_bytes, limits.min_free_disk_mib
             )));
         }
         Ok(())
+    }
+    pub fn check(&self, limits: &Limits, cutover: bool) -> Result<()> {
+        Self::enforce(limits, self.usage(cutover)?)
+    }
+    pub fn check_sampled(&self, limits: &Limits) -> Result<()> {
+        let mut cache = self
+            .sample
+            .lock()
+            .map_err(|_| invalid("disk sample lock poisoned"))?;
+        let active = active_families(&self.logical)?;
+        if cache.as_ref().is_none_or(|sample| {
+            sample.refreshed.elapsed() >= DISK_CENSUS_INTERVAL || sample.active != active
+        }) {
+            *cache = Some(self.census(false)?);
+        }
+        let sample = cache.as_mut().expect("initialized disk sample");
+        // Only these two current-workspace families can grow through analysis.
+        // Other serving/retired cursor bookkeeping gets bounded round-robin
+        // sampling, followed by periodic discovery of newly owned paths.
+        let mut indices = BTreeSet::new();
+        for (path, _) in active {
+            if let Ok(index) = sample
+                .families
+                .binary_search_by(|family| family.path.cmp(&path))
+            {
+                indices.insert(index);
+            }
+        }
+        for _ in 0..sample.families.len().min(DISK_SAMPLE_FAMILIES) {
+            indices.insert(sample.next);
+            sample.next = (sample.next + 1) % sample.families.len();
+        }
+        for index in indices {
+            let family = &mut sample.families[index];
+            family.bytes = sampled_family_bytes(&family.path, family.full)?;
+        }
+        let usage = DiskUsage {
+            used_bytes: sample.used()?,
+            free_bytes: self.free_bytes()?,
+        };
+        drop(cache);
+        Self::enforce(limits, usage)
     }
 }
 /// Only known owned families are removed. A lease or cleanup error retains state
@@ -1601,7 +1809,7 @@ mod tests {
         };
         assert!(matches!(
             budget.check(&limits, false),
-            Err(Error::ResourceLimited(_))
+            Err(Error::DiskPressure(_))
         ));
         assert!(
             budget.check(&limits, true).is_ok(),
@@ -1615,9 +1823,183 @@ mod tests {
                 },
                 true
             ),
-            Err(Error::ResourceLimited(_))
+            Err(Error::DiskPressure(_))
         ));
         drop(old);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn shared_pool_counts_serving_sidecars_and_cutover_roles_exactly_once() {
+        let (root, logical) = fixture();
+        adopt(&logical, 0).unwrap();
+        let old = fence(&logical);
+        let selected = old.physical_path();
+        // Pure physical-accounting fixtures: no SQL execution interprets these
+        // owned file payloads as facts, compiler output, or schema evidence.
+        fs::write(selected, vec![0; 1024 * 1024]).unwrap();
+        fs::write(family_path(selected, "-wal"), [0; 300]).unwrap();
+        fs::write(family_path(selected, "-shm"), [0; 100]).unwrap();
+        fs::write(family_path(selected, "-journal"), [0; 50]).unwrap();
+        let sibling = root
+            .join("workspaces")
+            .join("b".repeat(24))
+            .join("index.db");
+        fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        adopt(&sibling, 0).unwrap();
+        let sibling_guard = IndexReadGuard::open_unbudgeted(&sibling).unwrap();
+        fs::write(sibling_guard.physical_path(), vec![0; 2 * 1024 * 1024]).unwrap();
+        fs::write(family_path(sibling_guard.physical_path(), "-wal"), [0; 200]).unwrap();
+        let budget = DiskBudget::new(&logical, &root).unwrap();
+        assert_eq!(budget.usage(false).unwrap().used_bytes, 650);
+        assert_eq!(
+            budget.usage(true).unwrap().used_bytes,
+            650,
+            "without a pending candidate, a preview cannot retire serving data"
+        );
+        let candidate = begin_rebuild(&logical, false, 0).unwrap();
+        fs::write(&candidate.database, vec![0; 64 * 1024]).unwrap();
+        fs::write(family_path(&candidate.database, "-wal"), [0; 128]).unwrap();
+        fs::write(family_path(&candidate.database, "-shm"), [0; 256]).unwrap();
+        assert_eq!(
+            budget.usage(false).unwrap().used_bytes,
+            650 + 64 * 1024 + 384 + PAGE as u64
+        );
+        assert_eq!(
+            budget.usage(true).unwrap().used_bytes,
+            650 + 1024 * 1024 + PAGE as u64 + 384,
+            "old main becomes temporary, candidate main becomes serving; every WAL remains charged once"
+        );
+        // The pool is global, not a new allowance per active workspace.
+        assert_eq!(
+            DiskBudget::new(&sibling, &root)
+                .unwrap()
+                .usage(false)
+                .unwrap()
+                .used_bytes,
+            budget.usage(false).unwrap().used_bytes
+        );
+        fail_rebuild(&logical, "owned fixture failed candidate").unwrap();
+        assert_eq!(
+            budget.usage(false).unwrap().used_bytes,
+            650 + 64 * 1024 + 384 + PAGE as u64,
+            "failed candidates remain charged as retired families until cleanup"
+        );
+        cleanup(&logical, 0).unwrap();
+        assert!(!candidate.database.exists());
+        assert_eq!(budget.usage(false).unwrap().used_bytes, 650);
+        drop((old, sibling_guard));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn sampled_pool_rotates_sizes_and_full_census_discovers_new_workspaces() {
+        let (root, logical) = fixture();
+        adopt(&logical, 0).unwrap();
+        let budget = DiskBudget::new(&logical, &root).unwrap();
+        let mut sidecars = Vec::new();
+        for n in 0..40 {
+            let sibling = root
+                .join("workspaces")
+                .join(format!("{n:024x}"))
+                .join("index.db");
+            fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+            adopt(&sibling, 0).unwrap();
+            let guard = IndexReadGuard::open_unbudgeted(&sibling).unwrap();
+            let path = family_path(guard.physical_path(), "-wal");
+            fs::write(&path, [0; 1]).unwrap();
+            sidecars.push(path);
+        }
+        assert_eq!(budget.usage(false).unwrap().used_bytes, 40);
+        for path in &sidecars {
+            fs::write(path, [0; 4]).unwrap();
+        }
+        let limits = Limits {
+            min_free_disk_mib: 0,
+            ..Limits::default()
+        };
+        for _ in 0..3 {
+            budget.check_sampled(&limits).unwrap();
+        }
+        assert_eq!(
+            budget
+                .sample
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .used()
+                .unwrap(),
+            160,
+            "bounded rotation must resample every cached family, not freeze other workspace sizes"
+        );
+        let new_logical = root
+            .join("workspaces")
+            .join("c".repeat(24))
+            .join("index.db");
+        fs::create_dir_all(new_logical.parent().unwrap()).unwrap();
+        adopt(&new_logical, 0).unwrap();
+        let guard = IndexReadGuard::open_unbudgeted(&new_logical).unwrap();
+        fs::write(
+            family_path(guard.physical_path(), "-wal"),
+            vec![0; 2 * 1024 * 1024],
+        )
+        .unwrap();
+        let tight = Limits {
+            rebuild_disk_mib: 1,
+            ..limits
+        };
+        assert!(
+            matches!(budget.check(&tight, false), Err(Error::DiskPressure(_))),
+            "preflight always discovers a new registered family immediately"
+        );
+        assert!(matches!(
+            budget.check_sampled(&tight),
+            Err(Error::DiskPressure(_))
+        ));
+        fs::remove_file(family_path(guard.physical_path(), "-wal")).unwrap();
+        // Force the cadence boundary without sleeps or throughput assumptions.
+        budget.sample.lock().unwrap().as_mut().unwrap().refreshed =
+            Instant::now() - DISK_CENSUS_INTERVAL;
+        budget.check_sampled(&tight).unwrap();
+        assert_eq!(
+            budget
+                .sample
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .used()
+                .unwrap(),
+            160
+        );
+        drop(guard);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn pool_access_and_version_failures_are_distinct_from_pressure() {
+        let (root, logical) = fixture();
+        adopt(&logical, 0).unwrap();
+        let guard = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        let wal = family_path(guard.physical_path(), "-wal");
+        let outside = root.join("foreign-payload");
+        fs::write(&outside, [0; 16]).unwrap();
+        std::os::unix::fs::symlink(&outside, &wal).unwrap();
+        let budget = DiskBudget::new(&logical, &root).unwrap();
+        assert!(matches!(
+            budget.check(&Limits::default(), false),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert_eq!(fs::read(&outside).unwrap(), [0; 16]);
+        fs::remove_file(wal).unwrap();
+        let receipt = state_path(&logical);
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+        payload["version"] = 999.into();
+        fs::write(&receipt, serde_json::to_vec(&payload).unwrap()).unwrap();
+        assert!(matches!(
+            budget.check(&Limits::default(), false),
+            Err(Error::UpdateRequired(_))
+        ));
+        drop(guard);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
