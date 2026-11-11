@@ -170,12 +170,12 @@ impl ServerHandler for Mcp {
                     handoff.retain(reservation.clone());
                     Some(reservation)
                 }
-                Err(error) => return Ok(failure(error.code(), error)),
+                Err(error) => return Ok(failure(error.code(), error.to_string())),
             }
         };
         let encoded = Value::Object(arguments).to_string();
         if !status && let Err(error) = admission::check_request_bytes(encoded.len()) {
-            return Ok(failure(error.code(), error));
+            return Ok(failure(error.code(), error.to_string()));
         }
         let database = self.database.clone();
         let data = self.data.clone();

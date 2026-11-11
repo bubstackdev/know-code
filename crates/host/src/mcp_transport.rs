@@ -125,7 +125,7 @@ impl Connection {
         self.check()?;
         if self
             .frames
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < MAX_OWNED_FRAMES).then_some(count + 1)
             })
             .is_err()
