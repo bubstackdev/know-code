@@ -142,12 +142,12 @@ def rewrite_offline(root,format):
  healthy(root)
 
 def blocked_upgrade(root,format):
- observed=wait(root,lambda s:s['phase']=='resource_limited','deterministic automatic upgrade disk failure')
+ observed=wait(root,lambda s:s['phase']=='resource_limited','upgrade preflight disk deferral')
  state=lifecycle(root)
- assert observed['outcome_code']=='resource_limited' and state['failed'] and state['pending'] is None,(observed,state)
- assert state['failed_reason']=={'upgrade':{'source_format':format,'target_format':8}},state
+ assert observed['outcome_code']=='disk_pressure' and not state['failed'] and state['pending'] is None,(observed,state)
+ assert state.get('failed_reason') is None,state
  assert state['selected']['id']==SEEDS[str(root)]['selected'],state
- assert state['high_water']>=42,state
+ assert version(root)==format,(format,state)
  healthy(root);return observed
 
 def old_reads(root):
@@ -207,20 +207,24 @@ try:
  unchanged(durable);old,target=old_reads(A);pre_restart,pages_before=capture_cursor(A);replay_old(A,pre_restart,pages_before,target)
  frozen=contract_file(A);inventory=candidates(A)
  (A/'value.ts').write_text(TS.replace('initial😀','saved while blocked😀'))
- before_b=ready(B)['generation'];(B/'value.ts').write_text('export const ownedB = "healthy during failed upgrade";\n');ready(B,before_b+1)
- value('resources','--min-free-disk-mib',0)
+ before_b=ready(B)['generation'];(B/'value.ts').write_text('export const ownedB = "saved during deferred upgrade";\n')
+ wait(B,lambda s:s['phase']=='resource_limited' and s['outcome_code']=='disk_pressure','shared sibling write deferral')
+ sibling=parity(B,{'op':'symbols','name':'ownedB'},'stale',before_b)
+ sibling_symbol=sibling['symbols'][0]
+ sibling_source=parity(B,{'op':'source','artifact_id':sibling_symbol['locations'][0]['artifact_id'],'snapshot':sibling['snapshot']},'stale',before_b)['source']
+ assert sibling_source['text']=='export const ownedB = 1;\n',sibling_source
  for _ in range(4):status(A);time.sleep(.15)
- assert contract_file(A)==frozen and candidates(A)==inventory,'saves/status/resource changes retried failed upgrade'
+ assert contract_file(A)==frozen and candidates(A)==inventory,'saves/status consumed a blocked upgrade attempt'
  unchanged(durable);stop();value('watch',A)
- wait(A,lambda s:s['phase'] in ['resource_limited','upgrade_failed'],'persisted failed upgrade')
- assert contract_file(A)==frozen and candidates(A)==inventory,'restart retried failed upgrade'
+ wait(A,lambda s:s['phase']=='resource_limited' and s['outcome_code']=='disk_pressure','persisted deferred upgrade')
+ assert contract_file(A)==frozen and candidates(A)==inventory,'restart allocated a blocked upgrade attempt'
  assert version(A)==2;unchanged(durable);healthy(A)
  errors(A,{'op':'next_page','cursor':pre_restart['page']['cursor']},'cursor_invalidated')
  old,target=old_reads(A);first,pages=capture_cursor(A)
  assert first['snapshot']==pre_restart['snapshot'],'restart changed healthy physical snapshot identity'
- CHECKS.append('automatic_failure_stale_v2_all_hosts_portable_pages_source_context_no_retry_and_healthy_sibling')
+ CHECKS.append('preflight_deferral_stale_v2_all_hosts_portable_pages_source_context_no_attempt_and_queryable_sibling')
  # Keep this coordinator running: its healthy old cursors must survive cutover.
- cli('index',A);upgraded=ready(A,43);assert version(A)==8 and lifecycle(A)['selected']['id']!=SEEDS[str(A)]['selected']
+ value('resources','--min-free-disk-mib',0);upgraded=ready(A,43);ready(B,before_b+1);assert version(A)==8 and lifecycle(A)['selected']['id']!=SEEDS[str(A)]['selected']
  replacement=parity(A,{'op':'symbols','limit':100},'current',upgraded['generation'])
  assert {c['language'] for c in replacement['coverage']}=={'typescript','csharp'} and all(c['status']=='complete' for c in replacement['coverage']),replacement
  new_target=next(s for s in replacement['symbols'] if s['name']=='upgradeTarget')
@@ -231,14 +235,14 @@ try:
  (A/'value.ts').write_text((A/'value.ts').read_text().replace('saved while blocked😀','ordinary later save😀'));later=ready(A,upgraded['generation']+1)
  replay_old(A,first,pages,target);healthy(A);healthy(A,SEEDS[str(A)]['selected']);unchanged(durable)
  assert parity(A,{'op':'symbols','name':'upgradeTarget'},'current',later['generation'])['symbols']
- CHECKS.append('explicit_real_TS_Csharp_replacement_advances_actual42_old_cursors_survive_cutover_and_later_publication')
+ CHECKS.append('automatic_after_preflight_real_TS_Csharp_replacement_advances_actual42_old_cursors_survive_cutover_and_later_publication')
  # No usable format1 fallback. A separate owned historical fixture shares the
  # same guarded replacement path; schema1 is derived as in publication.rs.
  high_reserve();stop();rewrite_offline(C,1);value('watch',C);blocked_upgrade(C,1)
  errors(C,{'op':'symbols'},'not_ready');healthy(C)
- value('resources','--min-free-disk-mib',0);cli('index',C);current_c=ready(C,43)
+ value('resources','--min-free-disk-mib',0);current_c=ready(C,43)
  assert version(C)==8 and parity(C,{'op':'symbols','name':'ownedC'},'current',current_c['generation'])['symbols']
- CHECKS.append('actual_schema1_no_readable_fallback_not_ready_and_explicit_rebuild')
+ CHECKS.append('actual_schema1_no_readable_fallback_not_ready_and_auto_rebuild_after_preflight')
  # A genuinely foreign layout has no Know Code fact tables. Unsupported format
  # refusal must happen before interpreting them or authorizing replacement.
  stop();rewrite_offline(F,999)

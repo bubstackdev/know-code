@@ -4,7 +4,7 @@ Status: accepted policy; implementation in progress. The manual SQLite probe bel
 
 ## Accepted behavior
 
-Use the existing configurable temporary-disk pool: initially 2 GiB, with a separate 512 MiB available-volume reserve. Charge selected serving WAL sidecars, pending replacement families and retained retired families once. Current serving main databases remain ordinary index storage. The persisted setting remains `rebuild_disk_mib`; `--temporary-disk-mib` is a CLI alias, not a second allowance. Accounting/enforcement is sampled and cannot promise an instantaneous filesystem quota. This pool spans workspaces owned by one coordinator/data root; independently configured coordinators do not aggregate it automatically.
+Use the existing configurable temporary-disk pool: initially 2 GiB, with a separate 512 MiB available-volume reserve. Charge selected serving WAL sidecars, pending replacement families and retained retired families once. Current serving main databases remain ordinary index storage. The persisted setting remains `rebuild_disk_mib`; `--temporary-disk-mib` is a CLI alias, not a second allowance. Accounting/enforcement is sampled and cannot promise an instantaneous filesystem quota. Ordinary writes use fresh preflight/pre-publication checks and 100 ms active sampling; a commit can win a sub-sample overshoot, after the last check, with the next write stopped at preflight. Replacement cutover additionally takes a fresh final census. This pool spans workspaces owned by one coordinator/data root; independently configured coordinators do not aggregate it automatically.
 
 An open raw Rust read view may prevent WAL reclamation. Preserve its coherent snapshot. Pause affected indexing, release compiler workers and the analysis slot, expose prior results as stale with a disk-pressure outcome, and resume after reclamation creates useful headroom. Maintenance must continue while indexing pauses, because dropping a raw reader sends no coordinator event. Preserve cancellation, saved-input failure fingerprints, queue fairness and dependency-preparation authorization. Automatic resumption must not grant a restore retry, clear an unrelated analyzer error or start a compile/abort/cleanup loop.
 
@@ -12,11 +12,11 @@ Rebuild preflight waits automatically for space **before allocating an attempt**
 
 ## Common-core implementation boundaries
 
-- Recovery owns one shared disk census and bounded sampling, using existing owned-family checks and temporary-disk settings. Full preflight/publication checks must discover newly retired or pending families; cached byte totals must not hide WAL growth.
+- Recovery owns one shared disk census and bounded sampling, using existing owned-family checks and temporary-disk settings. Full preflight and replacement-cutover checks must discover newly retired or pending families; cached byte totals must not hide WAL growth.
 - Resource control distinguishes disk pressure from ordinary memory/cancellation/analyzer failures. Filesystem accounting runs outside its settings mutex.
 - Storage owns nonblocking checkpoint maintenance on the exact healthy incarnation, under the writer fence, without schema migration or query admission. Busy readers defer reclamation. Checkpoint failure after commit cannot turn a successful publication into an unpublished failure.
 - Cursor publication retains the writer outside the global cursor mutex on both success and error. Explicit checkpoints, automatic checkpoints and last-connection-close work must not hide inside that mutex.
-- Coordinator owns preflight deferral, durable ordinary-job pause/resume, bounded fair maintenance and the active-rebuild retry exception. Paused jobs release shared analysis capacity. No SQL, filesystem census or checkpoint runs under global entry/settings/cursor locks.
+- Coordinator owns preflight deferral, durable ordinary-job pause/resume, bounded fair maintenance and the active-rebuild retry exception. Paused jobs release shared analysis capacity. WAL-maintenance SQL, filesystem census and checkpoints run outside global entry/settings/cursor locks. Existing publication and retention metadata transactions remain serialized.
 
 Reuse lifecycle capability 3, resource capability 3, storage 8, framing 7 and recovery receipt 2. No public DTO shape, new disk engine, per-language scheduler or background query RPC is required.
 

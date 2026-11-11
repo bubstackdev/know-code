@@ -73,28 +73,32 @@ try:
  assert settings_before==(original_settings.read_bytes() if original_settings.exists() else None)
  ready(B);assert saved(B)[0]==initial_b['generation'],'healthy sibling unnecessarily rebuilt'
  checks.append('automatic_startup_corruption_rebuild_preserves_state_and_healthy_sibling')
- # Force a deterministic sampled disk guard failure without filling disk.
+ # An impossible reserve defers before allocating a rebuild attempt. Shared
+ # pressure also defers sibling writes, while its old coherent graph survives.
  free=os.statvfs(DATA);free_mib=free.f_bavail*free.f_frsize//(1024*1024)
  value('resources','--min-free-disk-mib',free_mib+max(1024,free_mib//10))
  stop();failed_old=damage(A);value('watch',A)
- failure=wait(A,lambda s:s['phase']=='resource_limited','recovery disk guard')
- d=invariant(A);assert d['selected']['id']==failed_old and d['failed'] and d['pending'] is None,d
+ failure=wait(A,lambda s:s['phase']=='resource_limited' and s['outcome_code']=='disk_pressure','recovery preflight deferral')
+ d=invariant(A);assert d['selected']['id']==failed_old and not d['failed'] and d['pending'] is None,d
  candidates=len(list((Path(databases[A]).parent/'indexes').iterdir()))
  (A/'value.ts').write_text('export const alpha = "saved while blocked";\n')
- (B/'value.ts').write_text('export const beta = 2;\n');ready(B,initial_b['generation']+1)
+ (B/'value.ts').write_text('export const beta = 2;\n')
+ wait(B,lambda s:s['phase']=='resource_limited' and s['outcome_code']=='disk_pressure','shared sibling write deferral')
+ assert saved(B)[0]==initial_b['generation'],'pressure replaced a coherent sibling graph'
  for _ in range(4):status(A);time.sleep(.1)
+ assert state(A)['selected']['id']==failed_old and not state(A)['failed'],state(A)
+ assert len(list((Path(databases[A]).parent/'indexes').iterdir()))==candidates,'preflight consumed another candidate'
+ stop();value('watch',A)
+ wait(A,lambda s:s['phase']=='resource_limited' and s['outcome_code']=='disk_pressure','persisted preflight deferral')
+ assert len(list((Path(databases[A]).parent/'indexes').iterdir()))==candidates,'restart consumed a blocked attempt'
+ checks.append('rebuild_preflight_defers_across_save_and_restart_without_consuming_attempt')
  value('resources','--min-free-disk-mib',0)
- time.sleep(.2);assert state(A)['selected']['id']==failed_old and state(A)['failed'],state(A)
- assert len(list((Path(databases[A]).parent/'indexes').iterdir()))==candidates,'saves/status/resource changes retried failed recovery'
- stop();value('watch',A);wait(A,lambda s:s['phase'] in ['resource_limited','recovery_failed'],'persisted failed recovery')
- assert len(list((Path(databases[A]).parent/'indexes').iterdir()))==candidates,'restart/reregister retried failed recovery'
- checks.append('disk_guard_failure_is_durable_and_only_explicit_refresh_retries')
- cli('index',A);final=ready(A,recovered['generation']+1)
+ final=ready(A,recovered['generation']+1)
  d=invariant(A);assert d['selected']['id']!=failed_old and not d['failed'] and d['pending'] is None,d
  assert (A/'value.ts').read_text() in saved(A)[1]
  assert ready(B)['generation']>initial_b['generation']
  assert prep_before==(prep.read_bytes() if prep.exists() else None)
- checks.append('explicit_refresh_rebuilds_current_saved_state_and_advances_generation')
+ checks.append('space_policy_recovery_automatically_rebuilds_current_saved_state_and_advances_generation')
  stop();value('watch',A);assert ready(A)['generation']==final['generation'],'healthy restart published unnecessarily'
  checks.append('healthy_replacement_restart_is_noop')
  # Malformed/incompatible lifecycle and invalid health metadata belong only to
