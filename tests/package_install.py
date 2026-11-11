@@ -262,7 +262,7 @@ try:
  saved=query({'op':'symbols','name':'savedAnswer'});assert saved['freshness']=='current' and saved['symbols']
  removed=query({'op':'symbols','name':'answer'});assert removed.get('symbols',[])==[],removed
  ts_context=query({'op':'symbol_context','symbol_id':saved['symbols'][0]['id'],'max_bytes':1024});exact_source(ts_context['contexts'][0]['declarations'][0]['source'],WORKSPACE/'value.ts')
- old=ready(node)['generation'];(WORKSPACE/'Code.cs').write_text(CSHARP.replace('Greet() => 42','SavedGreet() => 43'))
+ old=ready(node)['generation'];(WORKSPACE/'Code.cs').write_text(CSHARP.replace('Greet() => 42','SavedGreet() => 43').replace('=> Greet();','=> SavedGreet();'))
  saved_cs=ready(node,old+1);MIN_GENERATION=saved_cs['generation']
  saved=query({'op':'symbols','name':'SavedGreet'});assert saved['freshness']=='current' and saved['symbols']
  removed=query({'op':'symbols','name':'Greet'});assert removed.get('symbols',[])==[],removed

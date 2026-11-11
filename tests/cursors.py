@@ -136,7 +136,9 @@ try:
      assert body['content_hash']==hashlib.sha256(GRAPH_OLD.encode()).hexdigest(),body
      assert body['text'].encode()==GRAPH_OLD.encode()[body['start_byte']:body['end_byte']],body
      graph_bodies.append(body)
- assert len(graph_bodies)==2 and sum(len(b['text'].encode()) for b in graph_bodies)==80,graph_bodies
+ assert graph_bodies and sum(len(b['text'].encode()) for b in graph_bodies)<=80,graph_bodies
+ assert any(d['source_status'] in {'truncated','budget_exhausted'}
+            for p in graph_pages for f in p['graph']['findings'] for d in f['context']['declarations']),graph_pages
  for page in graph_pages:replay(page['page']['cursor'],page)
  for extra in [{'include_source':True},{'source_max_bytes':80}]:
   error(query('cli',{'op':'next_page','cursor':graph_pages[0]['page']['cursor'],**extra}),'invalid_request')

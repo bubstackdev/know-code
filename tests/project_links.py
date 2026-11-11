@@ -1,5 +1,6 @@
 """Compiler-selected project bodies, target compatibility and native API parity."""
 import atexit
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -92,10 +93,23 @@ for name, project, target, expected, units in [
     enriched = query({'op': 'callees', 'symbol_id': root, 'max_depth': 5, 'include_source': True,
                       **({'target': target} if target else {})}, True)['graph']
     assert [f['symbol'] for f in enriched['findings']] == [f['symbol'] for f in graph['findings']], enriched
-    for finding in enriched['findings']:
+    selected_files = {
+        'Start': ['cs/Library/Code.cs', 'cs/Leaf/Code.cs'],
+        'CompatibleStart': ['cs/LibraryStd/Code.cs', 'cs/LibraryStd/Code.cs'],
+        'OldStart': ['cs/Library/Code.cs', 'cs/Leaf/Code.cs'],
+        'start': ['ts/library/code.ts', 'ts/leaf/code.ts'],
+    }[name]
+    for finding, selected in zip(enriched['findings'], selected_files, strict=True):
         assert finding['context']['declarations'], finding
         assert all(d['source_status'] == 'included' and d['source']['text']
                    for d in finding['context']['declarations']), finding
+        raw = (WORKSPACE / selected).read_bytes()
+        for declaration in finding['context']['declarations']:
+            body = declaration['source']; path = Path(body['path'])
+            assert (path if path.is_absolute() else WORKSPACE / path).resolve() == (WORKSPACE / selected).resolve(), body
+            assert body['content_hash'] == declaration['location']['content_hash'] == hashlib.sha256(raw).hexdigest(), declaration
+            assert body['start_byte'] == declaration['extent']['start_byte'] and body['end_byte'] == declaration['extent']['end_byte'], declaration
+            assert body['text'].encode() == raw[body['start_byte']:body['end_byte']], declaration
         assert not finding.get('supporting_targets'), 'source projection expanded untraversed peer frameworks'
     (RUN / f'{name}-source.json').write_text(json.dumps(enriched, indent=2))
     path = graph['findings'][-1]['paths'][0]

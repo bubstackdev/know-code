@@ -99,6 +99,20 @@ try:
  for language in ['node','dotnet']:
   assert stable(query(language,{'op':'next_page','cursor':grouped_page['page']['cursor']}))==grouped_page
  CHECKS.append('grouped_limits_support_followups_concrete_paths_and_atomic_pages')
+ source_page=stable(query('cli',{'op':'callees','symbol_id':helper['id'],'limit':1,'page_size':1,
+                                 'include_source':True,'source_max_bytes':80}))
+ source_finding=source_page['graph']['findings'][0]
+ assert source_page['page']['sections']['findings']['total']==1 and len(source_finding['supporting_targets'])==2,source_page
+ assert source_finding['symbol']==target_finding['symbol'] and source_finding['paths']==target_finding['paths'],source_finding
+ source_members=[source_finding,*source_finding['supporting_targets']]
+ assert all(m['context']['declarations'] for m in source_members),source_members
+ assert sum(len(d.get('source',{}).get('text','').encode()) for m in source_members for d in m['context']['declarations'])<=80,source_members
+ for language in ['cli','node','dotnet']:
+  assert stable(query(language,{'op':'next_page','cursor':source_page['page']['cursor']}))==source_page
+  small=query(language,{'op':'next_page','cursor':source_page['page']['cursor'],'response_max_bytes':1024})
+  assert small['error']['code']=='response_limit_exceeded',small
+  assert stable(query(language,{'op':'next_page','cursor':source_page['page']['cursor']}))==source_page
+ CHECKS.append('grouped_graph_source_supports_remain_atomic_bounded_and_replayable')
 
  target=parity({'op':'symbols','name':'target'})['symbols'][0]['id']
  for mode,expected in [('only','suite.test.ts'),('exclude','prod.ts')]:
