@@ -132,7 +132,7 @@ checks+=['npm_archive_installed_offline','NuGet_archive_installed_offline_with_n
 (WORKSPACE/'tsconfig.json').write_text('{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"noEmit":true},"files":["value.ts"]}')
 (WORKSPACE/'value.ts').write_text('// café 😀 offline source\nimport { dependencyValue } from "@know-code/offline-dependency";\nexport function leaf() { return dependencyValue(); }\nexport function answer() { return leaf(); }\n')
 (WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup><ItemGroup><PackageReference Include="KnowCode" Version="0.0.1" /></ItemGroup></Project>')
-CSHARP='// café 😀 offline source\nusing System.Text.Json.Serialization; public static class Greeter { public static int Greet() => 42; public static KnowCode.QueryRequest Request() => new("symbols"); } public record Person(string Name); [JsonSerializable(typeof(Person))] public partial class MyContext : JsonSerializerContext { }\n'
+CSHARP='// café 😀 offline source\nusing System.Text.Json.Serialization; public static class Greeter { public static int Greet() => 42; public static int GreetCaller() => Greet(); public static KnowCode.QueryRequest Request() => new("symbols"); } public record Person(string Name); [JsonSerializable(typeof(Person))] public partial class MyContext : JsonSerializerContext { }\n'
 (WORKSPACE/'Code.cs').write_text(CSHARP)
 
 # Dependency setup is explicit and cannot create a serving index. The local
@@ -214,6 +214,18 @@ references=query({'op':'references','symbol_id':leaf['id']});assert references['
 lexical=query({'op':'symbols','query':'Greeter'});assert lexical['symbols']
 all_symbols=query({'op':'symbols','limit':1000});assert any(l['generated'] for s in all_symbols['symbols'] for l in s['locations'])
 checks+=['packaged_TS_and_Csharp_compiler_analysis','both_inprocess_SDKs_match_CLI','compiler_context_and_FTS','Roslyn_generated_sources']
+for caller,callee,filename in [('answer','leaf','value.ts'),('GreetCaller','Greet','Code.cs')]:
+ root=query({'op':'symbols','name':caller})['symbols'][0]
+ req={'op':'callees','symbol_id':root['id']}
+ compact=query(req)['graph'];assert len(compact['findings'])==1 and compact['findings'][0]['symbol']['name']==callee,compact
+ assert 'context' not in compact['findings'][0],compact
+ enriched=query(dict(req,include_source=True))['graph'];declarations=enriched['findings'][0]['context']['declarations']
+ assert declarations and all(d['source_status']=='included' for d in declarations),enriched
+ for declaration in declarations:exact_source(declaration['source'],WORKSPACE/filename)
+ limited=query(dict(req,include_source=True,source_max_bytes=1))
+ assert limited['truncated'] and 'source_budget' in limited['graph']['limits'],limited
+ assert [f['symbol'] for f in limited['graph']['findings']]==[f['symbol'] for f in compact['findings']],limited
+checks.append('installed_offline_TS_Csharp_graph_source_defaults_exact_bodies_limits_native_parity')
 # MCP startup/query/EOF over the installed executable, using the same saved publication.
 mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-stderr.log').open('w'))
 mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
@@ -234,6 +246,9 @@ try:
  continuation=next(tool['inputSchema'] for tool in listing if tool['name']=='next_page')
  assert set(continuation['properties'])=={'cursor','deadline_ms','response_max_bytes'} and continuation['required']==['cursor'] and continuation['additionalProperties'] is False
  found=tool_result(3,'search_symbols',{'name':'answer'});assert found['symbols']==query({'op':'symbols','name':'answer'})['symbols']
+ enriched_args={'symbol_id':leaf['id'],'include_source':True,'source_max_bytes':1024}
+ assert tool_result(34,'callers',enriched_args)==query(dict(enriched_args,op='callers'))
+ checks.append('installed_offline_MCP_graph_source_matches_native_projection')
  page=tool_result(30,'search_symbols',{'limit':1000,'page_size':1});token=page['page']['cursor'];assert page['page']['next_cursor'] and len(page['symbols'])==1
  def frozen_page(result):
   result=dict(result);result.pop('freshness',None);result.pop('coordination',None);return result

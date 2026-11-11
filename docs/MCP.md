@@ -60,7 +60,9 @@ Hash mismatch rejects reuse of an old range after the indexed source changes. Ca
 
 The added JSON request/result fields need matching current query artifacts; a complete published query-capability compatibility policy remains release work. The existing .NET positional request constructor is preserved; new range/hash inputs are optional init properties. Worker Protobuf v7, store v6 and C ABI v1 remain unchanged.
 
-Standalone source excerpts do not complete inline graph-body projection, test filters or cross-target presentation. Those remain tracked in the release ledger; portable pagination and total serialized-response budgets use the shared lifecycle contract above. Source-body string/comment search is separate unassigned backlog work; symbol/signature search is sufficient for 0.0.1.
+Graph tools and `query_graph` expose opt-in `include_source` (default false) and graph-only `source_max_bytes` (16 KiB default, 1–256 KiB). Source belongs to returned finding/target `context.declarations`, not roots or path edges. The shared aggregate budget counts every serialized body copy across all targets/pages; exhaustion labels clipped or omitted bodies without removing otherwise-returned findings. Graph `max_bytes` still bounds graph JSON; complete-response bounds still apply. `symbol_context` keeps its default source inclusion and existing `max_bytes` semantics. See [the source projection contract and validation](GRAPH_SOURCE_PROJECTION.md).
+
+Source-body string/comment search remains separate unassigned backlog work; symbol/signature search is sufficient for 0.0.1.
 
 ## Transport and execution limits
 
