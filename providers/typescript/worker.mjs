@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import {readRequest, send} from '../shared/protocol.mjs';
 import {preparePackages, nodePreparationPolicy} from './preparation.mjs';
+import {typescriptInstallation} from './package-tools.mjs';
 import {analyze} from './analysis.mjs';
 import {classificationPolicy,compilationClassification} from './test-classification.mjs';
 import {ProjectSetupError,boundedText} from './project-errors.mjs';
@@ -12,24 +13,9 @@ const ownRequire = createRequire(import.meta.url);
 function compilerFor(directory, root, declared) {
   directory=path.resolve(directory);root=path.resolve(root);
   const inside=directory===root||directory.startsWith(root+path.sep);
-  let filename;
-  // Inspect logical installation origins, not the resolved physical filename:
-  // pnpm may legitimately link an in-workspace entry to an outside store.
-  for(let current=directory;;current=path.dirname(current)) {
-    const entry=path.join(current,'node_modules','typescript');
-    let present=false;
-    try {fs.lstatSync(entry);present=true;}
-    catch(error) {
-      if(error.code!=='ENOENT')
-        throw new ProjectSetupError('typescript_load_failed',`Cannot inspect selected TypeScript installation ${entry}: ${error.message}`);
-    }
-    if(present) {
-      try {filename=ownRequire.resolve(entry);}
-      catch(error) {throw new ProjectSetupError('compiler_unavailable',`Cannot resolve repository TypeScript installation ${entry}: ${error.message}`);}
-      break;
-    }
-    if(current===root||!inside)break;
-  }
+  const installation=typescriptInstallation(directory,root);
+  if(installation?.error)throw installation.error;
+  let filename=installation?.filename;
   if(!filename) {
     if(!inside)
       throw new ProjectSetupError('compiler_context_unavailable',`Referenced TypeScript project ${directory} has no local compiler installation; ambient compilers outside the selected workspace were not substituted`);
