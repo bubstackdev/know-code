@@ -260,4 +260,4 @@ for language in ['node','dotnet']:
 thread.join(timeout=5);listener.close();assert not thread.is_alive() and not marker.exists()
 checks.append('incompatible_coordinator_never_replaced')
 result={'passed':True,'profile':PROFILE,'run':str(RUN),'database':DATABASE,'checks':checks}
-(RUN/'summary.json').write_text(json.dumps(result,indent=2)+'\n');(ROOT/'.artifacts/workspace-api/latest.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
+(RUN/'summary.json').write_text(json.dumps(result,indent=2)+'\n');(ROOT/'.artifacts/workspace-api').mkdir(parents=True,exist_ok=True);(ROOT/'.artifacts/workspace-api/latest.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))

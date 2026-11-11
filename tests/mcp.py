@@ -256,7 +256,7 @@ try:
  assert not tool['isError'] and value['result']['freshness']=='current',value
  recovered.close();checks.append('real_stdout_backpressure_closes_connection_without_stopping_coordinator')
  result={'passed':True,'profile':PROFILE,'database':DATABASE,'checks':checks}
- (RUN/'summary.json').write_text(json.dumps(result,indent=2)+'\n');(ROOT/'.artifacts/mcp/latest.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
+ (RUN/'summary.json').write_text(json.dumps(result,indent=2)+'\n');(ROOT/'.artifacts/mcp').mkdir(parents=True,exist_ok=True);(ROOT/'.artifacts/mcp/latest.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
 finally:
  if paused:os.kill(paused,signal.SIGCONT)
  for client in clients:client.close()

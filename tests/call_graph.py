@@ -7,7 +7,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN = ROOT / '.artifacts/call-graph' / str(time.time_ns())
+RUN = ROOT / '.artifacts/cg' / format(time.time_ns(),'x')[-10:]
 WORKSPACE = RUN / 'workspace'
 (WORKSPACE / 'ts').mkdir(parents=True)
 (WORKSPACE / 'cs').mkdir()
@@ -254,5 +254,6 @@ summary = {'passed': True, 'profile': PROFILE, 'database': DATABASE, 'generation
            'checked_source_ranges': locations, 'checks': checks,
            'capabilities': 'explicitly partial; selected project bodies link; broader dispatch closure remains partial'}
 (RUN / 'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
-(RUN.parent / 'latest.json').write_text(json.dumps(summary, indent=2)+'\n')
+(ROOT / '.artifacts/call-graph').mkdir(parents=True,exist_ok=True)
+(ROOT / '.artifacts/call-graph/latest.json').write_text(json.dumps(summary, indent=2)+'\n')
 print(json.dumps(summary, indent=2))

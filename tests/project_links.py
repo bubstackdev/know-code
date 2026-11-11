@@ -8,7 +8,7 @@ import subprocess
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN = ROOT / '.artifacts/project-links' / str(time.time_ns())
+RUN = ROOT / '.artifacts/pl' / format(time.time_ns(),'x')[-10:]
 WORKSPACE = RUN / 'workspace'
 PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'
