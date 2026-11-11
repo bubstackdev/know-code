@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import {readRequest, send} from '../shared/protocol.mjs';
 import {preparePackages, context, nodePreparationPolicy} from './preparation.mjs';
 import {analyze} from './analysis.mjs';
-import {classificationPolicy} from './test-classification.mjs';
+import {classificationPolicy,compilationClassification} from './test-classification.mjs';
+import {ProjectSetupError,boundedText} from './project-errors.mjs';
 
 const ownRequire = createRequire(import.meta.url);
 
@@ -17,16 +18,21 @@ function compilerFor(directory) {
     for (let current = directory;; current = path.dirname(current)) {
       const manifest = path.join(current, 'package.json');
       if (fs.existsSync(manifest)) {
-        const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+        let pkg;
+        try {pkg=JSON.parse(fs.readFileSync(manifest,'utf8'));}
+        catch(error) {throw new ProjectSetupError('invalid_package_configuration',`${manifest}: ${error.message}`);}
         if (pkg.dependencies?.typescript || pkg.devDependencies?.typescript)
-          throw new Error(`missing repository TypeScript dependency in ${directory}; restore its packages`);
+          throw new ProjectSetupError('compiler_unavailable',`missing repository TypeScript dependency in ${directory}; restore its packages`);
       }
       if (path.dirname(current) === current) break;
     }
     filename = ownRequire.resolve('typescript');
   }
-  const ts = ownRequire(filename);
-  if (!ts.version.startsWith('5.9.')) throw new Error(`unsupported TypeScript ${ts.version}: this first slice supports 5.9.x; use a compatible Know Code provider`);
+  let ts;
+  try {ts=ownRequire(filename);}
+  catch(error) {throw new ProjectSetupError('typescript_load_failed',`Cannot load selected TypeScript: ${error.message}`);}
+  if (typeof ts.version!=='string'||!ts.version.startsWith('5.9.'))
+    throw new ProjectSetupError('unsupported_compiler',`unsupported TypeScript ${ts.version??'unknown'}: this provider supports 5.9.x; no compiler substitution was made`,ts.version??'unavailable');
   return ts;
 }
 
@@ -47,43 +53,70 @@ try {
       optionsJson: JSON.stringify({...JSON.parse(value.optionsJson), knowCodePackageManager: setup.packageManager})};
     send(kind, value);
   };
-  const owned = new Set();
+  const owned = new Set(),failed=new Set(),blocked=new Set();
+  function unavailable(config,error) {
+    if(!(error instanceof ProjectSetupError))throw error;
+    config=path.resolve(config);if(failed.has(config))return;
+    failed.add(config);blocked.add(path.dirname(config));
+    const projectPath=path.relative(root,config).split(path.sep).join('/'),id=`ts:${projectPath}`;
+    send('compilation',{id,language:'typescript',projectPath,compilerVersion:error.compilerVersion,
+      inputPaths:[config],optionsJson:JSON.stringify({knowCodeSetupFailure:error.code}),
+      ...(testPolicy?{testClassification:compilationClassification(testPolicy)}:{})});
+    send('report',{compilationId:id,status:'failed',diagnostics:[{code:error.code,severity:'error',path:boundedText(projectPath),
+      message:boundedText(`${error.message}; this explicit project's facts are unavailable; standalone inference below its directory is suppressed while ownership is unknown.`)}],
+      capabilities:{calls:'unavailable',dependencies:'unavailable',dispatch:'unavailable',project_links:'unavailable'}});
+  }
   const configurations = [...request.configuredProjects];
   const planned = new Set();
   while (configurations.length) {
     const config = path.resolve(configurations.shift());
     if (planned.has(config)) continue;
     planned.add(config);
-    const ts = compilerFor(path.dirname(config));
-    const read = ts.readConfigFile(config, ts.sys.readFile);
-    if (read.error) throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
-    const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(config), undefined, config);
-    for (const filename of parsed.fileNames) owned.add(path.resolve(filename));
-    configurations.push(...(parsed.projectReferences ?? []).map(r => ts.resolveProjectReferencePath(r)));
+    try {
+      const ts = compilerFor(path.dirname(config));
+      const read = ts.readConfigFile(config, ts.sys.readFile);
+      if (read.error) throw new ProjectSetupError('invalid_project_configuration',ts.flattenDiagnosticMessageText(read.error.messageText,'\n'),ts.version);
+      const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(config), undefined, config);
+      for (const filename of parsed.fileNames) owned.add(path.resolve(filename));
+      configurations.push(...(parsed.projectReferences ?? []).map(r => ts.resolveProjectReferencePath(r)));
+    } catch(error) {unavailable(config,error);}
   }
   const queue = [...request.projects];
   const visited = new Set();
   while (queue.length) {
     const config = path.resolve(queue.shift());
-    if (visited.has(config)) continue;
+    if (visited.has(config)||failed.has(config)) continue;
     visited.add(config);
     send('progress', {stage: 'analyzing', projectPath: config, message: 'Analyzing configured TypeScript project'});
-    const result = analyze(compilerFor(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
-    // analyze() has returned: no compiler/checker/source graph is retained here.
+    try {
+      const result = analyze(compilerFor(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
+      queue.push(...result.references);
+      for (const file of result.files) owned.add(file);
+    } catch(error) {unavailable(config,error);}
+    // No compiler/checker/source graph is retained after the compilation.
     globalThis.gc();
-    queue.push(...result.references);
-    for (const file of result.files) owned.add(file);
   }
   const groups = new Map();
   for (const filename of request.looseSources) {
-    if (owned.has(path.resolve(filename))) continue;
+    const saved=path.resolve(filename);
+    if (owned.has(saved)||[...blocked].some(directory=>saved===directory||saved.startsWith(directory+path.sep))) continue;
     const directory = context(root, path.dirname(filename))?.directory ?? root;
     if (!groups.has(directory)) groups.set(directory, []);
     groups.get(directory).push(filename);
   }
   for (const [directory, files] of groups) {
     send('progress', {stage: 'analyzing', projectPath: directory, message: 'Analyzing saved TypeScript files outside configured projects with inferred options'});
-    analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);
+    try {analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);}
+    catch(error) {
+      if(!(error instanceof ProjectSetupError))throw error;
+      // Preserve the inferred identity rather than creating an explicit config.
+      const projectPath='$inferred',id=`ts:${projectPath}${directory!==root?':'+path.relative(root,directory).split(path.sep).join('/'):''}`;
+      send('compilation',{id,language:'typescript',projectPath,inferred:true,compilerVersion:error.compilerVersion,
+        optionsJson:JSON.stringify({inferredRoot:path.relative(root,directory),knowCodeSetupFailure:error.code}),
+        ...(testPolicy?{testClassification:compilationClassification(testPolicy)}:{})});
+      send('report',{compilationId:id,status:'failed',diagnostics:[{code:error.code,severity:'error',message:boundedText(error.message),path:''}],
+        capabilities:{calls:'unavailable',dependencies:'unavailable',dispatch:'unavailable',project_links:'unavailable'}});
+    }
     globalThis.gc();
   }
   send('complete', {success: true});

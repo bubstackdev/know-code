@@ -3,6 +3,8 @@ import {createHash} from 'node:crypto';
 import {declarationSymbols, symbolIdentity, syntheticIdentity, dispatchTypeKeys} from './symbols.mjs';
 import {projectLinks} from './project-links.mjs';
 import {graphFacts} from './graph.mjs';
+import {canSend,MAX_FRAME} from '../shared/protocol.mjs';
+import {ProjectSetupError,boundedText} from './project-errors.mjs';
 import {classificationPolicy, compilationClassification, sourceClassification, TEST_CLASSIFICATION_POLICY} from './test-classification.mjs';
 const relative = (root, name) => path.relative(root, name).split(path.sep).join('/');
 
@@ -31,7 +33,7 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   const configRead = filename => { inputPaths.add(path.resolve(filename)); return ts.sys.readFile(filename); };
   if (config) {
     const read = ts.readConfigFile(config, configRead);
-    if (read.error) throw new Error(ts.flattenDiagnosticMessageText(read.error.messageText, '\n'));
+    if (read.error) throw new ProjectSetupError('invalid_project_configuration',ts.flattenDiagnosticMessageText(read.error.messageText, '\n'),ts.version);
     parsed = ts.parseJsonConfigFileContent(read.config, {...ts.sys, readFile: configRead}, path.dirname(config), undefined, config);
   } else {
     parsed = {fileNames: inferredFiles, errors: [], options: {
@@ -50,7 +52,17 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
     dependencies: (parsed.projectReferences ?? []).map(r => relative(root, ts.resolveProjectReferencePath(r)))});
   const checker = program.getTypeChecker();
   const declarationSymbol = declarationSymbols(ts, checker);
-  const files = program.getSourceFiles().filter(f => !program.isSourceFileDefaultLibrary(f) && !program.isSourceFileFromExternalLibrary(f) && links.owns(f));
+  const omitted=[];
+  const files = program.getSourceFiles().filter(f => !program.isSourceFileDefaultLibrary(f) && !program.isSourceFileFromExternalLibrary(f) && links.owns(f)).filter(file=>{
+    const sourcePath=relative(root,file.fileName),utf8=Buffer.from(file.text,'utf8');
+    // Hash identity has a fixed encoded width; no second source hash pass.
+    const placeholder='0'.repeat(64);
+    const fits=canSend('source',{id:`${sourcePath}@${placeholder}`,path:sourcePath,utf8,sha256:placeholder,
+      generated:false,compilationId:id,...(testPolicy?{testClassification:sourceClassification(sourcePath,testPolicy)}:{})});
+    if(!fits)omitted.push({code:'artifact_too_large',severity:'warning',path:boundedText(sourcePath),
+      message:`Saved source has ${utf8.length} UTF-8 bytes and its encoded artifact exceeds the ${MAX_FRAME}-byte worker frame; body and facts omitted.`});
+    return fits;
+  });
   const indexed = new Set(files.map(f => f.fileName));
   const emitted = new Set();
   let batch = {compilationId: id, symbols: [], occurrences: [], relationships: []};
@@ -150,10 +162,11 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   const items = diagnostics.slice(0, 100).map(d => ({code: `TS${d.code}`,
     severity: d.category === ts.DiagnosticCategory.Error ? 'error' : 'warning',
     message: ts.flattenDiagnosticMessageText(d.messageText, '\n'), path: d.file ? relative(root, d.file.fileName) : ''}));
-  items.push(...setupDiagnostics);
+  items.push(...setupDiagnostics,...omitted.slice(0,100));
+  if(omitted.length>100)items.push({code:'artifacts_omitted',severity:'warning',message:`${omitted.length} source artifacts exceed the worker frame; first 100 paths reported.`,path:''});
   if (inferred) items.push({code: 'inferred_configuration', severity: 'info', message: 'Compiler options were inferred; intended build configuration is unknown.', path: ''});
   if (diagnostics.length > 100) items.push({code: 'diagnostics_truncated', severity: 'info', message: `${diagnostics.length} diagnostics; first 100 included.`, path: ''});
-  send('report', {compilationId: id, status: diagnostics.some(d => d.category === ts.DiagnosticCategory.Error) || setupDiagnostics.length ? 'partial' : 'complete', diagnostics: items,
+  send('report', {compilationId: id, status: diagnostics.some(d => d.category === ts.DiagnosticCategory.Error) || setupDiagnostics.length || omitted.length ? 'partial' : 'complete', diagnostics: items,
     capabilities:{calls:'partial',dependencies:'partial',dispatch:'partial',project_links:links.complete?'complete':'partial',
       ...(testPolicy ? {test_classification:'partial'} : {})}});
   return {references: (parsed.projectReferences ?? []).map(reference => ts.resolveProjectReferencePath(reference)), files: files.map(f => path.resolve(f.fileName))};

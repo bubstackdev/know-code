@@ -30,6 +30,13 @@ export function readRequest() {
   return envelope.analyze;
 }
 
+// Encoded size includes the same envelope/identity metadata as send(). This
+// does not allocate a full encoded frame or change the transport's hard cap.
+export function canSend(kind,value) {
+  const size=Envelope.encode(Envelope.create({protocolVersion: VERSION,jobId:jobId??'', [kind]:value})).len;
+  return size>0&&size<=MAX_FRAME;
+}
+
 export function send(kind, value) {
   if (jobId === undefined) throw new Error('worker has no analysis request');
   const bytes = Envelope.encode(Envelope.create({protocolVersion: VERSION, jobId, [kind]: value})).finish();
