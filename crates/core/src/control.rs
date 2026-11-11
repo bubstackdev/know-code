@@ -42,12 +42,13 @@ pub fn request_installer(
     mut request: ControlRequest,
     lifecycle_version: u32,
 ) -> Result<ControlResponse> {
-    if !matches!(lifecycle_version, 1 | 2 | protocol::INDEX_LIFECYCLE_VERSION)
-        || !matches!(
-            request.operation.as_str(),
-            "status" | "maintenance" | "resume" | "shutdown"
-        )
-    {
+    if !matches!(
+        lifecycle_version,
+        1 | 2 | 3 | protocol::INDEX_LIFECYCLE_VERSION
+    ) || !matches!(
+        request.operation.as_str(),
+        "status" | "maintenance" | "resume" | "shutdown"
+    ) {
         return Err(Error::UpdateRequired(
             "installer control supports only known lifecycle status/quiescence operations".into(),
         ));
@@ -214,6 +215,7 @@ pub struct WorkspaceRequest {
     pub configuration: Option<String>,
     pub wait_ms: Option<u32>,
     pub personal_settings: Option<crate::settings::PersonalSettings>,
+    pub grant: Option<bool>,
 }
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -225,6 +227,7 @@ pub enum WorkspaceOperation {
     Wait,
     Settings,
     Configure,
+    Trust,
 }
 #[derive(Debug, serde::Serialize)]
 pub struct WorkspaceResult {
@@ -245,6 +248,11 @@ fn absolute(path: PathBuf) -> Result<PathBuf> {
     })
 }
 pub fn workspace_operation(request: WorkspaceRequest) -> Result<WorkspaceResult> {
+    if request.grant.is_some() && !matches!(request.op, WorkspaceOperation::Trust) {
+        return Err(Error::InvalidRequest(
+            "grant is only valid for the explicit trust operation".into(),
+        ));
+    }
     let data = absolute(request.data_directory.map(Ok).unwrap_or_else(data_root)?)?;
     let executable = request
         .coordinator_executable
@@ -326,6 +334,21 @@ pub fn workspace_operation(request: WorkspaceRequest) -> Result<WorkspaceResult>
                     },
                     executable.as_deref(),
                 )?,
+                WorkspaceOperation::Trust => {
+                    let grant = request.grant.ok_or_else(|| {
+                        Error::InvalidRequest("trust requires an explicit grant boolean".into())
+                    })?;
+                    request_one(
+                        &data,
+                        ControlRequest {
+                            operation: "trust".into(),
+                            database,
+                            settings_json: Some(serde_json::to_string(&grant)?),
+                            ..Default::default()
+                        },
+                        executable.as_deref(),
+                    )?
+                }
                 WorkspaceOperation::Settings | WorkspaceOperation::Configure => {
                     let settings_json = match operation {
                         WorkspaceOperation::Configure => Some(serde_json::to_string(

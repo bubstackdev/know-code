@@ -725,9 +725,15 @@ fn legacy_worker_cannot_publish_when_new_policy_is_required() {
         )
         .unwrap();
     }
+    let execution_root = path.parent().unwrap();
+    let trust_data = execution_root.join("personal-trust");
+    know_code_core::settings::set_project_execution(execution_root, &trust_data, true).unwrap();
+    let execution_grant =
+        know_code_core::settings::project_execution_grant(execution_root, &trust_data).unwrap();
     let result = know_code_core::update::index(
         &path,
         vec![know_code_core::update::WorkerCommand {
+            execution_grant,
             program: "/bin/cat".into(),
             // Retain stdin until the parent finishes writing its request.
             args: vec![

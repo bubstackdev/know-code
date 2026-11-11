@@ -15,6 +15,7 @@ pub struct WorkerCommand {
     pub program: String,
     pub args: Vec<String>,
     pub request: AnalyzeRequest,
+    pub execution_grant: crate::settings::ProjectExecutionGrant,
 }
 
 pub fn index(database: &Path, workers: Vec<WorkerCommand>) -> Result<u64> {
@@ -77,6 +78,14 @@ pub(crate) fn index_published(
     publication: Publication<'_>,
 ) -> Result<u64> {
     control.check()?;
+    // No writer, toolchain, dependency setup or process is opened before the
+    // trusted host's separate identity-bound authorization has been checked.
+    for worker in &workers {
+        worker
+            .execution_grant
+            .check_root(Path::new(&worker.request.workspace_root))?;
+    }
+    let execution_grants: Vec<_> = workers.iter().map(|w| w.execution_grant.clone()).collect();
     let mut writer = match publication {
         Publication::Replacement(candidate) => Writer::open_destination(
             database,
@@ -283,6 +292,9 @@ pub(crate) fn index_published(
         }
     }
     control.check()?;
+    for grant in execution_grants {
+        grant.check()?;
+    }
     before_publish()?;
     match publication {
         Publication::Replacement(_) => writer.publish_controlled(&control.staging()),

@@ -516,6 +516,13 @@ pub fn refresh_controlled(
     control: &crate::resource::Control,
 ) -> Result<u64> {
     control.check()?;
+    let data = crate::control::root_for_database(database).ok_or_else(|| {
+        Error::InvalidRequest(
+            "workspace analysis requires a central data root for its personal execution grant"
+                .into(),
+        )
+    })?;
+    let execution_grant = crate::settings::project_execution_grant(root, data)?;
     let RefreshOptions {
         configuration,
         installation,
@@ -586,6 +593,7 @@ pub fn refresh_controlled(
     let mut workers = vec![];
     if inferred || !ts.is_empty() {
         workers.push(WorkerCommand {
+            execution_grant: execution_grant.clone(),
             program: "node".into(),
             args: vec![
                 // Completed TypeScript programs otherwise accumulate until V8's
@@ -617,6 +625,7 @@ pub fn refresh_controlled(
     }
     if !cs.is_empty() {
         workers.push(WorkerCommand {
+            execution_grant: execution_grant.clone(),
             program: "dotnet".into(),
             args: vec![
                 installation
@@ -650,6 +659,7 @@ pub fn refresh_controlled(
     }
     if !rust.is_empty() {
         workers.push(WorkerCommand {
+            execution_grant: execution_grant.clone(),
             program: "node".into(),
             args: vec![
                 installation
@@ -669,6 +679,7 @@ pub fn refresh_controlled(
     }
     if swift_inferred || !swift.is_empty() {
         workers.push(WorkerCommand {
+            execution_grant: execution_grant.clone(),
             program: "node".into(),
             args: vec![
                 installation

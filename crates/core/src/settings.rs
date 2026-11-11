@@ -12,6 +12,91 @@ pub const VERSION: u32 = 1;
 pub const PROJECT_FILE: &str = ".know-code.json";
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
+#[derive(Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ProjectTrust {
+    version: u32,
+    workspace_identity: String,
+    allowed: bool,
+}
+impl Default for ProjectTrust {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            workspace_identity: String::new(),
+            allowed: false,
+        }
+    }
+}
+
+/// An explicit host grant for this exact workspace. It is not inferred from
+/// registration, repository configuration, or package-script permissions.
+#[derive(Clone)]
+pub struct ProjectExecutionGrant {
+    root: PathBuf,
+    data: PathBuf,
+    identity: String,
+}
+impl ProjectExecutionGrant {
+    pub fn check(&self) -> Result<()> {
+        if workspace::identity(&self.root)? != self.identity
+            || !project_execution_allowed(&self.root, &self.data)?
+        {
+            return Err(trust_required(&self.root));
+        }
+        Ok(())
+    }
+    pub(crate) fn check_root(&self, root: &Path) -> Result<()> {
+        if fs::canonicalize(root)? != self.root {
+            return Err(Error::InvalidRequest(
+                "execution grant belongs to another workspace".into(),
+            ));
+        }
+        self.check()
+    }
+}
+fn trust_required(root: &Path) -> Error {
+    Error::TrustRequired(format!(
+        "project execution is not trusted for {}; grant personal trust with know-code trust WORKSPACE before analysis (package install scripts remain separately controlled)",
+        root.display()
+    ))
+}
+pub fn project_execution_allowed(root: &Path, data: &Path) -> Result<bool> {
+    let trust: ProjectTrust =
+        read(&workspace::database_path(root, data).with_file_name("trust.json"))?;
+    if trust.version != 1 {
+        return Err(Error::UpdateRequired(
+            "unsupported personal project-trust format; update Know Code".into(),
+        ));
+    }
+    Ok(trust.allowed && trust.workspace_identity == workspace::identity(root)?)
+}
+pub fn project_execution_grant(root: &Path, data: &Path) -> Result<ProjectExecutionGrant> {
+    let root = fs::canonicalize(root)?;
+    if !project_execution_allowed(&root, data)? {
+        return Err(trust_required(&root));
+    }
+    Ok(ProjectExecutionGrant {
+        identity: workspace::identity(&root)?,
+        root,
+        data: data.into(),
+    })
+}
+/// Called only by an explicit personal control action after workspace identity
+/// verification. A checked-in file has no representation for this grant.
+pub fn set_project_execution(root: &Path, data: &Path, allowed: bool) -> Result<()> {
+    let root = fs::canonicalize(root)?;
+    let value = ProjectTrust {
+        workspace_identity: workspace::identity(&root)?,
+        allowed,
+        ..Default::default()
+    };
+    write_private(&root, data, "trust.json", &value)
+}
+pub fn revoke_project_execution(root: &Path, data: &Path) -> Result<()> {
+    write_private(root, data, "trust.json", &ProjectTrust::default())
+}
+
 /// Missing inherits; null explicitly selects repository/compiler defaults.
 #[derive(Clone, Debug, Default)]
 pub enum Selection {
@@ -168,6 +253,7 @@ fn resolve_personal(
         solution_origin,
         project_file: project_file.to_string_lossy().into_owned(),
         personal_file: personal_file.to_string_lossy().into_owned(),
+        project_execution_allowed: project_execution_allowed(root, data)?,
     })
 }
 
@@ -198,14 +284,17 @@ pub fn revoke_scripts(root: &Path, data: &Path) -> Result<()> {
 }
 
 fn write_personal(root: &Path, data: &Path, value: &PersonalSettings) -> Result<()> {
-    let path = paths(root, data)[1].clone();
+    write_private(root, data, "settings.json", value)
+}
+fn write_private(root: &Path, data: &Path, name: &str, value: &impl Serialize) -> Result<()> {
+    let path = workspace::database_path(root, data).with_file_name(name);
     let parent = path.parent().expect("workspace settings parent");
     fs::create_dir_all(parent)?;
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let pending = parent.join(format!("settings.{}.{nonce}.pending", std::process::id()));
+    let pending = parent.join(format!("{name}.{}.{nonce}.pending", std::process::id()));
     let result = (|| -> Result<()> {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -244,6 +333,56 @@ mod tests {
         let root = path.join("repo");
         fs::create_dir_all(&root).unwrap();
         (root, path.join("data"))
+    }
+    #[test]
+    fn execution_grant_is_separate_revocable_and_bound_to_workspace_identity() {
+        let (root, data) = fixture();
+        assert!(!project_execution_allowed(&root, &data).unwrap());
+        assert!(matches!(
+            project_execution_grant(&root, &data),
+            Err(Error::TrustRequired(_))
+        ));
+        set_project_execution(&root, &data, true).unwrap();
+        let grant = project_execution_grant(&root, &data).unwrap();
+        grant.check_root(&root).unwrap();
+        assert!(!personal(&root, &data).unwrap().allow_install_scripts);
+        let other = root.join("other");
+        fs::create_dir(&other).unwrap();
+        assert!(matches!(
+            grant.check_root(&other),
+            Err(Error::InvalidRequest(_))
+        ));
+        revoke_project_execution(&root, &data).unwrap();
+        assert!(matches!(grant.check(), Err(Error::TrustRequired(_))));
+        set_project_execution(&root, &data, true).unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        assert!(matches!(grant.check(), Err(Error::TrustRequired(_))));
+        assert!(!project_execution_allowed(&root, &data).unwrap());
+    }
+    #[test]
+    fn repository_settings_cannot_grant_execution_and_unrecognized_grants_fail_closed() {
+        let (root, data) = fixture();
+        fs::write(
+            root.join(PROJECT_FILE),
+            r#"{"project_execution_allowed":true}"#,
+        )
+        .unwrap();
+        assert!(resolve(&root, &data, "").is_err());
+        assert!(!project_execution_allowed(&root, &data).unwrap());
+        set_project_execution(&root, &data, true).unwrap();
+        let path = workspace::database_path(&root, &data).with_file_name("trust.json");
+        fs::write(&path, r#"{"version":99,"allowed":true}"#).unwrap();
+        assert!(matches!(
+            project_execution_grant(&root, &data),
+            Err(Error::UpdateRequired(_))
+        ));
+        fs::write(&path, "{").unwrap();
+        assert!(matches!(
+            project_execution_grant(&root, &data),
+            Err(Error::InvalidRequest(_))
+        ));
+        revoke_project_execution(&root, &data).unwrap();
+        assert!(!project_execution_allowed(&root, &data).unwrap());
     }
     #[test]
     fn defaults_precedence_and_persistent_explicit_clearing() {

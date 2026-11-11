@@ -312,6 +312,8 @@ message WorkspaceAnalysisSettings {
   string solution_origin = 4;
   string project_file = 5;
   string personal_file = 6;
+  // Personal identity-bound permission; never granted by checked-in settings.
+  bool project_execution_allowed = 7;
 }
 
 // Personal coordinator-wide ceilings; not workspace compiler settings.

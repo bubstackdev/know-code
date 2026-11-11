@@ -38,6 +38,8 @@ pub enum Error {
     #[error("{0}")]
     ResourceLimited(String),
     #[error("{0}")]
+    TrustRequired(String),
+    #[error("{0}")]
     DiskPressure(String),
     #[error("{0}")]
     Busy(String),
@@ -85,6 +87,7 @@ impl Error {
             Self::CursorLimit => "cursor_limit",
             Self::Cancelled => "cancelled",
             Self::ResourceLimited(_) => "resource_limited",
+            Self::TrustRequired(_) => "trust_required",
             Self::DiskPressure(_) => "disk_pressure",
             Self::Busy(_) => "busy",
             Self::IndexCorrupt { .. } => "index_corrupt",
