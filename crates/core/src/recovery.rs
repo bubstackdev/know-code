@@ -50,6 +50,8 @@ struct Pending {
 #[serde(deny_unknown_fields)]
 struct State {
     version: u32,
+    #[serde(default)]
+    initializing: bool,
     selected: Incarnation,
     high_water: u64,
     selected_generation: Option<u64>,
@@ -336,6 +338,9 @@ impl IndexReadGuard {
     }
     pub fn open_unbudgeted(logical: &Path) -> Result<Self> {
         match load(logical)? {
+            Some(state) if state.initializing => Err(Error::IndexRecovering(
+                "index adoption is not durably initialized".into(),
+            )),
             Some(state) => Self::from_index(logical, &state.selected),
             None => {
                 // Registered managed paths must be adopted before consumers open.
@@ -363,6 +368,11 @@ impl IndexReadGuard {
     }
     pub fn open_incarnation_unbudgeted(logical: &Path, id: &str) -> Result<Self> {
         let state = load(logical)?.ok_or(Error::CursorInvalidated)?;
+        if state.initializing {
+            return Err(Error::IndexRecovering(
+                "index adoption is incomplete".into(),
+            ));
+        }
         let index = std::iter::once(&state.selected)
             .chain(&state.retired)
             .find(|i| i.id == id)
@@ -449,28 +459,67 @@ pub fn sqlite_corruption(error: &rusqlite::Error) -> bool {
 /// Coordinator-only adoption; never moves the legacy SQLite/WAL family.
 pub fn adopt(logical: &Path, trusted_generation: u64) -> Result<()> {
     let _lock = lock(logical)?;
-    if load(logical)?.is_none() {
-        let identity = file_identity(logical)?;
-        let legacy = identity.is_some() || family_bytes(logical)? != 0 || trusted_generation != 0;
-        let index = Incarnation {
-            id: nonce()?,
-            legacy,
-            file_identity: identity,
-        };
-
-        create_incarnation(logical, &index)?;
-        save(
-            logical,
-            &State {
+    let mut state = match load(logical)? {
+        Some(state) => state,
+        None => {
+            let identity = file_identity(logical)?;
+            let legacy =
+                identity.is_some() || family_bytes(logical)? != 0 || trusted_generation != 0;
+            let state = State {
                 version: VERSION,
-                selected: index,
+                initializing: true,
+                selected: Incarnation {
+                    id: nonce()?,
+                    legacy,
+                    file_identity: identity,
+                },
                 high_water: trusted_generation,
                 selected_generation: None,
                 pending: None,
                 retired: vec![],
                 failed: None,
-            },
-        )?;
+            };
+            // Reference the nonce before creating anything. Restart can finish
+            // this exact owned setup; it must never allocate another orphan.
+            save(logical, &state)?;
+            state
+        }
+    };
+    if state.initializing {
+        let base = parent(logical)?.join("indexes");
+        directory(&base, true)?;
+        let dir = inc_dir(logical, &state.selected.id)?;
+        directory(&dir, true)?;
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_name() != "health" && entry.file_name() != "readers.lock" {
+                return Err(invalid("foreign file in initializing index directory"));
+            }
+            regular(&entry.path())?;
+        }
+        let mut health = open_file(&dir.join("health"), true)?;
+        let length = health.metadata()?.len();
+        if length > PAGE as u64 {
+            return Err(invalid("invalid initializing health page size"));
+        }
+        let mut current = Vec::new();
+        health.read_to_end(&mut current)?;
+        let mut expected = [0u8; PAGE];
+        expected[..8].copy_from_slice(MAGIC);
+        if length < PAGE as u64 {
+            if current != expected[..current.len()] {
+                return Err(invalid("invalid partial index health page"));
+            }
+            health.write_all(&expected[current.len()..])?;
+        } else if &current[..8] != MAGIC {
+            return Err(invalid("invalid initializing health page"));
+        }
+        health.sync_all()?;
+        open_file(&dir.join("readers.lock"), true)?.sync_all()?;
+        File::open(&dir)?.sync_all()?;
+        File::open(&base)?.sync_all()?;
+        state.initializing = false;
+        save(logical, &state)?;
     }
     Ok(())
 }
@@ -996,6 +1045,50 @@ mod tests {
         cleanup(&logical, 6).unwrap();
         assert!(!old.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interrupted_initial_adoption_reuses_its_durable_nonce_and_blocks_reads() {
+        for partial_health in [false, true] {
+            let (root, logical) = fixture();
+            let state = State {
+                version: VERSION,
+                initializing: true,
+                selected: Incarnation {
+                    id: nonce().unwrap(),
+                    legacy: false,
+                    file_identity: None,
+                },
+                high_water: 0,
+                selected_generation: None,
+                pending: None,
+                retired: vec![],
+                failed: None,
+            };
+            save(&logical, &state).unwrap();
+            if partial_health {
+                let base = parent(&logical).unwrap().join("indexes");
+                directory(&base, true).unwrap();
+                let dir = inc_dir(&logical, &state.selected.id).unwrap();
+                directory(&dir, true).unwrap();
+                fs::write(dir.join("health"), &MAGIC[..4]).unwrap();
+            }
+            assert!(matches!(
+                IndexReadGuard::open_unbudgeted(&logical),
+                Err(Error::IndexRecovering(_))
+            ));
+            adopt(&logical, 0).unwrap();
+            let guard = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+            assert_eq!(guard.incarnation(), state.selected.id);
+            assert_eq!(
+                fs::read_dir(parent(&logical).unwrap().join("indexes"))
+                    .unwrap()
+                    .count(),
+                1
+            );
+            assert!(!load(&logical).unwrap().unwrap().initializing);
+            drop(guard);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
     #[test]
     fn removed_and_zeroed_owned_selected_files_are_fenced_without_reusing_identity() {
