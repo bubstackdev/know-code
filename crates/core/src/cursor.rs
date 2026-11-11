@@ -371,18 +371,26 @@ impl CursorRegistry {
         protected: Option<[u8; 16]>,
         execution: Execution,
     ) -> Result<bool> {
-        let oldest = self
+        let mut candidates: Vec<_> = self
             .entries
             .iter()
             .filter(|(id, entry)| entry.reads.is_empty() && Some(**id) != protected)
-            .min_by_key(|(id, entry)| (!entry.retiring, entry.touched, entry.created, **id))
-            .map(|(id, _)| *id);
-        if let Some(id) = oldest {
-            self.retire(id, execution)?;
-            Ok(true)
-        } else {
-            Ok(false)
+            .map(|(id, entry)| (!entry.retiring, entry.touched, entry.created, *id))
+            .collect();
+        candidates.sort_unstable();
+        for (_, _, _, id) in candidates {
+            execution.check()?;
+            match self.retire(id, execution.clone()) {
+                Ok(()) => return Ok(true),
+                Err(error) => {
+                    // Failed cleanup keeps both the entry and its charge. Do
+                    // not let one blocked file hide other reclaimable cursors.
+                    execution.check()?;
+                    self.retirement_warning = Some(error.to_string());
+                }
+            }
         }
+        Ok(false)
     }
 
     /// Reserve before retaining result files. Reservations only grow; they
@@ -564,24 +572,24 @@ impl CursorRegistry {
         }
         self.retirement_warning = None;
         for id in expired {
-            let bad = self
-                .entries
-                .get(&id)
-                .is_some_and(|entry| entry.pin.health.check().is_err());
             if let Err(error) = self.retire(id, execution.clone()) {
-                if bad {
-                    self.retirement_warning = Some(error.to_string());
-                } else {
-                    return Err(error);
-                }
+                execution.check()?;
+                self.retirement_warning = Some(error.to_string());
             }
         }
         Ok(())
     }
     fn retire(&mut self, id: [u8; 16], execution: Execution) -> Result<()> {
-        self.entries.get_mut(&id).expect("selected cursor").retiring = true;
+        let Some(entry) = self.entries.get_mut(&id) else {
+            // A preceding sweep can already have removed a newly BAD pin.
+            return Ok(());
+        };
+        entry.retiring = true;
         execution.check()?;
-        let entry = self.entries.get(&id).expect("selected cursor");
+        let entry = self
+            .entries
+            .get(&id)
+            .expect("retirement holds registry ownership");
         if let Some(files) = &mut self.files {
             files.remove(&hexadecimal(&entry.pin.id))?;
         }
@@ -770,6 +778,7 @@ impl GenerationRetention {
           CREATE TABLE IF NOT EXISTS cursor_generation_pins(id BLOB PRIMARY KEY CHECK(length(id)=16),generation INTEGER NOT NULL REFERENCES generations(id) ON DELETE CASCADE,owner BLOB NOT NULL CHECK(length(owner)=16));
           CREATE INDEX IF NOT EXISTS cursor_pin_generation ON cursor_generation_pins(generation);
           CREATE TABLE IF NOT EXISTS cursor_unit_costs_v1(owner_generation INTEGER,compilation_id TEXT,bytes INTEGER NOT NULL CHECK(bytes>=0),store_format INTEGER NOT NULL,PRIMARY KEY(owner_generation,compilation_id),FOREIGN KEY(owner_generation,compilation_id) REFERENCES compilations(generation,id) ON DELETE CASCADE);")?;
+            crate::store::ensure_cleanup_indexes(&tx)?;
             let prior: Option<Vec<u8>> = if active {
                 tx.query_row(
                     "SELECT owner FROM cursor_retention_state WHERE singleton=1",

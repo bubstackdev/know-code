@@ -87,6 +87,22 @@ pub struct CursorService {
     changed: Condvar,
     stopped: AtomicBool,
 }
+// This owns only publication bookkeeping. Poison is recovered solely to drain
+// ownership during an unwind; ordinary operations still reject poisoned state.
+struct Publication<'a>(&'a CursorService);
+impl Drop for Publication<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.pending_publications -= 1;
+        let pending = state.pending_publications > 0;
+        state.registry.set_publication_waiting(pending);
+        self.0.changed.notify_all();
+    }
+}
 impl CursorService {
     pub fn new(root: &Path, databases: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
         let owner = nonce()?;
@@ -160,6 +176,23 @@ impl CursorService {
                     .into(),
             )
         })
+    }
+    fn lock_controlled(&self, execution: &Execution) -> Result<MutexGuard<'_, State>> {
+        loop {
+            execution.check()?;
+            self.running()?;
+            match self.state.try_lock() {
+                Ok(state) => return Ok(state),
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err(Error::Coordinator(
+                        "cursor state is unavailable after an internal failure; restart the coordinator".into(),
+                    ));
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    std::thread::sleep(execution.remaining()?.min(Duration::from_millis(1)));
+                }
+            }
+        }
     }
     fn running(&self) -> Result<()> {
         if self.stopped.load(Ordering::Acquire) {
@@ -266,7 +299,7 @@ impl CursorService {
         request: CursorRequest,
         execution: Execution,
     ) -> Result<CursorReply> {
-        let mut state = self.lock()?;
+        let mut state = self.lock_controlled(&execution)?;
         execution.check()?;
         self.running()?;
         if request.action == "settings" {
@@ -583,14 +616,19 @@ impl CursorService {
     /// Analysis has completed before entry. Keep admission serialized through
     /// actual commit, but release the mutex while bounded active reads finish.
     pub fn publish(&self, database: &Path, mut writer: Writer, control: &Control) -> Result<u64> {
+        let execution =
+            Execution::new(Default::default(), Some(crate::execution::MAX_DEADLINE_MS))?;
+        let ownership = self.own_publication(&execution)?;
         let generation = writer.generation;
-        let result = self.publish_with(database, Some(generation), control, || {
-            writer.commit_controlled(control)
+        let publication = control.publication();
+        let result = self.publish_inner(database, Some(generation), control, execution, || {
+            writer.commit_controlled(&publication)
         });
         writer.maintain_published();
         // Failed staging cleanup and sqlite close also happen after the global
         // cursor fence has been released, not inside the publication callback.
         drop(writer);
+        drop(ownership);
         result
     }
     /// Serialize a selector cutover with cursor admission and shared retention
@@ -615,14 +653,34 @@ impl CursorService {
     ) -> Result<T> {
         let execution =
             Execution::new(Default::default(), Some(crate::execution::MAX_DEADLINE_MS))?;
-        {
-            let mut state = self.lock()?;
+        let ownership = self.own_publication(&execution)?;
+        let result = self.publish_inner(database, generation, control, execution, publish);
+        drop(ownership);
+        result
+    }
+    fn own_publication(&self, execution: &Execution) -> Result<Publication<'_>> {
+        let mut state = self.lock_controlled(execution)?;
+        state.pending_publications += 1;
+        Ok(Publication(self))
+    }
+    fn publish_inner<T>(
+        &self,
+        database: &Path,
+        generation: Option<u64>,
+        control: &Control,
+        execution: Execution,
+        publish: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        // Poll background throttling before taking the global cursor fence.
+        // Ownership is already registered so shutdown drains the writer, but
+        // paused analysis neither blocks page reads nor parks under the fence.
+        while !control.publication_ready()? {
             self.running()?;
-            state.pending_publications += 1;
-            state.registry.set_publication_waiting(true);
+            std::thread::sleep(execution.remaining()?.min(Duration::from_millis(1)));
         }
-        let result = (|| {
-            let mut state = self.lock()?;
+        (|| {
+            let mut state = self.lock_controlled(&execution)?;
+            state.registry.set_publication_waiting(true);
             if generation.is_some() {
                 Self::initialize(&mut state, database, execution.clone())?;
             }
@@ -632,7 +690,7 @@ impl CursorService {
                 if state.disabled.contains(database) {
                     return Err(Error::CursorInvalidated);
                 }
-                control.check()?;
+                control.check_stopped()?;
                 execution.check()?;
                 if state.registry.prepare_selected(
                     database,
@@ -654,14 +712,7 @@ impl CursorService {
                     .map_err(|_| Error::Coordinator("cursor publication wait failed".into()))?;
                 state = next;
             }
-        })();
-        if let Ok(mut state) = self.lock() {
-            state.pending_publications -= 1;
-            let pending = state.pending_publications > 0;
-            state.registry.set_publication_waiting(pending);
-        }
-        self.changed.notify_all();
-        result
+        })()
     }
 }
 
@@ -1121,6 +1172,110 @@ mod tests {
         assert!(!Path::new(&stored.result_path).exists());
     }
     #[test]
+    fn removed_initial_borrow_cleanup_is_idempotent_after_bad_sweep() {
+        let (root, db, prior) = fixture();
+        drop(prior);
+        crate::recovery::adopt(&db, 1).unwrap();
+        let healthy = crate::cursor::lifecycle_tests::database()
+            .canonicalize()
+            .unwrap();
+        let service = CursorService::new(&root, [db.clone(), healthy.clone()]).unwrap();
+        service.sweep().unwrap();
+        service.sweep().unwrap();
+        let execution = Execution::new(Default::default(), None).unwrap();
+        {
+            let mut state = service.lock().unwrap();
+            let handle = state
+                .registry
+                .admit_controlled(&db, execution.clone())
+                .unwrap();
+            let guard = state.registry.entries[&handle.id].pin.health.clone();
+            std::fs::write(&db, b"owned corrupt header between admit and borrow").unwrap();
+            let connection = rusqlite::Connection::open(&db).unwrap();
+            let error = connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
+                .unwrap_err();
+            assert!(matches!(
+                guard.map_sqlite(error),
+                Error::IndexCorrupt { .. }
+            ));
+            assert!(matches!(
+                state
+                    .registry
+                    .borrow_controlled(&db, handle, execution.clone()),
+                Err(Error::CursorInvalidated)
+            ));
+            assert!(!state.registry.entries.contains_key(&handle.id));
+            // request_inner uses exactly this cleanup when first borrow fails.
+            state.registry.retire(handle.id, execution).unwrap();
+        }
+        let result = ready(&service, &healthy);
+        let borrowed = call(&service, &healthy, action("borrow", Some(&result))).unwrap();
+        call(&service, &healthy, action("finish", Some(&borrowed))).unwrap();
+    }
+    #[test]
+    fn healthy_cleanup_failure_keeps_debt_and_allows_sibling_read_and_publish() {
+        let (root, db, prior) = fixture();
+        drop(prior);
+        let healthy = crate::cursor::lifecycle_tests::database()
+            .canonicalize()
+            .unwrap();
+        let service = CursorService::new(&root, [db.clone(), healthy.clone()]).unwrap();
+        service.sweep().unwrap();
+        service.sweep().unwrap();
+        let blocked = ready(&service, &db);
+        let sibling = ready(&service, &healthy);
+        let reclaimable = ready(&service, &healthy);
+        let blocked_id = CursorHandle::parse_prefix(&blocked.cursor).unwrap().id;
+        let reclaimable_id = CursorHandle::parse_prefix(&reclaimable.cursor).unwrap().id;
+        std::fs::remove_file(&blocked.result_path).unwrap();
+        std::fs::create_dir(&blocked.result_path).unwrap();
+        {
+            let mut state = service.lock().unwrap();
+            state
+                .registry
+                .entries
+                .get_mut(&blocked_id)
+                .unwrap()
+                .retiring = true;
+            state
+                .registry
+                .entries
+                .get_mut(&reclaimable_id)
+                .unwrap()
+                .retiring = true;
+        }
+        let read = call(&service, &healthy, action("borrow", Some(&sibling))).unwrap();
+        assert_eq!(std::fs::read(&read.result_path).unwrap(), b"saved");
+        call(&service, &healthy, action("finish", Some(&read))).unwrap();
+        {
+            let state = service.lock().unwrap();
+            assert_eq!(state.registry.entries[&blocked_id].result_bytes_reserved, 5);
+            assert!(state.registry.retirement_warning.is_some());
+            assert!(!state.registry.entries.contains_key(&reclaimable_id));
+        }
+        let writer = crate::cursor::lifecycle_tests::staged(&healthy, "saved sibling replacement");
+        let generation = writer.generation;
+        assert_eq!(
+            service
+                .publish(&healthy, writer, &Control::default())
+                .unwrap(),
+            generation
+        );
+        let read = call(&service, &healthy, action("borrow", Some(&sibling))).unwrap();
+        call(&service, &healthy, action("finish", Some(&read))).unwrap();
+        std::fs::remove_dir(&blocked.result_path).unwrap();
+        service.sweep().unwrap();
+        assert!(
+            !service
+                .lock()
+                .unwrap()
+                .registry
+                .entries
+                .contains_key(&blocked_id)
+        );
+    }
+    #[test]
     fn bad_pin_retirement_preserves_other_workspaces_and_failed_file_charges() {
         for fail_cleanup in [false, true] {
             let (root, db, prior) = fixture();
@@ -1431,6 +1586,104 @@ mod tests {
             );
             std::thread::yield_now();
         }
+    }
+    #[test]
+    fn cursor_mutex_wait_observes_deadline_without_acquiring_the_fence() {
+        let (_, db, service) = fixture();
+        let stored = ready(&service, &db);
+        let held = service.lock().unwrap();
+        std::thread::scope(|scope| {
+            let (send, receive) = std::sync::mpsc::channel();
+            let service = &service;
+            let db = &db;
+            let stored = &stored;
+            scope.spawn(move || {
+                let start = QueryStart::default();
+                let execution = Execution::new(start, Some(20)).unwrap();
+                let request = CursorRequest {
+                    remaining_ms: 20,
+                    deadline_at_ms: execution.deadline_ms().unwrap(),
+                    ..action("borrow", Some(stored))
+                };
+                send.send(service.request(db, request, start)).unwrap();
+            });
+            assert!(matches!(
+                receive.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Err(Error::DeadlineExceeded)
+            ));
+            drop(held);
+        });
+        let read = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+        call(&service, &db, action("finish", Some(&read))).unwrap();
+    }
+    #[test]
+    fn cpu_paused_publication_leaves_pages_usable_and_shutdown_drains_writer() {
+        let (_, db, service) = fixture();
+        let stored = ready(&service, &db);
+        let writer = crate::cursor::lifecycle_tests::staged(&db, "paused unpublished source");
+        let control = Control::test_managed();
+        control.test_pause(true);
+        std::thread::scope(|scope| {
+            let publisher = scope.spawn(|| service.publish(&db, writer, &control));
+            wait_for_publication(&service);
+            assert!(!service.lock().unwrap().registry.publication_waiting);
+            let read = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+            call(&service, &db, action("finish", Some(&read))).unwrap();
+            service.stop();
+            assert!(matches!(
+                publisher.join().unwrap(),
+                Err(Error::CursorInvalidated)
+            ));
+        });
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT count(*) FROM staging_generations", [], |row| row
+                    .get::<_, u64>(0))
+                .unwrap(),
+            0
+        );
+    }
+    #[test]
+    fn publication_control_does_not_cpu_park_inside_cursor_fence() {
+        let (_, db, service) = fixture();
+        let control = Control::test_managed();
+        let critical = control.publication();
+        let outcome = service
+            .publish_with(&db, None, &control, || {
+                control.test_pause(true);
+                critical.check()?;
+                Ok(7)
+            })
+            .unwrap();
+        assert_eq!(outcome, 7);
+        // The clone must still stop for cancellation, even while paused.
+        assert!(control.cancel());
+        assert!(matches!(critical.check(), Err(Error::Cancelled)));
+        assert!(service.lock().is_ok());
+    }
+    #[test]
+    fn publication_unwind_drains_ownership_without_reusing_poisoned_state() {
+        let (_, db, service) = fixture();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            service.publish_with::<()>(&db, None, &Control::default(), || {
+                panic!("owned publication unwind")
+            })
+        }));
+        assert!(result.is_err());
+        assert!(matches!(service.lock(), Err(Error::Coordinator(_))));
+        assert_eq!(
+            service
+                .state
+                .lock()
+                .err()
+                .unwrap()
+                .into_inner()
+                .pending_publications,
+            0
+        );
+        // Fatal coordinator teardown must not wait on a leaked counter.
+        service.stop();
     }
     #[test]
     fn publication_waits_without_writer_transaction_then_evicts_idle_result() {

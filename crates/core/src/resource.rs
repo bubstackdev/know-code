@@ -111,12 +111,55 @@ struct Inner {
 }
 /// Clones cancel the same analysis. The default control is explicitly unmanaged.
 #[derive(Clone, Default)]
-pub struct Control(Option<Arc<Inner>>, bool);
+pub struct Control(Option<Arc<Inner>>, bool, bool);
 impl Control {
+    #[cfg(test)]
+    pub(crate) fn test_managed() -> Self {
+        Self(
+            Some(Arc::new(Inner {
+                disk: Mutex::new(None),
+                state: Mutex::new(State::default()),
+                changed: Condvar::new(),
+            })),
+            false,
+            false,
+        )
+    }
+    #[cfg(test)]
+    pub(crate) fn test_pause(&self, paused: bool) {
+        let inner = self.0.as_ref().unwrap();
+        inner.state.lock().unwrap().paused = paused;
+        inner.changed.notify_all();
+    }
     /// Candidate SQLite publication is private; only selector cutover commits
     /// the shared job and closes its cancellation/resource boundary.
     pub(crate) fn staging(&self) -> Self {
-        Self(self.0.clone(), true)
+        Self(self.0.clone(), true, self.2)
+    }
+    /// Only for the short publication critical section, after `check` has
+    /// honored CPU throttling outside shared locks. Cancellation and resource
+    /// failures still apply; a completed commit keeps its linearization point.
+    pub fn publication(&self) -> Self {
+        Self(self.0.clone(), self.1, true)
+    }
+    pub(crate) fn check_stopped(&self) -> Result<()> {
+        let Some(inner) = &self.0 else {
+            return Ok(());
+        };
+        match &inner.state.lock().unwrap().reason {
+            Some(reason) => Err(reason.error()),
+            None => Ok(()),
+        }
+    }
+    pub(crate) fn publication_ready(&self) -> Result<bool> {
+        let Some(inner) = &self.0 else {
+            return Ok(true);
+        };
+        let state = inner.state.lock().unwrap();
+        match &state.reason {
+            Some(reason) => Err(reason.error()),
+            None => Ok(!state.paused || state.finished),
+        }
     }
     pub fn guard_disk(&self, check: impl Fn(&Limits) -> Result<()> + Send + Sync + 'static) {
         if let Some(inner) = &self.0 {
@@ -161,7 +204,7 @@ impl Control {
             return Ok(());
         };
         let mut state = inner.state.lock().unwrap();
-        while state.paused && state.reason.is_none() && !state.finished {
+        while !self.2 && state.paused && state.reason.is_none() && !state.finished {
             state = inner.changed.wait(state).unwrap();
         }
         match &state.reason {
@@ -348,6 +391,7 @@ impl Governor {
                 changed: Condvar::new(),
             })),
             false,
+            false,
         );
         let limits = Arc::clone(&self.limits);
         let monitor = control.clone();
@@ -395,7 +439,13 @@ impl Drop for Session {
     fn drop(&mut self) {
         let inner = self.control.0.as_ref().unwrap();
         {
-            let mut state = inner.state.lock().unwrap();
+            // An analysis unwind is terminal for the coordinator. Teardown
+            // must still resume/reap children rather than double-panic on a
+            // publication mutex poisoned by the original unwind.
+            let mut state = inner
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.finished = true;
             for &pid in &state.groups {
                 signal(pid, libc::SIGCONT);
@@ -672,6 +722,42 @@ mod tests {
         }
         .validate()
         .unwrap();
+    }
+    #[test]
+    fn publication_control_skips_only_cpu_pause_and_preserves_commit_boundary() {
+        let control = Control::test_managed();
+        control.test_pause(true);
+        let publication = control.publication();
+        publication.check().unwrap();
+        control.stop(Stop::Limited("owned memory limit".into()));
+        assert!(matches!(
+            publication.check(),
+            Err(Error::ResourceLimited(_))
+        ));
+        assert!(matches!(
+            publication.publish(|| Ok(())),
+            Err(Error::ResourceLimited(_))
+        ));
+        let control = Control::test_managed();
+        control.test_pause(true);
+        control.publication().publish(|| Ok(())).unwrap();
+        assert!(control.committed());
+        assert!(!control.cancel(), "commit still wins later cancellation");
+    }
+    #[test]
+    fn publication_unwind_does_not_double_panic_during_session_teardown() {
+        let governor = Governor::new(Limits::default()).unwrap();
+        let session = governor.start().unwrap();
+        let control = session.control();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _session = session;
+            control
+                .publication()
+                .publish::<()>(|| panic!("owned commit unwind"))
+                .unwrap();
+        }));
+        assert!(result.is_err());
+        assert!(!governor.active.load(Ordering::Acquire));
     }
     #[test]
     fn cancelled_analysis_cannot_publish_and_committed_analysis_cannot_be_cancelled() {
