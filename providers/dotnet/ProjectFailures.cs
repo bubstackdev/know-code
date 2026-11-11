@@ -44,6 +44,8 @@ static class ProjectFailures
             TargetFamily = request.TargetEquivalencePolicy == 0 ? "" : identity,
             OptionsJson = JsonSerializer.Serialize(new { setup_failure = error.Code, context = "unavailable", target_known = target.Length != 0 }) } });
         var report = SetupReport(error, id);report.Diagnostics[0].Path = Bounded(relative);
+        // The helper-private discriminator is not a public graph capability.
+        report.Capabilities.Remove("project_setup");
         foreach (var capability in new[] { "calls", "dependencies", "dispatch", "project_links", "target_equivalence" }) report.Capabilities.Add(capability, "unavailable");
         Wire.Send(new Envelope { Report = report });
     }
