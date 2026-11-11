@@ -11,6 +11,7 @@ HOST=ROOT/f'target/{PROFILE}/know-code';ADDON=ROOT/f'.artifacts/build/{PROFILE}/
 SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll';FFI=ROOT/f'target/{PROFILE}/libknow_code_ffi.dylib'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),UV_THREADPOOL_SIZE='1',DOTNET_CLI_TELEMETRY_OPTOUT='1',
          DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',UseSharedCompilation='false')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 SOURCE=WORKSPACE/'value.ts';OLD='// π😀 owned fixture\nexport function cancellationTarget() { return "before"; }\n'
 SOURCE.write_text(OLD);CHECKS=[];passed=False;database=None
 digest=lambda path:hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -32,7 +33,7 @@ def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
 def value(*args):return json.loads(cli(*args).stdout)
 def node(mode,db,request=None,delay=50):
  result=json.loads(run(['node',ROOT/'tests/query_cancellation.mjs',ADDON,db,mode,json.dumps(request),delay]).stdout)
- assert result['passed'] and result['contract']==6,result
+ assert result['passed'] and result['contract']==7,result
  return result
 def query(request):return value('query',database,json.dumps(request))
 def ready(minimum=1):
@@ -135,7 +136,7 @@ try:
  identity={'source_revision':record['source_revision'],'build_id':record['build_id'],'record_sha256':digest(record_path),
            'artifacts_sha256':hashes,'test_source_sha256':{p:digest(ROOT/p) for p in ['tests/query_cancellation.py','tests/query_cancellation.mjs']}}
  ffi=ctypes.CDLL(str(FFI));ffi.kc_query_contract_version.argtypes=[];ffi.kc_query_contract_version.restype=ctypes.c_uint32
- assert ffi.kc_query_contract_version()==6,'matching FFI cancellation contract required'
+ assert ffi.kc_query_contract_version()==7,'matching FFI cancellation contract required'
  node('preabort',RUN/'preabort.db');CHECKS.append('Node_preabort_before_serialization_and_index_open')
  node('queue',RUN/'node-queue.db');CHECKS.append('Node_actual_libuv_queue_cancel_waits_for_native_exit_and_recovers')
  queued=json.loads(run(['dotnet',SMOKE,'--cancel-queue',RUN/'dotnet-queue.db']).stdout)

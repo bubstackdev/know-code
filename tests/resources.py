@@ -7,6 +7,7 @@ DATA=RUN/'d';RUNTIME=RUN/'runtime';A=RUN/'a';B=RUN/'b'
 for p in [A,B,RUNTIME/'providers/typescript',RUNTIME/'proto']:p.mkdir(parents=True,exist_ok=True)
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');CONFIG=PROFILE.capitalize();HOST=ROOT/f'target/{PROFILE}/know-code'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),KNOW_CODE_RUNTIME_DIR=str(RUNTIME),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 checks=[];measurements={}
 (RUNTIME/'Cargo.toml').write_text('# Owned test runtime override\n')
 shutil.copy2(ROOT/'proto/analysis.proto',RUNTIME/'proto/analysis.proto')

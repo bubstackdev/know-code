@@ -12,6 +12,7 @@ PACKAGE = RUN / 'package'
 DEPENDENCY = RUN / 'dependency'
 PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), KNOW_CODE_BUILD_PROFILE=PROFILE)
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 # Apple's Python launcher can inject its CLT SDK. This suite exercises the
 # unpinned default; explicit SDK selection is covered by swift_toolchain.mjs.
 ENV.pop('SDKROOT', None)

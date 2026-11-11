@@ -151,11 +151,7 @@ struct Failure {
 fn selected_readiness(database: &Path) -> know_code_core::Result<(u64, bool)> {
     let guard = recovery::IndexReadGuard::open_unbudgeted(database)?;
     let result = (|| {
-        let view = ReadView::open(guard.physical_path())?;
-        let result = (
-            view.generation,
-            (view.needs_test_classification()? || view.needs_target_equivalence()?),
-        );
+        let result = ReadView::readiness(guard.physical_path())?;
         guard.check()?;
         Ok(result)
     })();
@@ -2560,7 +2556,7 @@ mod live_lifetime_tests {
             .unwrap();
         let generation = writer.publish().unwrap();
         assert!(
-            ReadView::open(&database)
+            ReadView::open_in_scope(&database, &know_code_core::admission::AdmissionScope::at(database.parent().unwrap().join("query-admission")).unwrap())
                 .unwrap()
                 .needs_test_classification()
                 .unwrap()
@@ -2587,7 +2583,7 @@ mod live_lifetime_tests {
         assert!(
             matches!(error.downcast_ref::<know_code_core::Error>(),Some(know_code_core::Error::Remote{code,..}) if code=="cancelled")
         );
-        assert_eq!(ReadView::open(&database).unwrap().generation, generation);
+        assert_eq!(ReadView::open_in_scope(&database, &know_code_core::admission::AdmissionScope::at(database.parent().unwrap().join("query-admission")).unwrap()).unwrap().generation, generation);
     }
     #[test]
     fn cancellation_capture_detects_undelivered_save_with_preserved_mtime() {

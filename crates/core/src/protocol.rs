@@ -7,7 +7,7 @@ use std::path::Path;
 include!(concat!(env!("OUT_DIR"), "/knowcode.rs"));
 
 pub const VERSION: u32 = 7;
-pub const INDEX_LIFECYCLE_VERSION: u32 = 2;
+pub const INDEX_LIFECYCLE_VERSION: u32 = 3;
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 pub const ANALYSIS_POLICY_VERSION: u32 = 1;
 

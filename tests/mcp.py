@@ -5,6 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 RUN=ROOT/'.artifacts/mc'/format(time.time_ns(),'x');WORKSPACE=RUN/'workspace';DATA=RUN/'d';WORKSPACE.mkdir(parents=True)
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');HOST=ROOT/f'target/{PROFILE}/know-code';CONFIG='Debug' if PROFILE=='debug' else 'Release'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 SOURCE=WORKSPACE/'value.ts';SOURCE.write_text('// '+('a'*20000)+'\nexport function target(value: string) { return value; }\nexport function caller() { return target("hello😀"); }\n')
 (WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>')
 (WORKSPACE/'Greeter.cs').write_text('public static class Greeter { public static string Greet() => "hello"; }\n')

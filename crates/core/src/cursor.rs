@@ -667,6 +667,16 @@ impl GenerationPin {
     pub fn open_view(&self) -> Result<ReadView> {
         ReadView::open_pinned(self)
     }
+    pub fn open_view_in_scope(
+        &self,
+        scope: &crate::admission::AdmissionScope,
+    ) -> Result<ReadView> {
+        ReadView::open_pinned_in_scope(self, scope)
+    }
+    #[cfg(test)]
+    fn open_fixture_view(&self) -> Result<ReadView> {
+        self.open_view_in_scope(&crate::query::fixture_scope(&self.database)?)
+    }
 }
 
 pub(crate) fn storage_active(connection: &Connection) -> Result<bool> {
@@ -938,7 +948,7 @@ mod lifecycle_tests {
         let request: QueryRequest =
             serde_json::from_str(r#"{"op":"source","artifact_id":"source","freshness_wait_ms":0}"#)
                 .unwrap();
-        pin.open_view()
+        pin.open_fixture_view()
             .unwrap()
             .query(request)
             .unwrap()
@@ -1052,7 +1062,7 @@ mod lifecycle_tests {
         );
         legacy_publication(&connection, 2, "needle new saved");
         assert_eq!(source(&pin), "needle legacy π😀");
-        let view = pin.open_view().unwrap();
+        let view = pin.open_fixture_view().unwrap();
         let context = view
             .query(serde_json::from_str(r#"{"op":"symbol_context","symbol_id":"symbol"}"#).unwrap())
             .unwrap();
@@ -1067,7 +1077,7 @@ mod lifecycle_tests {
         drop(view);
         assert_eq!(retention.retained_usage(None, None).unwrap().units, 1);
         retention.release(&pin).unwrap();
-        assert!(matches!(pin.open_view(), Err(Error::CursorInvalidated)));
+        assert!(matches!(pin.open_fixture_view(), Err(Error::CursorInvalidated)));
         assert_eq!(
             connection
                 .query_row("SELECT count(*) FROM contents", [], |r| r.get::<_, i32>(0))
@@ -1116,7 +1126,7 @@ mod lifecycle_tests {
         cursors.finish_at(&read, at(4)).unwrap();
         cursors.admit_at(&a, at(5)).unwrap();
         assert!(matches!(
-            read.pin().open_view(),
+            read.pin().open_fixture_view(),
             Err(Error::CursorInvalidated)
         ));
         assert_eq!(source(latest_read.pin()), "original source");
@@ -1137,7 +1147,7 @@ mod lifecycle_tests {
         cursors.sweep_at(Duration::from_millis(239_499)).unwrap();
         assert_eq!(source(&saved), "original source");
         cursors.sweep_at(Duration::from_millis(239_500)).unwrap();
-        assert!(matches!(saved.open_view(), Err(Error::CursorInvalidated)));
+        assert!(matches!(saved.open_fixture_view(), Err(Error::CursorInvalidated)));
         let active = cursors.admit_at(&path, at(300)).unwrap();
         for time in [400, 500, 600, 700, 800, 899] {
             let read = cursors.borrow_at(&path, active, at(1), at(time)).unwrap();
@@ -1218,7 +1228,7 @@ mod lifecycle_tests {
         assert_eq!(read.until, at(600));
         cursors.sweep_at(at(600)).unwrap();
         assert!(matches!(
-            read.pin().open_view(),
+            read.pin().open_fixture_view(),
             Err(Error::CursorInvalidated)
         ));
     }
@@ -1245,7 +1255,7 @@ mod lifecycle_tests {
         cursors.sweep_at(at(99)).unwrap();
         assert!(cursors.entries.is_empty());
         assert!(matches!(
-            read.pin().open_view(),
+            read.pin().open_fixture_view(),
             Err(Error::CursorInvalidated)
         ));
         cursors.admit_at(&path, at(102)).unwrap();
@@ -1523,14 +1533,14 @@ mod lifecycle_tests {
             cursors.admit(&path),
             Err(Error::ResourceLimited(_))
         ));
-        let old_view = active.pin().open_view().unwrap();
+        let old_view = active.pin().open_fixture_view().unwrap();
         cursors.finish(&active).unwrap();
         assert!(cursors.prepare_publication(&path, generation).unwrap());
         writer.publish().unwrap();
         cursors.set_publication_waiting(false);
         assert_eq!(cursors.retained_bytes().unwrap(), 0);
         assert!(matches!(
-            active.pin().open_view(),
+            active.pin().open_fixture_view(),
             Err(Error::CursorInvalidated)
         ));
         let request: QueryRequest =

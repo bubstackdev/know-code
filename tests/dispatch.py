@@ -12,6 +12,7 @@ WORKSPACE=RUN/'workspace'
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug')
 HOST=ROOT/f'target/{PROFILE}/know-code'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(RUN/'data'),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 def write(path,text):
     file=WORKSPACE/path;file.parent.mkdir(parents=True,exist_ok=True);file.write_text(text)
 projects=[

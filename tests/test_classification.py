@@ -8,6 +8,7 @@ W.mkdir(parents=True);PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug')
 HOST=ROOT/f'target/{PROFILE}/know-code';NODE=ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs'
 SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 (W/'tsconfig.json').write_text(json.dumps({'compilerOptions':{'target':'ES2022','module':'CommonJS','strict':True},'include':['*.ts']}))
 (W/'prod.ts').write_text('export function target() { return 1; }\nexport function helper() { return target(); }\n')
 (W/'suite.test.ts').write_text('import {helper, target} from "./prod";\nexport function testEntry() { return helper() + target(); }\n')

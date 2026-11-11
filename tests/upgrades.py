@@ -12,6 +12,7 @@ PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');CONFIG='Debug' if PROF
 HOST=ROOT/f'target/{PROFILE}/know-code';NODE=ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs'
 SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 for key in ['KNOW_CODE_COORDINATOR','KNOW_CODE_RUNTIME_DIR','NODE_OPTIONS','NODE_PATH']:ENV.pop(key,None)
 A=RUN/'a';B=RUN/'b';C=RUN/'c';F=RUN/'f';DATABASES={};CHECKS=[];SEEDS={};passed=False;failure=None
 TS='// π😀 saved fixture\nexport function upgradeTarget() { return "initial😀"; }\nexport function legacyHelper() { return upgradeTarget(); }\n'
@@ -192,7 +193,7 @@ try:
  hashes={str(path.relative_to(ROOT)):sha(path) for path in artifacts}
  assert all(record['outputs'][path]==digest for path,digest in hashes.items()),'test artifacts differ from producer record'
  BUILD={'build_id':record['build_id'],'source_revision':record['source_revision'],'record_sha256':sha(record_path),'outputs':hashes}
- info=value('runtime-info');assert info['store_format']==8 and info['index_lifecycle_version']==2,info
+ info=value('runtime-info');assert info['store_format']==8 and info['index_lifecycle_version']==3,info
  value('resources','--min-free-disk-mib',0)
  for root in [A,B,C,F]:
   value('watch',root);initial=ready(root);DATABASES[root]=initial['database'];assert initial['generation']<42 and version(root)==8,initial

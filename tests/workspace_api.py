@@ -4,6 +4,7 @@ import atexit,json,os,selectors,signal,socket,subprocess,threading,time
 ROOT=Path(__file__).resolve().parents[1];RUN=ROOT/'.artifacts/wa'/format(time.time_ns(),'x')[-10:];WORKSPACE=RUN/'w';DATA=RUN/'d';WORKSPACE.mkdir(parents=True)
 PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');CONFIG='Debug' if PROFILE=='debug' else 'Release';HOST=ROOT/f'target/{PROFILE}/know-code';ADDON=ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs';SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1');CLIENTS=[];paused=None;checks=[]
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 (WORKSPACE/'value.ts').write_text('export function answer() { return 42; }\n')
 (WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><Target Name="CountRestores" BeforeTargets="Restore"><WriteLinesToFile File="$(MSBuildProjectExtensionsPath)restore-count.txt" Lines="restore" Overwrite="false" /></Target></Project>')
 (WORKSPACE/'Value.cs').write_text('public static class Greeter { public static int Value() => 42; }\n')

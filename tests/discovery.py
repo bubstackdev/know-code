@@ -9,6 +9,7 @@ DATA=Path(os.environ.get('KNOW_CODE_TEST_DATA',ROOT/'.artifacts/pd'/format(time.
 assert not DATA.exists() and len(str(DATA/'c.sock').encode())<104,'choose fresh, durable short data directory'
 assert DATA.is_relative_to((ROOT/Path(subprocess.check_output(['git','rev-parse','--git-common-dir'],cwd=ROOT,text=True).strip())).resolve().parent), 'test data must be under the durable project root'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',DOTNET_CLI_TELEMETRY_OPTOUT='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 PARENT=RUN/'estate';GROUP=PARENT/'group';GROUP.mkdir(parents=True)
 checks=[]
 

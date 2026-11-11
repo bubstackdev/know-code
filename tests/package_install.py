@@ -8,6 +8,7 @@ CHECKOUTS=sorted({ROOT,*[p.resolve() for p in args.deny_checkout]})
 assert all(root!=PREFIX and root not in PREFIX.parents and (root/'LICENSE').is_file() for root in CHECKOUTS),'each denied checkout must exist and exclude the test prefix'
 DATA=PREFIX/'d';BIN=PREFIX/'bin';BIN.mkdir();FEED=PREFIX/'feed';FEED.mkdir();WORKSPACE=PREFIX/'w';WORKSPACE.mkdir();SCRATCH=PREFIX/'t';SCRATCH.mkdir();CLIENTS=[];checks=[];PHASE='dependency_setup';PHASES=[]
 ENV=dict(os.environ,PATH=str(BIN)+':'+os.environ['PATH'],KNOW_CODE_DATA_DIR=str(DATA),NUGET_PACKAGES=str(PREFIX/'nuget-cache'),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0',TMPDIR=str(SCRATCH),npm_config_cache=str(PREFIX/'npm-cache'),npm_config_fetch_retries='0',npm_config_fetch_timeout='3000')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(PREFIX/'query-admission')
 for key in ['KNOW_CODE_RUNTIME_DIR','KNOW_CODE_COORDINATOR','NODE_PATH','NODE_OPTIONS']:ENV.pop(key,None)
 POLICY='(version 1) (allow default) '+''.join('(deny file-read* file-write* (subpath '+json.dumps(str(root))+'))' for root in CHECKOUTS)
 (PREFIX/'deny-checkout.sb').write_text(POLICY+'\n')
@@ -111,7 +112,7 @@ bundle=next((PREFIX/'first installation').glob('know-code-*'));HOST=BIN/'know-co
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0,('checkout deny policy ineffective',root)
 info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bundle' and info['sqlite']['fts5'] and str(PREFIX) in info['resource_directory']
 runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
-contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':2,'analysis_settings_version':1,'resource_control_version':3}
+contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':3,'analysis_settings_version':1,'resource_control_version':3}
 assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
 assert command(HOST,'--version').stdout.startswith('know-code 0.0.1')
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']

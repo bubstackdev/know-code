@@ -405,7 +405,10 @@ fn compatible_info(a: &Value, b: &Value) -> Result<()> {
     if b["resource_control_version"] != know_code_core::resource::CONTROL_VERSION {
         return Err("target runtime lacks the required recorded cancellation boundary; use a compatible runtime".into());
     }
-    if !matches!(a["index_lifecycle_version"].as_u64(), Some(1) | Some(2))
+    if !a["index_lifecycle_version"].as_u64().is_some_and(|version| {
+        matches!(version, 1 | 2)
+            || version == u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
+    })
         || a["resource_control_version"] != know_code_core::resource::CONTROL_VERSION
         || a["analysis_settings_version"] != know_code_core::settings::VERSION
         || a["worker_protocol"] != b["worker_protocol"]
@@ -810,7 +813,9 @@ pub fn run(args: &[String]) -> Result<Value> {
         let version = info(&selected)?["index_lifecycle_version"]
             .as_u64()
             .ok_or("installed runtime lacks lifecycle evidence")?;
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1 | 2)
+            && version != u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
+        {
             return Err("installed lifecycle is unsupported; use a compatible installer".into());
         }
         s.control_version = version as u32;
@@ -927,7 +932,7 @@ mod contract_tests {
     fn runtime_switch_requires_explicit_lifecycle_safety() {
         let supported = supported();
         assert!(compatible_info(&supported, &supported).is_ok());
-        for value in [Value::Null, json!(0), json!(3)] {
+        for value in [Value::Null, json!(0), json!(4), json!(2)] {
             let mut target = supported.clone();
             target["index_lifecycle_version"] = value;
             assert!(
@@ -940,6 +945,9 @@ mod contract_tests {
         let mut old = supported.clone();
         old["index_lifecycle_version"] = json!(1);
         assert!(compatible_info(&old, &supported).is_ok());
+        let mut previous = supported.clone();
+        previous["index_lifecycle_version"] = json!(2);
+        assert!(compatible_info(&previous, &supported).is_ok());
         assert!(compatible_info(&supported, &old).is_err());
         let mut missing_catalog = supported.clone();
         for field in [

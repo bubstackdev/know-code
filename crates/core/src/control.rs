@@ -42,7 +42,7 @@ pub fn request_installer(
     mut request: ControlRequest,
     lifecycle_version: u32,
 ) -> Result<ControlResponse> {
-    if !matches!(lifecycle_version, 1 | protocol::INDEX_LIFECYCLE_VERSION)
+    if !matches!(lifecycle_version, 1 | 2 | protocol::INDEX_LIFECYCLE_VERSION)
         || !matches!(
             request.operation.as_str(),
             "status" | "maintenance" | "resume" | "shutdown"

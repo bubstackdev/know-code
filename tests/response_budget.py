@@ -6,6 +6,7 @@ PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');CONFIG=PROFILE.capital
 RUN=ROOT/'.artifacts/qb'/format(time.time_ns(),'x')[-10:];WORKSPACE=RUN/'w';WORKSPACE.mkdir(parents=True)
 DATA=RUN/'d';HOST=ROOT/f'target/{PROFILE}/know-code'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 (WORKSPACE/'values.ts').write_text(''.join(f'export function budgetFunction{i:04d}{"Name"*20}() {{ return {i}; }}\n' for i in range(1000)))
 def command(argv):
  p=subprocess.run(list(map(str,argv)),cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=120)
@@ -14,7 +15,7 @@ def command(argv):
 atexit.register(lambda:subprocess.run([str(HOST),'coordinator','stop'],env=ENV,capture_output=True,timeout=20))
 indexed=json.loads(command([HOST,'index',WORKSPACE]));DATABASE=indexed['database']
 ffi=ctypes.CDLL(str(ROOT/f'target/{PROFILE}/libknow_code_ffi.dylib'));ffi.kc_query_contract_version.restype=ctypes.c_uint32
-assert ffi.kc_query_contract_version()==6
+assert ffi.kc_query_contract_version()==7
 prefixes={'cli':[HOST,'query',DATABASE],
           'node':['node',ROOT/f'.artifacts/build/{PROFILE}/node/smoke.mjs',DATABASE],
           'dotnet':['dotnet',ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll',DATABASE]}

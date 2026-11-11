@@ -14,6 +14,7 @@ RUN = ROOT / '.artifacts/xcode-provider' / str(time.time_ns())
 PROJECT = create(RUN / 'fixture')
 WORKSPACE = PROJECT.parent
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'))
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 ENV.pop('SDKROOT', None)  # Apple's Python launcher can inject its CLT SDK.
 PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'

@@ -314,11 +314,50 @@ pub struct ReadView {
     projection_maximum: Cell<Option<usize>>,
     pub(crate) health: crate::recovery::IndexReadGuard,
     logical_identity: Option<Vec<u8>>,
+    // Public views retain their slot even while idle; controlled nested views
+    // extend their existing outer request's charge rather than acquire again.
+    _permit: Option<crate::admission::Permit>,
 }
 impl ReadView {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+    /// Bounded coordinator metadata inspection remains available when all
+    /// consumer slots are occupied. It never returns an unadmitted read view.
+    pub fn readiness(path: impl AsRef<Path>) -> Result<(u64, bool)> {
         let execution = crate::execution::Execution::new(Default::default(), None)?;
         let view = Self::open_controlled(path, execution)?;
+        Ok((
+            view.generation,
+            view.needs_test_classification()? || view.needs_target_equivalence()?,
+        ))
+    }
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_reserved(path.as_ref(), None, None)
+    }
+    pub fn open_in_scope(
+        path: impl AsRef<Path>,
+        scope: &crate::admission::AdmissionScope,
+    ) -> Result<Self> {
+        Self::open_reserved(path.as_ref(), Some(scope), None)
+    }
+    fn open_reserved(
+        path: &Path,
+        scope: Option<&crate::admission::AdmissionScope>,
+        pin: Option<&crate::cursor::GenerationPin>,
+    ) -> Result<Self> {
+        let execution = crate::execution::Execution::new(Default::default(), None)?;
+        let local;
+        let scope = match scope {
+            Some(scope) => scope,
+            None => {
+                local = crate::admission::AdmissionScope::local()?;
+                &local
+            }
+        };
+        let reservation = scope.try_reserve()?;
+        let view = Self::open_selected(
+            path,
+            execution.with_permit(reservation.submit()?),
+            pin,
+        )?;
         *view.execution.lock().unwrap() = None;
         Ok(view)
     }
@@ -329,10 +368,13 @@ impl ReadView {
         Self::open_selected(path.as_ref(), execution, None)
     }
     pub(crate) fn open_pinned(pin: &crate::cursor::GenerationPin) -> Result<Self> {
-        let execution = crate::execution::Execution::new(Default::default(), None)?;
-        let view = Self::open_selected(&pin.database, execution, Some(pin))?;
-        *view.execution.lock().unwrap() = None;
-        Ok(view)
+        Self::open_reserved(&pin.database, None, Some(pin))
+    }
+    pub(crate) fn open_pinned_in_scope(
+        pin: &crate::cursor::GenerationPin,
+        scope: &crate::admission::AdmissionScope,
+    ) -> Result<Self> {
+        Self::open_reserved(&pin.database, Some(scope), Some(pin))
     }
     pub(crate) fn open_pinned_controlled(
         pin: &crate::cursor::GenerationPin,
@@ -370,6 +412,7 @@ impl ReadView {
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        let permit = execution.permit();
         let execution = Arc::new(Mutex::new(Some(execution)));
         let progress = Arc::clone(&execution);
         let progress_health = health.clone();
@@ -476,6 +519,7 @@ impl ReadView {
             projection_maximum: Cell::new(None),
             health: health.clone(),
             logical_identity,
+            _permit: permit,
         })
     }
 
@@ -495,7 +539,10 @@ impl ReadView {
         cancellation: Option<crate::execution::QueryCancellation>,
     ) -> Result<QueryResult> {
         let execution = crate::execution::Execution::new(Default::default(), request.deadline_ms)?;
-        let execution = execution.with_cancellation(cancellation);
+        let mut execution = execution.with_cancellation(cancellation);
+        if let Some(permit) = &self._permit {
+            execution = execution.with_permit(permit.clone());
+        }
         let maximum = crate::execution::response_budget(request.response_max_bytes)?;
         let result = self
             .query_controlled(request, execution.clone())
@@ -1444,6 +1491,21 @@ fn read_location(r: &rusqlite::Row<'_>) -> rusqlite::Result<Location> {
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_scope(path: &Path) -> Result<crate::admission::AdmissionScope> {
+    crate::admission::AdmissionScope::at(
+        path.parent()
+            .ok_or_else(|| Error::InvalidRequest("fixture database needs a parent".into()))?
+            .join("query-admission"),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_view(path: impl AsRef<Path>) -> Result<ReadView> {
+    let path = path.as_ref();
+    ReadView::open_in_scope(path, &fixture_scope(path)?)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
@@ -1521,7 +1583,7 @@ mod tests {
                 .unwrap();
         }
         writer.publish().unwrap();
-        let view = ReadView::open(&path).unwrap();
+        let view = crate::query::fixture_view(&path).unwrap();
         let request: QueryRequest =
             serde_json::from_value(serde_json::json!({"op":"symbols","response_max_bytes":8192}))
                 .unwrap();
@@ -1572,7 +1634,7 @@ mod tests {
             }))
             .unwrap();
         writer.publish().unwrap();
-        let view = ReadView::open(&path).unwrap();
+        let view = crate::query::fixture_view(&path).unwrap();
         let mut evidence = vec![];
         for name in [None, Some("needle")] {
             for text in [None, Some("needle")] {
@@ -1721,7 +1783,7 @@ mod tests {
     #[test]
     fn declaration_source_selects_exact_owner_origin_and_hash_before_limit() {
         let (path, generations) = declaration_fixture();
-        let view = ReadView::open(&path).unwrap();
+        let view = crate::query::fixture_view(&path).unwrap();
         let text = "r π\0😀";
         let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
         for (comp, generation) in [("right", generations[1]), ("third", generations[2])] {
@@ -1785,7 +1847,7 @@ mod tests {
     #[test]
     fn source_budget_is_graph_only_and_declaration_projection_uses_overall_guards() {
         let (path, _) = declaration_fixture();
-        let view = ReadView::open(&path).unwrap();
+        let view = crate::query::fixture_view(&path).unwrap();
         for op in [
             "symbols",
             "source",

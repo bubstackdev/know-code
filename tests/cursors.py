@@ -16,6 +16,7 @@ HOST=ROOT/f'target/{PROFILE}/know-code'
 ADDON=ROOT/f'.artifacts/build/{PROFILE}/node/index.mjs'
 SMOKE=ROOT/f'bindings/dotnet/Smoke/bin/{CONFIG}/net10.0/Smoke.dll'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 # A long symbol name guarantees a replay cannot fit the minimum response
 # budget, independently of signature truncation or coverage metadata.
 TARGET='alpha_'+('x'*1400)

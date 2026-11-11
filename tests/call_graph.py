@@ -16,6 +16,7 @@ WORKSPACE = RUN / 'workspace'
 PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 (WORKSPACE / 'ts/tsconfig.json').write_text(json.dumps({'compilerOptions': {'strict': True, 'noEmit': True, 'skipLibCheck': True, 'target': 'ES2022', 'module': 'NodeNext', 'moduleResolution': 'NodeNext'}, 'include': ['*.ts']}))
 ts_source = '''// π😀 source coordinates
 export function leaf() { /* π😀 retained declaration */ return 1; }

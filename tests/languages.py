@@ -19,6 +19,7 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'),
            DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 ENV.pop('SDKROOT', None)  # Exercise default selection, not Python's injected SDK.
 for language in ('typescript', 'csharp', 'rust', 'swift'):
     shutil.copytree(ROOT / 'tests/fixtures' / language, WORKSPACE / language,

@@ -15,6 +15,7 @@ SOURCE.write_text('export class LiveValue { value = 1; }\n')
 REQUEST = json.dumps({'op': 'symbols', 'name': 'LiveValue', 'limit': 100,
                       'freshness_wait_ms': 0, 'deadline_ms': 1000})
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(DATA), DOTNET_CLI_TELEMETRY_OPTOUT='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 process = None
 checks = []
 

@@ -58,6 +58,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("{}", serde_json::to_string(&reply)?);
         }
+        Some("queries") => {
+            let mut maximum = None;
+            let mut scope = None;
+            for pair in args[2..].chunks(2) {
+                if pair.len() != 2 {
+                    return Err("usage: know-code queries [--max-active COUNT] [--scope DIRECTORY]".into());
+                }
+                match pair[0].as_str() {
+                    "--max-active" => maximum = Some(pair[1].parse::<u32>()?),
+                    "--scope" => scope = Some(know_code_core::admission::AdmissionScope::at(&pair[1])?),
+                    _ => return Err("expected --max-active or --scope".into()),
+                }
+            }
+            let scope = scope.map(Ok).unwrap_or_else(know_code_core::admission::AdmissionScope::local)?;
+            let policy = match maximum {
+                Some(maximum) => scope.configure(maximum),
+                None => scope.policy(),
+            };
+            match policy {
+                Ok(policy) => println!("{}", serde_json::json!({"result":policy})),
+                Err(error) => println!("{}", serde_json::json!({"error":{"code":error.code(),"message":error.to_string()}})),
+            }
+        }
         Some("install" | "update" | "rollback" | "uninstall" | "install-info" | "service") => println!("{}", install::run(&args[1..])?),
         Some("resources") => {
             let mut cpu = None;

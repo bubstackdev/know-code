@@ -132,6 +132,66 @@ pub fn query_json_cancellable(
     start: execution::QueryStart,
     cancellation: Option<execution::QueryCancellation>,
 ) -> String {
+    query_json_in_scope(database, request, start, cancellation, None)
+}
+
+/// Explicit host scope; the default is shared across the local account.
+pub fn query_json_in_scope(
+    database: &str,
+    request: &str,
+    start: execution::QueryStart,
+    cancellation: Option<execution::QueryCancellation>,
+    scope: Option<&admission::AdmissionScope>,
+) -> String {
+    let result = (|| {
+        if cancellation
+            .as_ref()
+            .is_some_and(execution::QueryCancellation::is_cancelled)
+        {
+            return Err(Error::QueryCancelled);
+        }
+        admission::check_request_bytes(request.len())?;
+        let local;
+        let scope = match scope {
+            Some(scope) => scope,
+            None => {
+                local = admission::AdmissionScope::local()?;
+                &local
+            }
+        };
+        scope.try_reserve()
+    })();
+    match result {
+        Ok(reservation) => {
+            query_json_reserved(database, request, start, cancellation, &reservation)
+        }
+        Err(error) => execution::error_json(
+            error.code(),
+            &error.to_string(),
+            execution::MIN_RESPONSE_BYTES as usize,
+        ),
+    }
+}
+
+/// Consumes one submission from an early host reservation. The host retains
+/// the reservation through its own response parsing; nested reads borrow it.
+pub fn query_json_reserved(
+    database: &str,
+    request: &str,
+    start: execution::QueryStart,
+    cancellation: Option<execution::QueryCancellation>,
+    reservation: &admission::Reservation,
+) -> String {
+    let permit = match reservation.submit() {
+        Ok(permit) => permit,
+        Err(error) => {
+            return execution::error_json(
+                error.code(),
+                &error.to_string(),
+                execution::MIN_RESPONSE_BYTES as usize,
+            );
+        }
+    };
     if cancellation
         .as_ref()
         .is_some_and(execution::QueryCancellation::is_cancelled)
@@ -139,6 +199,13 @@ pub fn query_json_cancellable(
         return execution::error_json(
             "cancelled",
             "query cancelled",
+            execution::MIN_RESPONSE_BYTES as usize,
+        );
+    }
+    if let Err(error) = admission::check_request_bytes(request.len()) {
+        return execution::error_json(
+            error.code(),
+            &error.to_string(),
             execution::MIN_RESPONSE_BYTES as usize,
         );
     }
@@ -176,7 +243,7 @@ pub fn query_json_cancellable(
         }
     };
     let execution = match execution::Execution::new(start, request.deadline_ms) {
-        Ok(execution) => execution.with_cancellation(cancellation),
+        Ok(execution) => execution.with_cancellation(cancellation).with_permit(permit),
         Err(error) => {
             return execution::error_json(
                 error.code(),

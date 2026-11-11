@@ -22,6 +22,7 @@ WORK.mkdir()
 BLOCK = RUN/'block'
 LABEL = 'dev.bubstack.know-code.test.' + hashlib.sha256(str(RUN).encode()).hexdigest()[:12]
 ENV = dict(os.environ, HOME=str(HOME), KNOW_CODE_DATA_DIR=str(DATA), DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', MSBUILDDISABLENODEREUSE='1', DOTNET_CLI_USE_MSBUILD_SERVER='0')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 for key in ['KNOW_CODE_RUNTIME_DIR', 'KNOW_CODE_COORDINATOR', 'NODE_PATH', 'NODE_OPTIONS']:
     ENV.pop(key, None)
 checks = []
@@ -130,7 +131,7 @@ def development_pid():
     return next((l.strip() for l in p.stdout.splitlines() if l.strip().startswith('pid = ')), None)
 before_dev = development_pid()
 EVIDENCE['candidate']['runtime_info'] = json.loads(command(HOST, 'runtime-info').stdout)
-assert EVIDENCE['candidate']['runtime_info']['index_lifecycle_version'] == 2
+assert EVIDENCE['candidate']['runtime_info']['index_lifecycle_version'] == 3
 EVIDENCE['candidate']['host_sha256'] = hashlib.sha256(HOST.read_bytes()).hexdigest()
 
 # Simulate a matching-contract runtime that cannot start its coordinator.
@@ -196,8 +197,8 @@ def prior_lifecycle_upgrade():
     evidence.update(database=database, initial_generation=initial['generation'], selected_prior=old)
     record('prior_lifecycle1_real_runtime_and_compiler_graph_without_login')
 
-    # This real new runtime reports lifecycle2, then its owned wrapper fails
-    # before coordinator startup can write a lifecycle2 receipt.
+    # This real new runtime reports lifecycle3, then its owned wrapper fails
+    # before coordinator startup can write a format2 receipt.
     receipt = selector.read_bytes()
     failed = command(HOST, 'update', '--from', BAD, '--prefix', prior_prefix, env=prior_env, check=False)
     assert failed.returncode and 'previous selection restored' in failed.stderr, failed.stderr
@@ -217,7 +218,7 @@ def prior_lifecycle_upgrade():
     assert not selected['login_enabled'] and not selected['login_loaded'] and not prior_plist.exists()
     prior_wait()
     prior_query()
-    assert json.loads(command(prior_launcher, 'runtime-info', env=prior_env).stdout)['index_lifecycle_version']==2
+    assert json.loads(command(prior_launcher, 'runtime-info', env=prior_env).stdout)['index_lifecycle_version']==3
     rejected = json.loads(command(prior_host, 'query', database, request, env=prior_env).stdout)
     assert rejected.get('error', {}).get('code')=='update_required', rejected
     previous_generation = prior_wait()['generation']
@@ -232,7 +233,7 @@ def prior_lifecycle_upgrade():
     assert source['text']==saved and source['content_hash']==hashlib.sha256(saved.encode()).hexdigest(), source
     evidence.update(selected_current=selected['selected'], old_client_rejection=rejected,
                     saved_generation=current['generation'], saved_source_sha256=source['content_hash'])
-    record('prior_lifecycle1_bridge_quiesces_then_lifecycle2_rejects_old_client_and_saves')
+    record('prior_lifecycle1_bridge_quiesces_then_lifecycle3_rejects_old_client_and_saves')
 
     receipt = selector.read_bytes()
     failed = command(HOST, 'rollback', '--prefix', prior_prefix, env=prior_env, check=False)

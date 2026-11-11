@@ -1102,7 +1102,7 @@ mod tests {
             }))
             .unwrap();
         writer.publish().unwrap();
-        let view = ReadView::open(path).unwrap();
+        let view = crate::query::fixture_view(path).unwrap();
         let c = &view.connection;
         for incoming in [true, false] {
             for query in [
@@ -1304,7 +1304,7 @@ mod tests {
     fn graph_source_is_opt_in_and_default_executes_no_source_sql() {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         let path = declaration_graph(1, 1);
-        let mut view = ReadView::open(path).unwrap();
+        let mut view = crate::query::fixture_view(path).unwrap();
         view.connection
             .authorizer(Some(|context: AuthContext<'_>| {
                 if matches!(
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn graph_source_budget_counts_all_wire_copies_and_preserves_findings_paths_and_targets() {
         let path = declaration_graph(1, 1);
-        let view = ReadView::open(path).unwrap();
+        let view = crate::query::fixture_view(path).unwrap();
         let baseline =
             serde_json::to_value(projected(&view, serde_json::json!({})).graph.unwrap()).unwrap();
         for budget in 1..=24 {
@@ -1416,7 +1416,7 @@ mod tests {
     #[test]
     fn graph_declaration_limit_is_independent_of_finding_and_source_budgets() {
         let path = declaration_graph(17, 1);
-        let view = ReadView::open(path).unwrap();
+        let view = crate::query::fixture_view(path).unwrap();
         let result = projected(&view, serde_json::json!({"include_source":true,"limit":1}));
         let graph = result.graph.unwrap();
         assert_eq!(graph.findings.len(), 1);
@@ -1446,7 +1446,7 @@ mod tests {
     fn graph_extent_labels_and_graph_and_complete_response_caps_remain_explicit() {
         for (extents, label) in [(0, "extent_unavailable"), (2, "extent_ambiguous")] {
             let path = declaration_graph(1, extents);
-            let view = ReadView::open(path).unwrap();
+            let view = crate::query::fixture_view(path).unwrap();
             let result = projected(&view, serde_json::json!({"include_source":true}));
             let graph = result.graph.unwrap();
             let f = graph
@@ -1462,7 +1462,7 @@ mod tests {
             assert!(!graph.limits.iter().any(|s| s == "source_budget"));
         }
         let path = declaration_graph(1, 1);
-        let view = ReadView::open(path).unwrap();
+        let view = crate::query::fixture_view(path).unwrap();
         let baseline = projected(&view, serde_json::json!({}));
         let total = serde_json::to_vec(&baseline).unwrap().len();
         let graph_cap = serde_json::to_vec(baseline.graph.as_ref().unwrap())

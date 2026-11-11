@@ -519,11 +519,12 @@ mod tests {
                     }
                 }
             });
-            let result = crate::query_json_cancellable(
+            let result = crate::query_json_in_scope(
                 db.to_str().unwrap(),
                 r#"{"op":"symbols","page_size":1}"#,
                 Default::default(),
                 Some(cancellation.clone()),
+                Some(&crate::query::fixture_scope(&db).unwrap()),
             );
             assert_eq!(
                 serde_json::from_str::<Value>(&result).unwrap()["error"]["code"],

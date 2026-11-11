@@ -11,6 +11,7 @@ ARTIFACTS=Path(os.environ.get('KNOW_CODE_TEST_ARTIFACT_ROOT',ROOT/'.artifacts/ir
 RUN=ARTIFACTS/format(time.time_ns(),'x')[-10:];DATA=RUN/'d';A=RUN/'a';B=RUN/'b'
 A.mkdir(parents=True);B.mkdir();PROFILE=os.environ.get('KNOW_CODE_BUILD_PROFILE','debug');HOST=ROOT/f'target/{PROFILE}/know-code'
 ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1')
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 for key in ['KNOW_CODE_COORDINATOR','NODE_OPTIONS','NODE_PATH']:ENV.pop(key,None)
 (A/'value.ts').write_text('export const alpha = "saved original";\n');(B/'value.ts').write_text('export const beta = 1;\n')
 checks=[];passed=False;events=RUN/'commands.jsonl';databases={}

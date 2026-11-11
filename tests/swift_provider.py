@@ -13,6 +13,7 @@ WORKSPACE.mkdir(parents=True)
 shutil.copytree(ROOT / 'tests/fixtures/swift', WORKSPACE, dirs_exist_ok=True)
 PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), KNOW_CODE_BUILD_PROFILE=PROFILE)
+ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 HARNESS = ROOT / 'tests/worker_harness.mjs'
 subprocess.run(['bash', 'providers/swift/build.sh', PROFILE], cwd=ROOT, check=True)
 

@@ -17,7 +17,7 @@ use std::{
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
 pub const MAX_DEADLINE_MS: u32 = 120_000;
-pub const QUERY_CONTRACT_VERSION: u32 = 6;
+pub const QUERY_CONTRACT_VERSION: u32 = 7;
 pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
 pub const MIN_RESPONSE_BYTES: u32 = 1024;
@@ -125,6 +125,7 @@ pub(crate) struct Execution {
     start: QueryStart,
     timeout: Duration,
     cancellation: Option<QueryCancellation>,
+    permit: Option<crate::admission::Permit>,
 }
 impl Execution {
     pub(crate) fn new(start: QueryStart, deadline: Option<u32>) -> Result<Self> {
@@ -138,11 +139,19 @@ impl Execution {
             start,
             timeout: Duration::from_millis(u64::from(deadline)),
             cancellation: None,
+            permit: None,
         })
     }
     pub(crate) fn with_cancellation(mut self, cancellation: Option<QueryCancellation>) -> Self {
         self.cancellation = cancellation;
         self
+    }
+    pub(crate) fn with_permit(mut self, permit: crate::admission::Permit) -> Self {
+        self.permit = Some(permit);
+        self
+    }
+    pub(crate) fn permit(&self) -> Option<crate::admission::Permit> {
+        self.permit.clone()
     }
     pub(crate) fn remaining(&self) -> Result<Duration> {
         if self
@@ -605,13 +614,18 @@ mod tests {
         let error: serde_json::Value = serde_json::from_str(&error).unwrap();
         assert_eq!(error["error"]["code"], "response_limit_exceeded");
         let request = serde_json::json!({"x".repeat(300_000):true}).to_string();
-        let rejected = crate::query_json("unused", &request);
+        let scope = crate::admission::AdmissionScope::at(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.artifacts/query-request-boundary")
+                .join(format!("{}-{}", std::process::id(), continuous_time().unwrap().as_nanos())),
+        ).unwrap();
+        let rejected = crate::query_json_in_scope("unused", &request, Default::default(), None, Some(&scope));
         assert!(rejected.len() <= DEFAULT_RESPONSE_BYTES as usize);
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
-        assert_eq!(rejected["error"]["code"], "response_limit_exceeded");
+        assert_eq!(rejected["error"]["code"], "invalid_request");
         let request =
             serde_json::json!({"response_max_bytes":1024,"x".repeat(5000):true}).to_string();
-        let rejected = crate::query_json("unused", &request);
+        let rejected = crate::query_json_in_scope("unused", &request, Default::default(), None, Some(&scope));
         assert!(
             rejected.len() <= 1024,
             "pre-validation error ignored requested minimum"
