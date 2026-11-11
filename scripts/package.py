@@ -26,6 +26,15 @@ def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 
 # Build-time notice evidence and dependency inventory, retained alongside each artifact.
 NOTICES=STAGE/'THIRD_PARTY';NOTICES.mkdir();inventory=[]
+def pinned_notice(name,version,license_text,commit):
+ key=name+'@'+version
+ pinned=json.loads((ROOT/'third_party/licenses/index.json').read_text()).get(key)
+ if not pinned or pinned['commit']!=commit or pinned['license']!=license_text:
+  raise provenance.Invalid(f'Missing matching upstream license evidence for {key}; pin the exact restored repository revision and license text before packaging.')
+ supplied=ROOT/pinned['file']
+ if supplied.is_symlink() or not supplied.is_file() or not supplied.resolve().is_relative_to(ROOT/'third_party/licenses') or digest(supplied)!=pinned['sha256']:
+  raise provenance.Invalid(f'Invalid pinned license content for {key}.')
+ return supplied,pinned
 def evidence(kind,name,version,license_text,source,files):
  entry={'ecosystem':kind,'name':name,'version':version,'license':license_text,'source':source,'notice_files':[]}
  for file in files:
@@ -59,8 +68,16 @@ for name,library in assets['libraries'].items():
  package,version=name.rsplit('/',1);directory=next(Path(folder)/library['path'] for folder in assets['packageFolders'] if (Path(folder)/library['path']).is_dir());nuspec=next(directory.glob('*.nuspec'))
  tree=ET.parse(nuspec);metadata=next(e for e in tree.getroot() if e.tag.endswith('metadata'))
  lic=next((e for e in metadata if e.tag.endswith('license')),None);repository=next((e for e in metadata if e.tag.endswith('repository')),None)
- files=[nuspec]+[p for p in directory.rglob('*') if p.is_file() and p.suffix not in ('.nupkg','.sha512') and any(t in p.name.lower() for t in ['license','notice','copyright'])]
+ # A nuspec SPDX expression/URL is metadata, not the redistributed upstream
+ # license text. Preserve both; fail closed if no matching text is supplied.
+ texts=[p for p in directory.rglob('*') if p.is_file() and p.suffix not in ('.nupkg','.sha512','.nuspec') and any(t in p.name.lower() for t in ['license','notice','copyright'])]
+ pinned=None
+ if not texts:
+  supplied,pinned=pinned_notice(package,version,lic.text if lic is not None else '',repository.attrib.get('commit') if repository is not None else None)
+  texts=[supplied]
+ files=[nuspec,*texts]
  evidence('nuget',package,version,lic.text if lic is not None else '',repository.attrib if repository is not None else {},files)
+ if pinned:inventory[-1]['notice_provenance']={k:pinned[k] for k in ['commit','source','sha256']}
 
 # Record runtime Rust dependency licenses, excluding build-only vendored toolchains.
 metadata=json.loads(run('cargo','metadata','--format-version','1','--filter-platform','aarch64-apple-darwin','--locked','--offline'))
@@ -72,9 +89,8 @@ for package in metadata['packages']:
  pinned=None
  files=[p for p in directory.iterdir() if p.is_file() and any(t in p.name.lower() for t in ['license','copying','notice','copyright'])]
  if not files:
-  pinned=json.loads((ROOT/'third_party/licenses/index.json').read_text())[package['name']+'@'+package['version']]
   vcs=json.loads((directory/'.cargo_vcs_info.json').read_text())
-  supplied=ROOT/pinned['file'];assert pinned['commit']==vcs['git']['sha1'] and pinned['license']==package['license'] and digest(supplied)==pinned['sha256']
+  supplied,pinned=pinned_notice(package['name'],package['version'],package['license'],vcs['git']['sha1'])
   files=[supplied]
  evidence('cargo',package['name'],package['version'],package.get('license',''),package.get('repository') or package['source'],files)
  if pinned:inventory[-1]['notice_provenance']={k:pinned[k] for k in ['commit','source','sha256']}
