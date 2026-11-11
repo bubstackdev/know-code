@@ -57,7 +57,7 @@ sealed class SdkMetadataClient(BuildContexts contexts, string sdkPath)
                     if (completed) throw new InvalidDataException("SDK metadata arrived after completion");
                     if (message.Progress is not null) Wire.Send(message);
                     else if (message.SdkMetadataResult is not null && result is null && setupError is null) result = message.SdkMetadataResult;
-                    else if (message.Report is { Status:"failed" } report && result is null && setupError is null
+                    else if (message.Report is { Status:"unavailable" } report && result is null && setupError is null
                         && report.CompilationId == path && report.Capabilities.TryGetValue("project_setup",out var availability) && availability == "unavailable"
                         && report.Diagnostics.Count == 1)
                         setupError = new ProjectSetupException(path,report.Diagnostics[0].Code,report.Diagnostics[0].Message);

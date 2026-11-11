@@ -62,7 +62,7 @@ try {
     send('compilation',{id,language:'typescript',projectPath,compilerVersion:error.compilerVersion,
       inputPaths:[config],optionsJson:JSON.stringify({knowCodeSetupFailure:error.code}),
       ...(testPolicy?{testClassification:compilationClassification(testPolicy)}:{})});
-    send('report',{compilationId:id,status:'failed',diagnostics:[{code:error.code,severity:'error',path:boundedText(projectPath),
+    send('report',{compilationId:id,status:'unavailable',diagnostics:[{code:error.code,severity:'error',path:boundedText(projectPath),
       message:boundedText(`${error.message}; this explicit project's facts are unavailable; standalone inference below its directory is suppressed while ownership is unknown.`)}],
       capabilities:{calls:'unavailable',dependencies:'unavailable',dispatch:'unavailable',project_links:'unavailable'}});
   }
@@ -114,7 +114,7 @@ try {
       send('compilation',{id,language:'typescript',projectPath,inferred:true,compilerVersion:error.compilerVersion,
         optionsJson:JSON.stringify({inferredRoot:path.relative(root,directory),knowCodeSetupFailure:error.code}),
         ...(testPolicy?{testClassification:compilationClassification(testPolicy)}:{})});
-      send('report',{compilationId:id,status:'failed',diagnostics:[{code:error.code,severity:'error',message:boundedText(error.message),path:''}],
+      send('report',{compilationId:id,status:'unavailable',diagnostics:[{code:error.code,severity:'error',message:boundedText(error.message),path:''}],
         capabilities:{calls:'unavailable',dependencies:'unavailable',dispatch:'unavailable',project_links:'unavailable'}});
     }
     globalThis.gc();

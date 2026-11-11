@@ -25,7 +25,7 @@ static class ProjectFailures
     }
     public static AnalysisReport SetupReport(ProjectSetupException error, string compilation)
     {
-        var report = new AnalysisReport { CompilationId = compilation, Status = "failed" };
+        var report = new AnalysisReport { CompilationId = compilation, Status = "unavailable" };
         report.Capabilities.Add("project_setup", "unavailable");
         report.Diagnostics.Add(new Diagnostic { Code = error.Code, Severity = "error",
             Message = Bounded(error.Message), Path = Bounded(error.ProjectPath.Replace('\\', '/')) });
