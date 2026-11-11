@@ -279,6 +279,7 @@ struct JobResult {
     registration: u64,
     trust_epoch: u64,
     authorization: DeferredAuthorization,
+    analysis_started: bool,
     input_hash: String,
     database: String,
     epoch: u64,
@@ -1094,6 +1095,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         let recovering = job.recovering;
                         let upgrading = job.upgrade_format.is_some();
                         let mut input_hash = String::new();
+                        let mut analysis_started = false;
                         let result = execute(
                             job,
                             &installation,
@@ -1122,6 +1124,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                 progress_shared.changed.notify_all();
                             },
                             Some(&progress_shared.cursors),
+                            &mut analysis_started,
                         )
                         .map_err(|e| Failure {
                             code: e
@@ -1145,6 +1148,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                             registration,
                             trust_epoch,
                             authorization,
+                            analysis_started,
                             database,
                             epoch,
                             result,
@@ -1444,11 +1448,12 @@ fn execute(
     attempt_hash: &mut String,
     progress: &mut impl FnMut(Progress),
     cursors: Option<&know_code_core::cursor::CursorService>,
+    analysis_started: &mut bool,
 ) -> AnyResult<JobOutput> {
     let control = job.session.control();
     let mut candidate: Option<recovery::Candidate> = None;
     let mut disk: Option<Arc<recovery::DiskBudget>> = None;
-    let mut analysis_started = false;
+    *analysis_started = false;
     let origin = Arc::new(Mutex::new(None::<DiskOrigin>));
     let result = (|| -> AnyResult<JobOutput> {
         control.check()?;
@@ -1624,7 +1629,7 @@ fn execute(
             }
             Ok(())
         };
-        analysis_started = true;
+        *analysis_started = true;
         let generation = workspace::refresh_controlled(
             &job.root,
             database,
@@ -1697,7 +1702,7 @@ fn execute(
         // freely reclaimable own staging first, before retaining the baseline.
         // A real held snapshot may keep the checkpoint busy until its owner
         // releases it; that is genuine externally reclaimed headroom.
-        let baseline_pending = if !analysis_started {
+        let baseline_pending = if !*analysis_started {
             false
         } else {
             match know_code_core::store::maintain_index(Path::new(&job.database)) {
@@ -1717,12 +1722,12 @@ fn execute(
             .unwrap_or_else(|| DiskOrigin::capture(&usage, &job.session.limits()));
         return Ok(JobOutput::DiskPaused(DiskPause {
             baseline_pending,
-            used_reclaim: if analysis_started {
+            used_reclaim: if *analysis_started {
                 cause.used_reclaim
             } else {
                 0
             },
-            free_reclaim: if analysis_started {
+            free_reclaim: if *analysis_started {
                 cause.free_reclaim
             } else {
                 0
@@ -1732,7 +1737,7 @@ fn execute(
             message: message.clone(),
             previous_outcome: job.previous_error_code.clone(),
             force: job.force,
-            retry_preparation: !analysis_started && job.retry_preparation,
+            retry_preparation: !*analysis_started && job.retry_preparation,
             recovery_explicit: job.recovery_explicit,
             used_bytes: usage.used_bytes,
             free_bytes: usage.free_bytes,
@@ -2132,7 +2137,7 @@ fn defer_permission_interruption(entry: &mut Entry, done: &JobResult) -> AnyResu
         // exact authorizations consumed by this interrupted job.
         entry.pending = true;
         entry.force |= done.authorization.force;
-        entry.retry_preparation |= done.authorization.retry_preparation;
+        entry.retry_preparation |= !done.analysis_started && done.authorization.retry_preparation;
         if !entry.recovery_blocked || entry.recovery_explicit {
             entry.recovery_explicit |= done.authorization.recovery_explicit;
         }
@@ -2910,6 +2915,7 @@ mod live_lifetime_tests {
         let done = JobResult {
             registration: 1,
             trust_epoch: 0,
+            analysis_started: false,
             authorization: DeferredAuthorization {
                 force: true,
                 retry_preparation: false,
@@ -2934,6 +2940,48 @@ mod live_lifetime_tests {
         assert_eq!(entry.status.outcome_code, "analysis_error");
     }
     #[test]
+    fn permission_handoff_preserves_only_unspent_restore_retry_and_newer_refresh() {
+        let job = cancellation_job();
+        for (analysis_started, newer_retry, expected) in [
+            (false, false, true),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            let mut entry = permission_entry(&job.root, &job.database);
+            entry.project_trusted = true;
+            entry.trust_epoch = 1;
+            entry.retry_preparation = newer_retry;
+            let done = JobResult {
+                registration: 1,
+                trust_epoch: 0,
+                analysis_started,
+                authorization: DeferredAuthorization {
+                    force: true,
+                    retry_preparation: true,
+                    recovery_explicit: false,
+                },
+                input_hash: "interrupted-input".into(),
+                database: job.database.clone(),
+                epoch: 1,
+                result: Err(Failure {
+                    code: "cancelled".into(),
+                    message: "execution trust revoked".into(),
+                    index_fault: None,
+                }),
+                cancel_baseline: false,
+                recovering: false,
+            };
+            defer_permission_interruption(&mut entry, &done).unwrap();
+            assert_eq!(
+                entry.retry_preparation, expected,
+                "started={analysis_started}, newer={newer_retry}"
+            );
+            assert!(entry.pending && entry.force && !entry.cancel_pending);
+            assert_eq!(entry.failed_input_hash, "saved-failure");
+            assert_eq!(entry.analysis_error, "prior dependency setup failed");
+        }
+    }
+    #[test]
     fn revoked_allocated_replacement_requires_explicit_retry_after_regrant() {
         let job = recovery_job();
         let candidate =
@@ -2946,6 +2994,7 @@ mod live_lifetime_tests {
         let done = JobResult {
             registration: 1,
             trust_epoch: 0,
+            analysis_started: false,
             authorization: DeferredAuthorization {
                 force: true,
                 retry_preparation: true,
@@ -2979,12 +3028,14 @@ mod live_lifetime_tests {
         let database = job.database.clone();
         let data = control::root_for_database(Path::new(&database)).unwrap();
         settings::revoke_project_execution(&job.root, data).unwrap();
+        let mut analysis_started = true;
         let error = execute(
             job,
             Path::new("/no/compiler/installation"),
             &mut String::new(),
             &mut |_| {},
             None,
+            &mut analysis_started,
         )
         .err()
         .unwrap();
@@ -2995,6 +3046,7 @@ mod live_lifetime_tests {
                 .code(),
             "trust_required"
         );
+        assert!(!analysis_started);
         assert!(recovery::failure(Path::new(&database)).unwrap().is_none());
         assert!(
             recovery::replacement_reason(Path::new(&database))
@@ -3376,6 +3428,7 @@ mod live_lifetime_tests {
             &mut hash,
             &mut |_| {},
             None,
+            &mut false,
         )
         .unwrap() else {
             panic!("baseline indexed");
@@ -3404,6 +3457,7 @@ mod live_lifetime_tests {
             &mut next_hash,
             &mut |_| {},
             None,
+            &mut false,
         )
         .err()
         .expect("cancelled data was reanalyzed");
@@ -3429,7 +3483,8 @@ mod live_lifetime_tests {
                 Path::new("/no/compiler/installation"),
                 &mut hash,
                 &mut |_| {},
-                None
+                None,
+                &mut false,
             )
             .is_err()
         );
@@ -3463,7 +3518,8 @@ mod live_lifetime_tests {
                 Path::new("/no/compiler/installation"),
                 &mut hash,
                 &mut |_| {},
-                None
+                None,
+                &mut false,
             )
             .is_err()
         );
@@ -3478,7 +3534,8 @@ mod live_lifetime_tests {
                 Path::new("/no/compiler/installation"),
                 &mut hash,
                 &mut |_| {},
-                None
+                None,
+                &mut false,
             )
             .is_err()
         );
@@ -3669,6 +3726,7 @@ mod live_lifetime_tests {
             &mut hash,
             &mut |_| {},
             None,
+            &mut false,
         )
         .unwrap();
         let JobOutput::CancellationBaseline(inputs, newer, verified) = result else {
@@ -3690,6 +3748,7 @@ mod live_lifetime_tests {
             &mut hash,
             &mut |_| {},
             None,
+            &mut false,
         )
         .unwrap();
         let JobOutput::CancellationBaseline(inputs, _, _) = captured else {
@@ -3749,6 +3808,7 @@ mod live_lifetime_tests {
             &mut retry_hash,
             &mut |_| {},
             None,
+            &mut false,
         )
         .err()
         .expect("cancelled snapshot resumed");
@@ -3792,6 +3852,7 @@ mod live_lifetime_tests {
                     .unwrap();
             },
             None,
+            &mut false,
         )
         .unwrap();
         let JobOutput::CancellationBaseline(_, newer, verified) = result else {
@@ -4080,6 +4141,7 @@ mod live_lifetime_tests {
                 &mut String::new(),
                 &mut |_| {},
                 None,
+                &mut false,
             )
             .err()
             .expect("future format refusal");
