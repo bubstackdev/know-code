@@ -100,6 +100,21 @@ try {
   write(path.join(good,'package.json'),'{');
   assert.equal(diagnostics.directory(good),good);assert.equal(diagnostics.failure(good),undefined);
   checks.push('expected_package_metadata_failures_are_scoped_and_context_is_not_reparsed');
+  const ancestor=path.join(run,'declared'),child=path.join(ancestor,'child'),source=path.join(child,'src');
+  write(path.join(ancestor,'package.json'),JSON.stringify({private:true,name:'workspace',version:'1.0.0',workspaces:['child']}));
+  write(path.join(child,'package.json'),JSON.stringify({private:true,name:'child',version:'1.0.0',optionalDependencies:{typescript:'5.9.3'}}));
+  write(path.join(child,'node_modules/typescript/package.json'),JSON.stringify({name:'typescript',version:'5.9.3'}));
+  fs.mkdirSync(source,{recursive:true});
+  const declared=await preparePackages(ancestor,[source],request,()=>{});
+  assert.equal(declared.typescriptDeclared(source),true);assert.equal(declared.typescriptDeclared(child),true);
+  assert.equal(declared.typescriptDeclared(ancestor),false,'child declaration leaked into workspace-root alias');
+  write(path.join(ancestor,'package.json'),JSON.stringify({private:true,name:'workspace',version:'1.0.0',workspaces:['child'],devDependencies:{typescript:'5.9.3'}}));
+  write(path.join(ancestor,'node_modules/typescript/package.json'),JSON.stringify({name:'typescript',version:'5.9.3'}));
+  const hoisted=await preparePackages(ancestor,[source],request,()=>{});
+  assert.equal(hoisted.typescriptDeclared(ancestor),true);assert.equal(hoisted.typescriptDeclared(source),true);
+  write(path.join(child,'package.json'),'{');
+  assert.equal(hoisted.typescriptDeclared(source),true,'declaration lookup reparsed changed metadata');
+  checks.push('captured_typescript_declarations_preserve_ancestor_and_alias_scope');
   const result={status:'passed',checks,matrix,commands,run,cache,test_sha256:hash(fileURLToPath(import.meta.url)),
     source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs'].map(name=>[name,hash(path.join(root,name))])),
     limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested','all accepted majors covered by named floor/latest pins, not every intermediate patch']};
