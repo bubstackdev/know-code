@@ -119,6 +119,7 @@ try:
   assert schemas[name]['properties']['page_size']['minimum']==1 and schemas[name]['properties']['page_size']['maximum']==1000
  for name in ['read_source','symbol_context']:assert 'cursor' in schemas[name]['properties']
  for name in ['read_source','symbol_context','coverage_details']:assert 'snapshot' in schemas[name]['properties']
+ assert schemas['coverage_details']['required']==['snapshot'] and 'anyOf' not in schemas['coverage_details']
  for name in ['search_symbols','find_references','callers','callees','impact','query_graph','symbol_context']:
   assert schemas[name]['properties']['tests']['enum']==['all','exclude','only']
  for name in ['read_source','coverage_details','next_page']:assert 'tests' not in schemas[name]['properties']

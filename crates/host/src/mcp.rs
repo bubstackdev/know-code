@@ -319,7 +319,7 @@ fn tools() -> Vec<Tool> {
     let mut context_schema = schema(&context, &["symbol_id"]);
     context_schema["properties"]["max_bytes"] = source["properties"]["max_bytes"].clone();
     context_schema["properties"]["include_source"] = json!({"type":"boolean","default":true,"description":"Include bounded indexed source for compiler declaration contexts."});
-    let mut coverage_schema = schema(
+    let coverage_schema = schema(
         &[
             "generation",
             "snapshot",
@@ -331,11 +331,7 @@ fn tools() -> Vec<Tool> {
             "deadline_ms",
             "response_max_bytes",
         ],
-        &[],
-    );
-    coverage_schema.insert(
-        "anyOf".into(),
-        json!([{"required":["generation"]},{"required":["snapshot"]}]),
+        &["snapshot"],
     );
     let mut result = vec![
         make(
