@@ -52,7 +52,7 @@ static partial class Analysis
         }
         private void Edge(string from, string? to, string kind, SyntaxNode node, bool implicitCall = false, string dispatch = "", string dispatchKey = "")
         {
-            if (from == to) return;
+            if (kind == "contains" && from == to) return;
             output.Relationship(new Relationship {SourceId=from,TargetId=to??"",Kind=kind,
                 Resolution=to is null?"unresolved":"compiler_bound", ArtifactId=source.Id,
                 StartByte=(ulong)source.Offsets[node.SpanStart],EndByte=(ulong)source.Offsets[node.Span.End],
@@ -183,8 +183,13 @@ static partial class Analysis
             { Call(operation.Constructor,operation);base.VisitObjectCreation(operation); }
             public override void VisitPropertyReference(IPropertyReferenceOperation operation)
             {
-                var write=operation.Parent is ISimpleAssignmentOperation a&&a.Target==operation;
-                var both=operation.Parent is ICompoundAssignmentOperation b&&b.Target==operation || operation.Parent is IIncrementOrDecrementOperation;
+                IOperation target=operation;
+                while(target.Parent is { } parent && (parent is ITupleOperation or IParenthesizedOperation
+                    || parent is IConversionOperation { IsImplicit:true })) target=parent;
+                var assignment=target.Parent as IAssignmentOperation;
+                var write=assignment?.Target==target;
+                var both=write && (assignment is ICompoundAssignmentOperation or ICoalesceAssignmentOperation)
+                    || target.Parent is IIncrementOrDecrementOperation increment && increment.Target==target;
                 if((!write||both)&&operation.Property.GetMethod is { } get)Call(get,operation,true);
                 if((write||both)&&operation.Property.SetMethod is { } set)Call(set,operation,true);
                 base.VisitPropertyReference(operation);

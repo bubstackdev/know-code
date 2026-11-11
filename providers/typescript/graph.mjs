@@ -4,7 +4,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
   let file, artifactId, offsets;
   const point = node => ({artifactId, startByte: offsets[node.getStart(file)], endByte: offsets[node.getEnd()]});
   const relation = (sourceId, targetId, kind, node, implicit=false, dispatch='',dispatchKey='') => {
-    if (sourceId === targetId) return;
+    if (kind === 'contains' && sourceId === targetId) return;
     relationship({sourceId,targetId,kind,resolution:targetId?'compiler_bound':'unresolved',...point(node),implicit,dispatch,dispatchKey});
   };
   const named = node => node.name && checker.getSymbolAtLocation(node.name);
@@ -96,23 +96,53 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
     }
     return context;
   }
+  // Follow only transparent assignment-target wrappers. Receiver/index/key
+  // expressions remain reads; nested object/tuple destinations are writes.
+  function accessDirection(access) {
+    let target=access;
+    for (;;) {
+      const parent=target.parent;
+      if ((ts.isParenthesizedExpression(parent)||ts.isSpreadElement(parent))&&parent.expression===target
+          ||ts.isArrayLiteralExpression(parent)&&parent.elements.includes(target)
+          ||ts.isPropertyAssignment(parent)&&parent.initializer===target
+          ||ts.isObjectLiteralExpression(parent)&&parent.properties.includes(target)) target=parent;
+      else break;
+    }
+    const parent=target.parent;
+    const assigned=ts.isBinaryExpression(parent)&&parent.left===target
+      &&parent.operatorToken.kind>=ts.SyntaxKind.FirstAssignment&&parent.operatorToken.kind<=ts.SyntaxKind.LastAssignment;
+    const iteration=(ts.isForInStatement(parent)||ts.isForOfStatement(parent))&&parent.initializer===target;
+    const increment=(ts.isPrefixUnaryExpression(parent)||ts.isPostfixUnaryExpression(parent))
+      &&[ts.SyntaxKind.PlusPlusToken,ts.SyntaxKind.MinusMinusToken].includes(parent.operator);
+    return {write:assigned||iteration||increment,
+      read:increment||(!iteration&&(!assigned||parent.operatorToken.kind!==ts.SyntaxKind.EqualsToken))};
+  }
+  function accessorCalls(access,symbol,context,site) {
+    if (!(symbol.flags&ts.SymbolFlags.Accessor)) return;
+    const {read,write}=accessDirection(access);
+    for(const declaration of symbol.declarations??[]) {
+      if(read&&ts.isGetAccessorDeclaration(declaration)||write&&ts.isSetAccessorDeclaration(declaration))
+        relation(context.execution,functionId(declaration),'call',site,true,
+          access.expression.kind===ts.SyntaxKind.SuperKeyword?'direct':'virtual',
+          dispatchKey(checker.getTypeAtLocation(access.expression),declaration));
+    }
+  }
   function reference(node, symbol, context, declaration) {
     const target=emit(symbol);
     if(declaration) {relation(context.owner,target,'contains',node);return;}
     const kind=symbol.flags&(ts.SymbolFlags.Type|ts.SymbolFlags.Namespace)?'type_reference':'reference';
     relation(context.owner,!symbol.declarations?.length&&(symbol.flags&ts.SymbolFlags.Transient)?'':target,kind,node);
-    if ((symbol.flags & ts.SymbolFlags.Accessor) && ts.isPropertyAccessExpression(node.parent) && node.parent.name===node) {
-      const access=node.parent, parent=access.parent;
-      const assigned=ts.isBinaryExpression(parent)&&parent.left===access&&parent.operatorToken.kind>=ts.SyntaxKind.FirstAssignment&&parent.operatorToken.kind<=ts.SyntaxKind.LastAssignment;
-      const increment=(ts.isPrefixUnaryExpression(parent)||ts.isPostfixUnaryExpression(parent))&&[ts.SyntaxKind.PlusPlusToken,ts.SyntaxKind.MinusMinusToken].includes(parent.operator);
-      const read=!assigned||parent.operatorToken.kind!==ts.SyntaxKind.EqualsToken||increment;
-      for(const d of symbol.declarations??[]) {
-        if((read&&ts.isGetAccessorDeclaration(d))||((assigned||increment)&&ts.isSetAccessorDeclaration(d)))
-          relation(context.execution,functionId(d),'call',node,true,access.expression.kind===ts.SyntaxKind.SuperKeyword?'direct':'virtual',dispatchKey(checker.getTypeAtLocation(access.expression),d));
-      }
-    }
+    if (ts.isPropertyAccessExpression(node.parent)&&node.parent.name===node)
+      accessorCalls(node.parent,symbol,context,node);
   }
   function operation(node, context) {
+    if(ts.isElementAccessExpression(node)) {
+      const symbol=checker.getSymbolAtLocation(node)??checker.getSymbolAtLocation(node.argumentExpression);
+      if(symbol?.flags&ts.SymbolFlags.Accessor) {
+        relation(context.owner,emit(symbol),'reference',node.argumentExpression);
+        accessorCalls(node,symbol,context,node.argumentExpression);
+      }
+    }
     if(ts.isCallExpression(node)||ts.isNewExpression(node)||ts.isTaggedTemplateExpression(node)) {
       const signature=checker.getResolvedSignature(node);
       const declaration=signature?.declaration;
