@@ -1,5 +1,11 @@
 # Release readiness: 0.0.1 and 0.0.2
 
+## Query admission and WAL work — 2026-11-11
+
+[Shared query admission](QUERY_ADMISSION.md#admission-checkpoint--2026-11-11) now passes an assembled focused Debug checkpoint: 207 Rust cases, native/SDK admission and affected integration checks, with one recorded test-only mock correction. Actual prior-native/coordinator compatibility also passes in [isolated artifact tests](../.artifacts/query-admission/1794422334119/compatibility-01/validation.json). The packet retains failures and its finite scope; package/final-candidate validation is still separate.
+
+[WAL pressure policy](WAL_PRESSURE.md) is accepted and under implementation. Ordinary indexing will pause and auto-resume after reclamation; rebuild preflight may wait automatically, while an active failed rebuild still requires explicit refresh. Reuse the existing shared temporary-disk allowance and free-space reserve. Manual SQLite measurements support this policy but do not certify its automation.
+
 Updated 2026-11-09 after the user accepted best-effort activity notifications and requested integration plus a path toward publishing 0.0.1, then 0.0.2. The user selected **CLI/MCP first** for the next workflow; .NET/Node remain required in 0.0.1. This is an evidence-based readiness ledger and work order. It does not change accepted scope, announce a release, or turn development measurements into release guarantees. [DESIGN.md](DESIGN.md) remains the requirements reference; [IMPLEMENTATION.md](IMPLEMENTATION.md) describes actual behavior.
 
 A [draft acceptance contract and subagent execution plan](RELEASE_ACCEPTANCE.md) derives the current requirements into observable release outcomes, separating decisions, provisional targets and later-release work. It remains under Q&A review and does not start a goal or certify a candidate.
