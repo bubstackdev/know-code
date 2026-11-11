@@ -29,6 +29,12 @@ Development diagnostics are under `.artifacts/pretag-wave/diagnostic/`. The firs
 
 Required next checks include actual native trust/revocation/restart/identity cases; typed project failures and fresh healthy siblings; graph/cleanup plans; retained raw readers/WAL pause/resume and active rebuild retry; real Node panic and fs/crypto progress with test-only hooks absent from default artifacts; current/prior compatibility; then the frozen full Debug/optimized, installed offline/toolchain, real-encoding/resource, conditional free-VM minimum-OS, license/zero-telemetry and signed/notarized installation gates.
 
+## Signing preparation — 2026-11-11
+
+The user supplied `developerID_application.cer` and requested a durable copy. The owner-only copy is `.artifacts/signing/developer-id/developerID_application.cer`; its SHA-256 is `f9a80b2743c868aa5579cd1ac2b9cf5a8925a6784cb2a1c0bb367eb0ffbfcf75`. It matches the prepared CSR/key and is installed in the user keychain as Developer ID Application for team `3FMAPDQDGP`. An owned Debug executable copy passed hardened-runtime timestamped signing and strict signature verification. The configured ASC account can see this certificate. Private staging keys/containers were removed after successful keychain signing; the user's original download was preserved.
+
+The public certificate and probe metadata remain ignored local artifacts. They are not final release evidence: no final package has been signed or notarized, and normal-security installation is still required. Preserve the original producer/output hashes and record signing as an explicit transformation when final archives are assembled; do not rewrite unsigned build provenance to claim it produced signed bytes.
+
 ## Authorized GitHub replacement
 
 Destination: [bubstackdev/know-code](https://github.com/bubstackdev/know-code). The user explicitly authorized taking over the superseded repository and does not want its old history backed up. No old-history fetch, clone, mirror or backup ref is required. Read-only repository/branch-tip inspection confirmed the destination and administrator access; the local `origin` now points there.

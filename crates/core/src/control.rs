@@ -1068,7 +1068,7 @@ mod installer_bridge_tests {
                 ("refresh", 1),
                 ("index-corrupt", 1),
                 ("status", 0),
-                ("status", 4),
+                ("status", 5),
             ] {
                 assert!(matches!(
                     request_installer(
