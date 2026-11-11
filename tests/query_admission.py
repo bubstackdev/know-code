@@ -188,18 +188,26 @@ try:
  assert control('status')['status']['database']==database
  assert control('refresh')['status']['database']==database
  refreshed=ready(initial['generation']+1)
- assert control('cancel')['status']['database']==database
- until=time.monotonic()+10;cancelled=None
- while time.monotonic()<until:
-  cancelled=control('status')['status']
-  assert cancelled['generation']==refreshed['generation'],cancelled
-  if cancelled['phase']=='cancelled':break
-  assert cancelled['phase']=='cancelling',cancelled
-  time.sleep(.05)
- assert cancelled and cancelled['phase']=='cancelled',cancelled
- # An accepted cancellation is not its final saved-input baseline. Wait for
- # that boundary before the new save; do not hide missed saves with refresh.
- assert control('status')['status']['phase']=='cancelled'
+ cancelled=control('cancel')['status']
+ assert cancelled['database']==database and cancelled['generation']==refreshed['generation'],cancelled
+ if cancelled['phase']=='idle':
+  # Cancel is a legitimate no-op when no job is active. It must not change
+  # the coherent baseline or manufacture a cancellation transition.
+  assert cancelled['published_epoch']==cancelled['observed_epoch'],cancelled
+  checked=control('status')['status']
+  assert checked['phase']=='idle' and checked['generation']==refreshed['generation'],checked
+  assert checked['published_epoch']==checked['observed_epoch'],checked
+  DETAILS['cancel_mode']='idle_noop'
+ else:
+  until=time.monotonic()+10
+  while cancelled['phase']=='cancelling' and time.monotonic()<until:
+   time.sleep(.05);cancelled=control('status')['status']
+   assert cancelled['generation']==refreshed['generation'],cancelled
+  assert cancelled['phase']=='cancelled',cancelled
+  # An active cancellation ack precedes its saved-input baseline. Reach that
+  # boundary before the new save; never hide a missed save with refresh.
+  assert control('status')['status']['phase']=='cancelled'
+  DETAILS['cancel_mode']='active_settled'
  DETAILS['cancelled_before_save']=cancelled
  NEW=OLD.replace('"before"','"after"');SOURCE.write_text(NEW)
  current=ready(refreshed['generation']+1)
