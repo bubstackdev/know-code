@@ -1,6 +1,6 @@
 # Shared query admission
 
-Status: accepted product decisions and implementation contract; code and validation pending. This precedes the physical WAL/reader-pressure checkpoint and does not certify v0.0.1.
+Status: implemented development slice under focused validation. This precedes the physical WAL/reader-pressure checkpoint and does not certify v0.0.1. Initial isolated checks pass 127 core and 12 focused MCP cases; combined native/archive acceptance remains pending.
 
 ## Accepted behavior
 
