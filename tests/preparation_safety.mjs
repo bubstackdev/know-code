@@ -17,10 +17,12 @@ const cache=path.resolve(process.env.KNOW_CODE_TEST_TOOL_CACHE??path.join(run,'t
 const project=root.split(`${path.sep}.artifacts${path.sep}`)[0];
 assert(cache.startsWith(path.join(project,'.artifacts')+path.sep),'package-tool cache must be a durable fixture-owned project artifact');
 const actualHome=process.env.HOME;
-const pins=process.env.KNOW_CODE_TEST_PACKAGE_PINS?.split(',')??[
+const canonicalFullPins=[
   'npm@10.0.0','npm@10.9.10','npm@11.0.0','npm@11.21.2',
   'pnpm@10.0.0','pnpm@10.34.9','pnpm@11.0.0','pnpm@11.28.11','pnpm@12.0.0','pnpm@12.18.0'
 ];
+const pins=process.env.KNOW_CODE_TEST_PACKAGE_PINS?.split(',')??canonicalFullPins;
+const fullCatalog=pins.length===canonicalFullPins.length&&new Set(pins).size===canonicalFullPins.length&&canonicalFullPins.every(pin=>pins.includes(pin));
 const write=(filename,value)=>{fs.mkdirSync(path.dirname(filename),{recursive:true});fs.writeFileSync(filename,value);};
 const hash=filename=>createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
 for(const [key,value] of Object.entries({XDG_CONFIG_HOME:path.join(run,'config'),XDG_CACHE_HOME:path.join(run,'cache'),XDG_DATA_HOME:path.join(run,'data'),
@@ -51,7 +53,7 @@ const revision=command('/usr/bin/git',['rev-parse','HEAD'],git);assert(/^[0-9a-f
 const registry='https://registry.example.invalid/';const proxy='http://127.0.0.1:9';
 const checks=[],matrix=[];
 function progress(status='running',error) {
-  fs.writeFileSync(path.join(run,'matrix-progress.json'),JSON.stringify({status,checks,matrix,commands,error},null,2)+'\n');
+  fs.writeFileSync(path.join(run,'matrix-progress.json'),JSON.stringify({status,canonical_full_pins:canonicalFullPins,selected_pins:pins,full_catalog:fullCatalog,checks,matrix,commands,error},null,2)+'\n');
   const current=matrix.at(-1);
   if(current)fs.writeFileSync(path.join(current.directory,'result.json'),JSON.stringify(current,null,2)+'\n');
 }
@@ -89,7 +91,7 @@ try {
     }
     Object.assign(attempt,{status:'passed',configured,tool:{program:tool.program,prefix:tool.prefix,source:tool.source}});progress();
   }
-  checks.push('npm10_11_pnpm10_11_12_floor_and_latest_git_restore_ignores_executable_selectors_without_losing_registry_proxy_or_config');
+  checks.push(fullCatalog?'full_catalog_git_restore_ignores_executable_selectors_without_losing_registry_proxy_or_config':'selected_pins_only_git_restore_ignores_executable_selectors_without_losing_registry_proxy_or_config');
   const inputs=path.join(run,'inputs');fs.mkdirSync(inputs);
   write(path.join(inputs,'regular'),'abcd');fs.symlinkSync(path.join(inputs,'regular'),path.join(inputs,'regular-link'));
   assert.equal(readSetupInput(path.join(inputs,'regular-link'),4).toString(),'abcd');
@@ -146,9 +148,9 @@ try {
   assert.equal(broken.entry,linked.entry);assert(broken.error instanceof ProjectSetupError);assert.equal(broken.filename,undefined);
   checks.push('one_lexical_compiler_origin_resolver_rejects_ambient_ancestors_accepts_external_store_links_and_reports_broken_origins');
   assert.equal(process.env.HOME,actualHome,'fixture changed the account HOME');
-  const result={status:'passed',checks,matrix,commands,run,cache,home_unchanged:true,test_sha256:hash(fileURLToPath(import.meta.url)),
+  const result={status:'passed',canonical_full_pins:canonicalFullPins,selected_pins:pins,full_catalog:fullCatalog,checks,matrix,commands,run,cache,home_unchanged:true,test_sha256:hash(fileURLToPath(import.meta.url)),
     source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs'].map(name=>[name,hash(path.join(root,name))])),
-    limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested','all accepted majors covered by named floor/latest pins, not every intermediate patch']};
+    limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested',fullCatalog?'canonical full floor/latest catalog executed; not every intermediate patch':'only the named selected pins executed; full catalog certification remains pending']};
   fs.writeFileSync(path.join(run,'validation.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
 } catch(error) {
   const attempt=matrix.at(-1);if(attempt&&attempt.status==='running')attempt.status='failed';
