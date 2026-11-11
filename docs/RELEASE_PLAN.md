@@ -4,6 +4,12 @@ Updated 2026-11-09 after the user accepted best-effort activity notifications an
 
 A [draft acceptance contract and subagent execution plan](RELEASE_ACCEPTANCE.md) derives the current requirements into observable release outcomes, separating decisions, provisional targets and later-release work. It remains under Q&A review and does not start a goal or certify a candidate.
 
+## Current grouping/recovery checkpoint — 2026-11-11
+
+[Combined source-bound integration evidence](INDEX_RECOVERY.md#combined-integration-checkpoint--2026-11-11) supersedes older missing-work descriptions for Q07 cross-target finding presentation and S06 corrupt-index recovery. Evidence-bearing test filters Q08 are also implemented. Shared Rust/core operators preserve concrete paths and target supports; one coordinator recovery engine owns fencing, bounded replacement and explicit retry. 166 Rust and twelve focused assembled Debug runs pass. All 23 installed offline checks pass for the exact runtime/npm/NuGet archives, with both checkouts denied. This remains a focused unsigned Debug checkpoint, not a complete release candidate.
+
+The next implementation gaps remain Q06 graph-wide source/body projection, S07 incompatible-index upgrade initiation and compatible-old-data acceptance, and general query/physical WAL pressure acceptance. Final full Debug/optimized, supported matrix, real encoding, license/zero-telemetry/signing/distribution gates remain required. Historical checkpoints below retain their original source/evidence scope.
+
 ## Readiness checkpoint — 2026-11-10
 
 Assessed against implementation through `e733903`, not just the earlier ledger's gap descriptions. The project is usable for development dogfooding but is not a release candidate. No defensible calendar ETA or percentage follows from test counts or code volume. The work below remains substantial implementation and final acceptance, rather than packaging alone.

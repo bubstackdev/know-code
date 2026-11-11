@@ -1,6 +1,6 @@
 # Cross-target finding presentation
 
-Status: implemented in the combined candidate; assembled native and installed acceptance is in progress. This is not whole-release certification.
+Status: implemented; the [combined integration checkpoint](INDEX_RECOVERY.md#combined-integration-checkpoint--2026-11-11) records the focused Debug results and remaining release gates.
 
 ## Accepted behavior
 
@@ -37,3 +37,6 @@ Focused owned Rust fixtures cover logical search/reference limits, conditional p
 ### Scoped owner evidence
 
 C# peer keys for locals, parameters, range variables, lambdas and local functions include their compiler-selected containing declaration chain. Named owners use compiler documentation identities; scoped owners use unique owned syntax/location anchors. This prevents a conditional enclosing type from making same-offset locals appear equivalent. Public symbol and synthetic IDs retain their existing recipes. Field/property initializer peer keys use the declared member supplied by the semantic model. File initializers or other unproven owners remain separate with empty peer keys and partial grouping capability.
+
+
+The combined checkpoint includes actual Roslyn multi-target analysis and CLI/Node/.NET parity, group-aware limits/pages, exact target narrowing, concrete call paths, policy backfill without dependency restore, snapshot/cursor invalidation during recovery and compiler project/dispatch regressions. Ordinary compiler grouping remains explicitly partial where declaration/owner/generated evidence is unavailable. These results do not claim broad compiler coverage or whole-release certification.

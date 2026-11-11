@@ -1,6 +1,6 @@
 # Corrupt derived-index recovery
 
-Status: implemented in the combined candidate; assembled native and installed acceptance is in progress. This slice implements corruption recovery, not incompatible-version upgrade triggers.
+Status: implemented; the focused combined Debug checks below pass. Installed offline acceptance passes for the exact unsigned Debug artifacts. This slice implements corruption recovery, not incompatible-version upgrade triggers.
 
 ## Accepted recovery policy
 
@@ -40,3 +40,14 @@ Focused cases cover corruption vs false positives, healthy sibling progress, exa
 
 
 Low-level Rust ReadView lifetime: query timeout/cancellation rolls back its SQLite transaction, but a caller-retained view (including its SQL callback closures) keeps its physical-incarnation lease until Drop. Native CLI/Node/.NET calls own and drop their views per request; cursor pins have the separate bounded lifetime. Do not claim that low-level physical leases disappear at query expiry or delete files while such a view remains held. Rebuild disk pressure stays visible; general final reader/WAL acceptance remains separate.
+
+
+## Combined integration checkpoint — 2026-11-11
+
+Frozen product source `93776cf5adcb6e30908f1fd6b7cd304c244357ae`, Debug producer `dc417279154345dd933e8ce4f5663a9e`, combines both independently reviewed agent lanes with the shared read/cursor/control/Writer hooks. [Exact source, producer, generated inputs, output hashes, test sources and retained raw results](../.artifacts/group-recovery/1794409236288068000/validation.json) bind this checkpoint. Product source stays frozen in `.artifacts/gr`; later test-only corrections are recorded by their own hashes. All twelve generated producer inputs are copied under the packet's `generated-final/` directory, rather than relying on subsequently mutable build directories. Final packet SHA-256: `c9c989f03c474ae33c00ca7809b8e625d81a972ec619fced86c825e3688f8a1e`.
+
+All 166 Rust tests, formatting and strict all-target Clippy pass. Twelve affected runs pass: direct Roslyn grouping (9 checks), native grouping/classification/snapshot/recovery (7), coordinator recovery (6), MCP (32), compiler/native end-to-end, portable cursors (13), Workspace API (31), cancellation (7), response budgets (5), call graph (17), project links (14) and dispatch (3). Counts describe finite assertions, not feature completeness. Real header corruption rebuilds the exact saved source, invalidates old cursors/snapshots and preserves settings/preparation. Resource failure persists across saves/restart until explicit refresh. Malformed/version/health metadata failures stay local while a healthy sibling keeps indexing.
+
+The first combined MCP run found a lost declaration limit; independent review also found duplicated representative/support source being charged only once. Both are corrected and rerun. Context now shares logical declaration slots across equivalent targets, retains the 16-location projection cap, and counts every returned copy against aggregate source bytes, including UTF-8 boundaries. Original failures, socket-path fixture failures, and subsequent test-only summary/mock corrections remain in the evidence; earlier passing lane/build results are not substituted for final results.
+
+The exact runtime, npm and NuGet archives also pass all 23 installed offline checks: dependencies are restored first, then fresh TS/C# analysis and CLI/MCP/native queries run with network access and both source checkouts denied. Producer inputs/generated outputs are verified before and after packaging. An independent agent verified the exact archives, native/managed payload bytes, network controls, phase ordering and actual query results; [audit record](../.artifacts/group-recovery/1794409236288068000/independent-audit.json). This checkpoint does not close incompatible-version upgrade S07, graph-wide body projection, general query admission/physical WAL acceptance, full Debug/optimized certification, the real-encoding gate, conditional macOS 15 validation, signing or publication. No live installation or original corpus changed.
