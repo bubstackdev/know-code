@@ -360,7 +360,7 @@ pub(crate) fn query(
         let op = request.op.clone();
         let total_limit = request.limit;
         let mut result = ReadView::open_pinned_controlled(&lease.pin(), lease.execution.clone())?
-            .query_controlled(request, lease.execution.clone())?;
+            .query_materialized_controlled(request, lease.execution.clone())?;
         status(&mut result, lease.status.as_ref());
         // Bound JSON before converting to a page-planning value; the typed
         // result/read transaction is released before file transfer begins.

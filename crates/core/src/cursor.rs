@@ -459,12 +459,12 @@ impl CursorRegistry {
             let candidate = proposed
                 .filter(|(path, _)| *path == database.as_path())
                 .map(|(_, generation)| generation);
-            total = accounting::add(
-                total,
-                retention
-                    .usage_controlled(candidate, execution.clone())?
-                    .total_bytes()?,
-            )?;
+            let usage = match retention.usage_controlled(candidate, execution.clone()) {
+                Ok(usage) => usage,
+                Err(Error::IndexCorrupt { .. }) if retention.health.check().is_err() => continue,
+                Err(error) => return Err(error),
+            };
+            total = accounting::add(total, usage.total_bytes()?)?;
         }
         execution.check()?;
         Ok(total)
@@ -582,6 +582,7 @@ impl CursorRegistry {
             // A different owner has already invalidated this incarnation's
             // pins. Other cleanup failures keep the entry for a later retry.
             Ok(()) | Err(Error::CursorInvalidated) => {}
+            Err(Error::IndexCorrupt { .. }) if entry.pin.health.check().is_err() => {}
             Err(error) => return Err(error),
         }
         self.entries.remove(&id);

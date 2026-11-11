@@ -116,6 +116,14 @@ pub(crate) fn checked_response(response: ControlResponse) -> Result<ControlRespo
     }
 }
 
+// Reuse the existing nonblocking advisory channel even if a query has no
+// reporting deadline left. A hint never proves corruption; the latch does.
+pub(crate) fn index_fault_hint(database: &Path) {
+    if let Some(root) = root_for_database(database) {
+        let _ = notify_activity(root, &database.to_string_lossy());
+    }
+}
+
 // A durable BAD latch is the proof; this bounded RPC is only a prompt for
 // the coordinator to observe it. Never turn a reporting error into stale data.
 pub(crate) fn report_index_corruption(error: &Error, execution: &crate::execution::Execution) {

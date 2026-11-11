@@ -1,6 +1,7 @@
 use crate::{Error, Result, protocol::Diagnostic, store::SCHEMA_VERSION};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, config::DbConfig, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
@@ -282,6 +283,8 @@ pub struct ReadView {
     execution: Arc<Mutex<Option<crate::execution::Execution>>>,
     stopped: Cell<Option<Stopped>>,
     projection_maximum: Cell<Option<usize>>,
+    pub(crate) health: crate::recovery::IndexReadGuard,
+    logical_identity: Option<Vec<u8>>,
 }
 impl ReadView {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -314,15 +317,23 @@ impl ReadView {
         pin: Option<&crate::cursor::GenerationPin>,
     ) -> Result<Self> {
         execution.check()?;
-        let result = Self::open_inner(path, execution.clone(), pin);
+        let health = if let Some(pin) = pin {
+            pin.health.clone()
+        } else {
+            crate::recovery::IndexReadGuard::open(path, Some(execution.clone()))?
+        };
+        health.check()?;
+        let result =
+            crate::index_result(&health, Self::open_inner(&health, execution.clone(), pin));
         execution.check()?;
         result
     }
     fn open_inner(
-        path: &Path,
+        health: &crate::recovery::IndexReadGuard,
         execution: crate::execution::Execution,
         pin: Option<&crate::cursor::GenerationPin>,
     ) -> Result<Self> {
+        let path = health.physical_path();
         if !path.is_file() {
             return Err(Error::NotReady);
         }
@@ -332,19 +343,22 @@ impl ReadView {
         )?;
         let execution = Arc::new(Mutex::new(Some(execution)));
         let progress = Arc::clone(&execution);
+        let progress_health = health.clone();
         connection.progress_handler(
             1_000,
             Some(move || {
-                progress
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .is_some_and(|e| e.check().is_err())
+                progress_health.check().is_err()
+                    || progress
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|e| e.check().is_err())
             }),
         )?;
         let busy = Arc::clone(&execution);
+        let busy_health = health.clone();
         connection.busy_handler(Some(move |count| {
-            if count >= 2_000 {
+            if count >= 2_000 || busy_health.check().is_err() {
                 return false;
             }
             let remaining = busy
@@ -403,6 +417,24 @@ impl ReadView {
                 |r| r.get(0),
             )?
         };
+        let logical_identity = if health.incarnation().is_empty() {
+            None
+        } else {
+            let logical = health.logical_path();
+            let parent = logical.parent().ok_or_else(|| {
+                Error::InvalidRequest("index logical handle has no parent".into())
+            })?;
+            let name = logical.file_name().ok_or_else(|| {
+                Error::InvalidRequest("index logical handle has no filename".into())
+            })?;
+            Some(
+                std::fs::canonicalize(parent)?
+                    .join(name)
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec(),
+            )
+        };
         Ok(Self {
             connection,
             format_version: version,
@@ -410,6 +442,8 @@ impl ReadView {
             execution,
             stopped: Cell::new(None),
             projection_maximum: Cell::new(None),
+            health: health.clone(),
+            logical_identity,
         })
     }
 
@@ -441,7 +475,7 @@ impl ReadView {
             self.expire(&error)?;
             return Err(error);
         }
-        result
+        crate::index_result(&self.health, result)
     }
     /// The cursor client materializes one bounded logical result before packing
     /// pages. Its aggregate allowance differs from each page's response cap.
@@ -465,7 +499,10 @@ impl ReadView {
             return Err(stopped.error());
         }
         *self.execution.lock().unwrap() = Some(execution.clone());
-        let result = self.check().and_then(|_| self.query_inner(request));
+        let result = crate::index_result(
+            &self.health,
+            self.check().and_then(|_| self.query_inner(request)),
+        );
         let elapsed = execution.check();
         *self.execution.lock().unwrap() = None;
         if let Err(error) = elapsed {
@@ -491,11 +528,30 @@ impl ReadView {
         if let Some(stopped) = self.stopped.get() {
             return Err(stopped.error());
         }
+        self.health.check()?;
         self.execution
             .lock()
             .unwrap()
             .as_ref()
             .map_or(Ok(()), |e| e.check())
+    }
+    pub(crate) fn snapshot_token(&self) -> Option<String> {
+        if self.health.incarnation().is_empty() {
+            return None;
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"know-code-snapshot-v1\0");
+        for value in [
+            self.logical_identity
+                .as_deref()
+                .expect("managed logical identity"),
+            self.health.incarnation().as_bytes(),
+            &self.generation.to_le_bytes(),
+        ] {
+            digest.update((value.len() as u64).to_le_bytes());
+            digest.update(value);
+        }
+        Some(format!("kcs1{:x}", digest.finalize()))
     }
     fn query_inner(&self, request: QueryRequest) -> Result<QueryResult> {
         if request.page_size.is_some() || request.cursor.is_some() {
@@ -506,12 +562,21 @@ impl ReadView {
                 "limit must be between 1 and 1000".into(),
             ));
         }
+        let snapshot = self.snapshot_token();
+        if request.snapshot.is_some() && request.snapshot != snapshot {
+            return Err(Error::SnapshotInvalidated);
+        }
+        if snapshot.is_some() && request.generation.is_some() && request.snapshot.is_none() {
+            return Err(Error::InvalidRequest(
+                "managed generation guards require the snapshot token from a fresh lookup".into(),
+            ));
+        }
         if request.generation.is_some_and(|g| g != self.generation) {
             return Err(Error::InvalidRequest(
                 "served generation changed; restart lookup before requesting details".into(),
             ));
         }
-        if request.op == "coverage" && request.generation.is_none() {
+        if request.op == "coverage" && request.generation.is_none() && request.snapshot.is_none() {
             return Err(Error::InvalidRequest(
                 "coverage requires generation from the result being expanded".into(),
             ));
@@ -563,7 +628,7 @@ impl ReadView {
         }
         let mut result = QueryResult {
             generation: self.generation,
-            snapshot: None,
+            snapshot,
             freshness: "unverified",
             coordination: None,
             workspace_coverage,

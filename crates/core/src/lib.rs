@@ -28,6 +28,8 @@ pub enum Error {
     ResponseLimitExceeded,
     #[error("cursor is no longer valid; restart the query")]
     CursorInvalidated,
+    #[error("snapshot no longer matches the served index; restart lookup")]
+    SnapshotInvalidated,
     #[error("cursor capacity is exhausted; retry after an active page finishes")]
     CursorLimit,
     #[error("indexing cancelled; previous generation preserved")]
@@ -74,6 +76,7 @@ impl Error {
             Self::QueryCancelled => "cancelled",
             Self::ResponseLimitExceeded => "response_limit_exceeded",
             Self::CursorInvalidated => "cursor_invalidated",
+            Self::SnapshotInvalidated => "snapshot_invalidated",
             Self::CursorLimit => "cursor_limit",
             Self::Cancelled => "cancelled",
             Self::ResourceLimited(_) => "resource_limited",
@@ -104,6 +107,7 @@ pub(crate) fn index_result<T>(guard: &recovery::IndexReadGuard, result: Result<T
         Err(Error::Sqlite(error)) => {
             let error = guard.map_sqlite(error);
             if matches!(error, Error::IndexCorrupt { .. }) {
+                control::index_fault_hint(guard.logical_path());
                 Err(error)
             } else {
                 guard.check()?;
@@ -191,57 +195,74 @@ pub fn query_json_cancellable(
             );
         }
     };
-    let result =
-        if request.page_size.is_some() || request.cursor.is_some() || request.op == "next_page" {
-            cursor::client::query(database, request, execution.clone(), maximum)
-        } else {
-            let result = (|| {
-                execution.check()?;
-                if request.freshness_wait_ms > 120000 {
-                    return Err(Error::InvalidRequest(
-                        "freshness_wait_ms cannot exceed 120000".into(),
-                    ));
+    let result = if request.page_size.is_some()
+        || request.cursor.is_some()
+        || request.op == "next_page"
+    {
+        cursor::client::query(database, request, execution.clone(), maximum)
+    } else {
+        let mut serving_health = None;
+        let result = (|| {
+            execution.check()?;
+            if request.freshness_wait_ms > 120000 {
+                return Err(Error::InvalidRequest(
+                    "freshness_wait_ms cannot exceed 120000".into(),
+                ));
+            }
+            let status = match control::wait_for_database_controlled(
+                std::path::Path::new(database),
+                request.freshness_wait_ms,
+                execution.clone(),
+            ) {
+                Err(error @ Error::UpdateRequired(_)) => return Err(error),
+                Err(error @ Error::IndexCorrupt { .. })
+                | Err(error @ Error::IndexRecovering(_)) => return Err(error),
+                Err(error) if matches!(&error,Error::Remote {code,..} if matches!(code.as_str(),"index_corrupt"|"index_recovering")) =>
+                {
+                    return Err(error);
                 }
-                let status = match control::wait_for_database_controlled(
-                    std::path::Path::new(database),
-                    request.freshness_wait_ms,
-                    execution.clone(),
-                ) {
-                    Err(error @ Error::UpdateRequired(_)) => return Err(error),
-                    Ok(Some(status)) if status.generation == 0 => return Err(Error::NotReady),
-                    other => other,
-                };
-                execution.check()?;
-                let mut result = query::ReadView::open_controlled(database, execution.clone())?
-                    .query_controlled(request, execution.clone())?;
-                match status {
-                    Ok(Some(status)) => {
-                        result.freshness = if status.available
-                            && status.phase == "idle"
-                            && status.observed_epoch == status.published_epoch
-                            && status.generation == result.generation
-                        {
-                            "current"
-                        } else {
-                            "stale"
-                        };
-                        result.coordination = Some(status);
-                    }
-                    Err(_)
-                        if control::root_for_database(std::path::Path::new(database))
-                            .is_some_and(|root| root.join("registry.db").exists()) =>
+                Ok(Some(status)) if status.generation == 0 => return Err(Error::NotReady),
+                other => other,
+            };
+            execution.check()?;
+            let view = query::ReadView::open_controlled(database, execution.clone())?;
+            serving_health = Some(view.health.clone());
+            let mut result = view.query_controlled(request, execution.clone())?;
+            match status {
+                Ok(Some(status)) => {
+                    result.freshness = if status.available
+                        && status.phase == "idle"
+                        && status.observed_epoch == status.published_epoch
+                        && status.generation == result.generation
                     {
-                        result.freshness = "stale"
-                    }
-                    _ => {}
+                        "current"
+                    } else {
+                        "stale"
+                    };
+                    result.coordination = Some(status);
                 }
-                Ok(result)
-            })();
-            execution
-                .check()
-                .and(result)
-                .and_then(|value| execution::encode(&value, execution.clone(), maximum))
-        };
+                Err(_)
+                    if control::root_for_database(std::path::Path::new(database))
+                        .is_some_and(|root| root.join("registry.db").exists()) =>
+                {
+                    result.freshness = "stale"
+                }
+                _ => {}
+            }
+            Ok(result)
+        })();
+        let encoded = execution.check().and(result).and_then(|value| {
+            if let Some(health) = &serving_health {
+                health.check()?;
+            }
+            execution::encode(&value, execution.clone(), maximum)
+        });
+        if let Some(health) = &serving_health {
+            crate::index_result(health, encoded)
+        } else {
+            encoded
+        }
+    };
     match result {
         Ok(json) => match execution.check() {
             Ok(()) => json,

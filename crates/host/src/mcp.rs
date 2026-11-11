@@ -287,6 +287,24 @@ fn tools() -> Vec<Tool> {
     context.extend(["include_source", "max_bytes", "cursor"]);
     let mut context_schema = schema(&context, &["symbol_id"]);
     context_schema["properties"]["max_bytes"] = source["properties"]["max_bytes"].clone();
+    let mut coverage_schema = schema(
+        &[
+            "generation",
+            "snapshot",
+            "compilation_id",
+            "limit",
+            "page_size",
+            "max_bytes",
+            "freshness_wait_ms",
+            "deadline_ms",
+            "response_max_bytes",
+        ],
+        &[],
+    );
+    coverage_schema.insert(
+        "anyOf".into(),
+        json!([{"required":["generation"]},{"required":["snapshot"]}]),
+    );
     let mut result = vec![
         make(
             "symbol_context",
@@ -295,21 +313,8 @@ fn tools() -> Vec<Tool> {
         ),
         make(
             "coverage_details",
-            "Expand coverage options and diagnostics for an exact served generation. max_bytes bounds detail payloads; provenance/counts remain visible when clipped.",
-            schema(
-                &[
-                    "generation",
-                    "snapshot",
-                    "compilation_id",
-                    "limit",
-                    "page_size",
-                    "max_bytes",
-                    "freshness_wait_ms",
-                    "deadline_ms",
-                    "response_max_bytes",
-                ],
-                &["generation"],
-            ),
+            "Expand coverage options and diagnostics for an exact served snapshot (or generation plus snapshot). max_bytes bounds detail payloads; provenance/counts remain visible when clipped.",
+            coverage_schema,
         ),
         make(
             "next_page",
