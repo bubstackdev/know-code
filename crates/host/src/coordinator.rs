@@ -603,9 +603,11 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
         wake(&changes, &callback_state, message);
     })?;
     let mut watched = BTreeMap::new();
+    let mut pending_unwatch = Vec::new();
     let mut running = false;
     let mut last_presence = Instant::now() - Duration::from_secs(10);
     loop {
+        let mut removals = std::mem::take(&mut pending_unwatch);
         let _ = shared.cursors.sweep();
         if !maintenance_active(&shared) && !shared.stop.load(Ordering::Acquire) {
             let mut discovery = shared.discovery.lock().unwrap();
@@ -659,7 +661,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     entry.status.available = false;
                     entry.status.phase = "unavailable".into();
                     if watched.remove(&root).is_some() {
-                        let _ = watcher.unwatch(&root);
+                        removals.push(root.clone());
                     }
                 } else if matches && !entry.status.available {
                     entry.status.available = true;
@@ -674,27 +676,29 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             last_presence = Instant::now();
             shared.changed.notify_all();
         }
-        // Install watches before starting analysis, including external compiler inputs.
+        // FSEvents restarts its whole stream when paths change. Plan first,
+        // mutate once, then reconcile every workspace across the restart gap.
+        let mut additions = BTreeMap::<PathBuf, (bool, BTreeSet<String>)>::new();
         {
             let mut entries = shared.entries.lock().unwrap();
+            // A removed root can also be another workspace's compiler-input
+            // parent. Replan before the same batch removes that shared watch.
+            if !removals.is_empty() {
+                for entry in entries.values_mut().filter(|e| e.status.available) {
+                    entry.watch_pending = true;
+                }
+            }
             for entry in entries
                 .values_mut()
                 .filter(|e| e.status.available && e.watch_pending)
             {
                 entry.watch_pending = false;
                 let root = PathBuf::from(&entry.status.workspace_root);
+                let database = entry.status.database.clone();
                 if watched.get(&root) != Some(&true) {
-                    match watcher.watch(&root, RecursiveMode::Recursive) {
-                        Ok(()) => {
-                            watched.insert(root.clone(), true);
-                        }
-                        Err(error) => {
-                            entry.status.available = false;
-                            entry.status.phase = "unavailable".into();
-                            entry.status.error = format!("cannot watch workspace: {error}");
-                            continue;
-                        }
-                    }
+                    let plan = additions.entry(root.clone()).or_default();
+                    plan.0 = true;
+                    plan.1.insert(database.clone());
                 }
                 for input in entry
                     .special_inputs
@@ -708,22 +712,67 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     if let Some(parent) = parent
                         && !watched.contains_key(parent)
                     {
-                        match watcher.watch(parent, RecursiveMode::NonRecursive) {
-                            Ok(()) => {
-                                watched.insert(parent.to_path_buf(), false);
-                            }
-                            Err(error) => {
-                                entry.status.available = false;
-                                entry.status.phase = "unavailable".into();
-                                entry.status.error = format!(
-                                    "cannot watch compiler input {}: {error}",
-                                    input.display()
-                                );
-                            }
+                        additions
+                            .entry(parent.to_path_buf())
+                            .or_default()
+                            .1
+                            .insert(database.clone());
+                    }
+                }
+            }
+        }
+        if !additions.is_empty() || !removals.is_empty() {
+            let input = shared.publisher.input();
+            let mut batch = watcher.paths_mut();
+            for path in removals {
+                let _ = batch.remove(&path);
+            }
+            let mut failures = Vec::new();
+            for (path, (recursive, owners)) in additions {
+                if watched.contains_key(&path) {
+                    let _ = batch.remove(&path);
+                }
+                match batch.add(
+                    &path,
+                    if recursive {
+                        RecursiveMode::Recursive
+                    } else {
+                        RecursiveMode::NonRecursive
+                    },
+                ) {
+                    Ok(()) => {
+                        watched.insert(path, recursive);
+                    }
+                    Err(error) => failures.push((
+                        owners,
+                        format!(
+                            "cannot watch saved compiler input {}: {error}",
+                            path.display()
+                        ),
+                    )),
+                }
+            }
+            // Always commit even after individual path errors; dropping an
+            // uncommitted batch may leave the native watcher stopped.
+            let started = batch.commit();
+            if let Err(error) = started {
+                return Err(format!("cannot restart native saved-file watcher: {error}").into());
+            }
+            {
+                let mut entries = shared.entries.lock().unwrap();
+                for (owners, message) in failures {
+                    for owner in owners {
+                        if let Some(entry) = entries.get_mut(&owner) {
+                            entry.status.available = false;
+                            entry.status.phase = "unavailable".into();
+                            entry.status.error = message.clone();
                         }
                     }
                 }
             }
+            mark_rescan(&shared);
+            drop(input);
+            shared.changed.notify_all();
         }
         if !running && !shared.stop.load(Ordering::Acquire) {
             let job = {
@@ -1116,7 +1165,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             Ok(Event::Rescan(_input)) => mark_rescan(&shared),
             Ok(Event::Unwatch(root)) => {
                 if watched.remove(&root).is_some() {
-                    let _ = watcher.unwatch(&root);
+                    pending_unwatch.push(root);
                 }
             }
             Ok(Event::Wake) | Err(mpsc::RecvTimeoutError::Timeout) => {}

@@ -84,6 +84,9 @@ def source_text(name):
     symbol = next(s for s in result['symbols'] if s['locations'])
     return query({'op': 'source', 'artifact_id': symbol['locations'][0]['artifact_id']})['result']['source']['text']
 
+# Save immediately after first idle: compiler-learned external watches may
+# still be changing. Native watch reconfiguration must reconcile this gap;
+# a sleep or explicit refresh here would hide a missed-event regression.
 before = owners()
 source = WORKSPACE / 'typescript/src/greeter.ts'
 original = source.read_text()
