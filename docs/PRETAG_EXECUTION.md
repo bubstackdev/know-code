@@ -53,6 +53,18 @@ The user supplied `developerID_application.cer` and requested a durable copy. Th
 
 The public certificate and probe metadata remain ignored local artifacts. They are not final release evidence: no final package has been signed or notarized, and normal-security installation is still required. Preserve the original producer/output hashes and record signing as an explicit transformation when final archives are assembled; do not rewrite unsigned build provenance to claim it produced signed bytes.
 
+### Staged signing and installed diagnostic checkpoint
+
+Source `ff4506d` produced a matching Debug package set in `.artifacts/pretag-wave/packages/diagnostic-02/`. A first packaging attempt correctly rejected .NET generated inputs changed by packaging at a later Git revision; the failure remains in `diagnostic/package-01`. Building and packaging at one unchanged revision passed (`diagnostic/package-02`).
+
+`scripts/sign_packages.py` signed copies of all four expected native payloads, preserved every non-native archive member and mode, retained the unsigned producer, and authenticated the final manifest/transform receipt with a keychain-backed CMS signature. Native verification checks the Apple Developer ID requirement, Team ID, exact certificate, hardened runtime and secure timestamp. Separate probes verified CMS content and rejected tampering. Four archive-boundary tests passed; independent review caught and fixed the optional `codesign` certificate-prefix argument before the actual staged run.
+
+The signed diagnostic manifest SHA-256 is `7cbd139f319b3591f7ec410def8acae60a18f2fca747b1308debc1185b8ead0a`; its producer-record SHA-256 is `5002de85a219e7f4b4470d5d910c0dc66c9fedaac6cdbb2feff00d645d4c7524`. Exact archives, unsigned originals and replay evidence remain in `.artifacts/pretag-wave/packages/signed-diagnostic-01/`. These actual signed archives passed all **27 installed checks**, including both native SDKs, TS/C# analysis, saved-source changes, CLI/MCP parity and relocation with checkout access denied and network denied after restoration. Raw installed evidence is `/Users/zakkeown/Code/.kco/siga4150bf98/result.json`; the invocation/log binding is `diagnostic/signed-install-01/summary.json`.
+
+All three signed archives contain the three newly pinned NuGet license texts with matching upstream commit/hash provenance; the artifact-bound check is `diagnostic/signed-notices-01.json`. The source audit is [PUBLICATION_AUDIT.md](reviews/PUBLICATION_AUDIT.md). Local unsigned copies and replay directories are operator evidence, not release assets.
+
+This is a diagnostic Debug checkpoint, not final release certification. It does not cover the subsequent npm 10 safety-policy changes, the final full/optimized or real-encoding gates, minimum-OS testing, notarization, quarantine/default-security installation or remote publication. No artifact was submitted to Apple notarization and no live runtime was replaced.
+
 ## Authorized GitHub replacement
 
 Destination: [bubstackdev/know-code](https://github.com/bubstackdev/know-code). The user explicitly authorized taking over the superseded repository and does not want its old history backed up. No old-history fetch, clone, mirror or backup ref is required. Read-only repository/branch-tip inspection confirmed the destination and administrator access; the local `origin` now points there.
