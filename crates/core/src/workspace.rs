@@ -312,8 +312,18 @@ pub fn differences(before: &Snapshot, after: &Snapshot) -> Vec<PathBuf> {
 }
 
 pub fn extra_inputs(database: &Path, root: &Path) -> Result<Vec<PathBuf>> {
+    let guard = crate::recovery::IndexReadGuard::open_unbudgeted(database)?;
+    extra_inputs_at(Some(guard.physical_path()), root).map_err(|error| match error {
+        Error::Sqlite(error) => guard.map_sqlite(error),
+        other => other,
+    })
+}
+/// A replacement plans from saved inputs and logical preparation checkpoints.
+/// Before selector publication, its verified external inputs come from the
+/// private destination, never the damaged selected database.
+pub fn extra_inputs_at(database: Option<&Path>, root: &Path) -> Result<Vec<PathBuf>> {
     let mut result = vec![];
-    if database.is_file() {
+    if let Some(database) = database.filter(|p| p.is_file()) {
         let conn = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let mut inputs=conn.prepare("SELECT c.input_paths_json FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=(SELECT current_generation FROM state)")?;
         for row in inputs.query_map([], |r| r.get::<_, String>(0))? {
@@ -354,6 +364,17 @@ pub fn extra_inputs(database: &Path, root: &Path) -> Result<Vec<PathBuf>> {
 
 // None means a complete refresh; Some scopes replace only those project units.
 pub fn affected_projects(
+    database: &Path,
+    root: &Path,
+    changes: &[PathBuf],
+) -> Result<Option<Vec<String>>> {
+    let guard = crate::recovery::IndexReadGuard::open_unbudgeted(database)?;
+    affected_projects_at(guard.physical_path(), root, changes).map_err(|error| match error {
+        Error::Sqlite(error) => guard.map_sqlite(error),
+        other => other,
+    })
+}
+fn affected_projects_at(
     database: &Path,
     root: &Path,
     changes: &[PathBuf],
@@ -450,6 +471,7 @@ pub struct RefreshOptions<'a> {
     pub expected_identity: &'a str,
     pub settings: &'a crate::protocol::WorkspaceAnalysisSettings,
     pub cursors: Option<&'a crate::cursor::CursorService>,
+    pub destination: Option<&'a crate::recovery::Candidate>,
 }
 
 pub fn preparation_fingerprint(inputs: &Snapshot, settings_paths: &[PathBuf]) -> String {
@@ -500,6 +522,7 @@ pub fn refresh_controlled(
         expected_identity,
         settings,
         cursors,
+        destination,
     } = options;
     if identity(root)? != expected_identity {
         return Err(Error::Provider(
@@ -684,5 +707,6 @@ pub fn refresh_controlled(
         },
         control,
         cursors,
+        destination,
     )
 }

@@ -96,14 +96,26 @@ struct State {
     groups: BTreeSet<i32>,
     sqlite: Option<rusqlite::InterruptHandle>,
 }
+type DiskCheck = Arc<dyn Fn(&Limits) -> Result<()> + Send + Sync>;
 struct Inner {
+    disk: Mutex<Option<DiskCheck>>,
     state: Mutex<State>,
     changed: Condvar,
 }
 /// Clones cancel the same analysis. The default control is explicitly unmanaged.
 #[derive(Clone, Default)]
-pub struct Control(Option<Arc<Inner>>);
+pub struct Control(Option<Arc<Inner>>, bool);
 impl Control {
+    /// Candidate SQLite publication is private; only selector cutover commits
+    /// the shared job and closes its cancellation/resource boundary.
+    pub(crate) fn staging(&self) -> Self {
+        Self(self.0.clone(), true)
+    }
+    pub fn guard_disk(&self, check: impl Fn(&Limits) -> Result<()> + Send + Sync + 'static) {
+        if let Some(inner) = &self.0 {
+            *inner.disk.lock().unwrap() = Some(Arc::new(check));
+        }
+    }
     pub fn committed(&self) -> bool {
         self.0
             .as_ref()
@@ -183,7 +195,7 @@ impl Control {
             return Err(reason.error());
         }
         let result = action();
-        if result.is_ok() {
+        if result.is_ok() && !self.1 {
             state.committed = true;
         }
         result
@@ -322,10 +334,14 @@ impl Governor {
                 "the shared analysis slot is already occupied".into(),
             ));
         }
-        let control = Control(Some(Arc::new(Inner {
-            state: Mutex::new(State::default()),
-            changed: Condvar::new(),
-        })));
+        let control = Control(
+            Some(Arc::new(Inner {
+                disk: Mutex::new(None),
+                state: Mutex::new(State::default()),
+                changed: Condvar::new(),
+            })),
+            false,
+        );
         let limits = Arc::clone(&self.limits);
         let monitor = control.clone();
         let meter = Arc::clone(&self.meter);
@@ -361,6 +377,9 @@ pub struct Session {
     governor: Arc<Governor>,
 }
 impl Session {
+    pub fn limits(&self) -> Limits {
+        self.governor.limits()
+    }
     pub fn control(&self) -> Control {
         self.control.clone()
     }
@@ -505,6 +524,7 @@ fn monitor_loop(
         }
     }
     let mut stopping = None;
+    let mut last_disk = Instant::now();
     loop {
         let limits = settings.lock().unwrap().clone();
         let usage = match sample(std::process::id() as i32) {
@@ -529,6 +549,16 @@ fn monitor_loop(
             let current = settings.lock().unwrap();
             if usage.memory > current.memory_mib * 1024 * 1024 {
                 control.stop(Stop::Limited(format!("shared memory limit exceeded: {} MiB observed, {} MiB allowed; raise the personal limit or reduce the project", usage.memory.div_ceil(1024*1024), current.memory_mib)));
+            }
+        }
+        if last_disk.elapsed() >= Duration::from_millis(100) {
+            last_disk = now;
+            let check = inner.disk.lock().unwrap().clone();
+            if let Some(check) = check {
+                let current = settings.lock().unwrap();
+                if let Err(error) = check(&current) {
+                    control.stop(Stop::Limited(format!("replacement disk guard: {error}")));
+                }
             }
         }
         let mut state = inner.state.lock().unwrap();

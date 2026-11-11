@@ -60,6 +60,7 @@ pub fn index_controlled(
         before_publish,
         control,
         None,
+        None,
     )
 }
 pub(crate) fn index_published(
@@ -70,9 +71,19 @@ pub(crate) fn index_published(
     before_publish: impl FnOnce() -> Result<()>,
     control: &Control,
     cursors: Option<&crate::cursor::CursorService>,
+    destination: Option<&crate::recovery::Candidate>,
 ) -> Result<u64> {
     control.check()?;
-    let mut writer = Writer::open_controlled(database, replacements, control)?;
+    let mut writer = match destination {
+        Some(candidate) => Writer::open_destination(
+            database,
+            &candidate.database,
+            None,
+            candidate.minimum_generation,
+            control,
+        )?,
+        None => Writer::open_controlled(database, replacements, control)?,
+    };
     let preparation_path = database.with_extension("preparation.json");
     let mut preparations: BTreeMap<String, PreparationResult> =
         match std::fs::read(&preparation_path) {
@@ -230,7 +241,13 @@ pub(crate) fn index_published(
         let details = errors.join().unwrap_or_default();
         control.check()?;
         execution.map_err(|error| match error {
-            Error::UpdateRequired(_) => error,
+            Error::UpdateRequired(_)
+            | Error::IndexCorrupt { .. }
+            | Error::IndexRecovering(_)
+            | Error::ResourceLimited(_)
+            | Error::Cancelled
+            | Error::Sqlite(_)
+            | Error::Io(_) => error,
             other => Error::Provider(format!("{other}\n{details}")),
         })?;
         if !exit.success() {
@@ -242,7 +259,9 @@ pub(crate) fn index_published(
     }
     control.check()?;
     before_publish()?;
-    if let Some(cursors) = cursors {
+    if destination.is_some() {
+        writer.publish_controlled(&control.staging())
+    } else if let Some(cursors) = cursors {
         cursors.publish(database, writer, control)
     } else {
         writer.publish_controlled(control)
