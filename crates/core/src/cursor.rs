@@ -147,6 +147,7 @@ pub struct CursorRegistry {
     entries: BTreeMap<[u8; 16], CursorEntry>,
     publication_waiting: bool,
     files: Option<result_store::ResultStore>,
+    retirement_warning: Option<String>,
 }
 impl CursorRegistry {
     pub fn new(owner: [u8; 16], maximum: usize) -> Result<Self> {
@@ -165,6 +166,7 @@ impl CursorRegistry {
             entries: BTreeMap::new(),
             publication_waiting: false,
             files: None,
+            retirement_warning: None,
         })
     }
 
@@ -435,19 +437,27 @@ impl CursorRegistry {
         execution: crate::execution::Execution,
     ) -> Result<u64> {
         let mut total = 0u64;
-        let mut databases = std::collections::BTreeSet::new();
+        let mut databases = std::collections::BTreeMap::new();
         for entry in self.entries.values() {
             total = accounting::add(total, entry.result_bytes_reserved)?;
-            databases.insert(entry.pin.database.as_path());
+            if entry.pin.health.check().is_ok() {
+                databases
+                    .entry((
+                        entry.pin.database.clone(),
+                        entry.pin.incarnation().to_owned(),
+                    ))
+                    .or_insert_with(|| entry.pin.health.clone());
+            }
         }
-        for database in databases {
+        for ((database, _incarnation), health) in databases {
             execution.check()?;
             let retention = GenerationRetention {
-                database: database.into(),
+                database: database.clone(),
                 owner: self.owner,
+                health,
             };
             let candidate = proposed
-                .filter(|(path, _)| *path == database)
+                .filter(|(path, _)| *path == database.as_path())
                 .map(|(_, generation)| generation);
             total = accounting::add(
                 total,
@@ -526,12 +536,26 @@ impl CursorRegistry {
             {
                 entry.retiring = true;
             }
+            if entry.pin.health.check().is_err() {
+                entry.retiring = true;
+            }
             if (entry.expired(now) || entry.retiring) && entry.reads.is_empty() {
                 expired.push(*id);
             }
         }
+        self.retirement_warning = None;
         for id in expired {
-            self.retire(id, execution.clone())?;
+            let bad = self
+                .entries
+                .get(&id)
+                .is_some_and(|entry| entry.pin.health.check().is_err());
+            if let Err(error) = self.retire(id, execution.clone()) {
+                if bad {
+                    self.retirement_warning = Some(error.to_string());
+                } else {
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -542,11 +566,18 @@ impl CursorRegistry {
         if let Some(files) = &mut self.files {
             files.remove(&hexadecimal(&entry.pin.id))?;
         }
-        let result = GenerationRetention {
-            database: entry.pin.database.clone(),
-            owner: self.owner,
-        }
-        .release_controlled(&entry.pin, Some(execution));
+        let result = if entry.pin.health.check().is_err() {
+            // The whole fenced incarnation is reclaimed under its physical
+            // lease. Never reopen its damaged SQLite pin tables.
+            Ok(())
+        } else {
+            GenerationRetention {
+                database: entry.pin.database.clone(),
+                owner: self.owner,
+                health: entry.pin.health.clone(),
+            }
+            .release_controlled(&entry.pin, Some(execution))
+        };
         match result {
             // A different owner has already invalidated this incarnation's
             // pins. Other cleanup failures keep the entry for a later retry.
@@ -594,6 +625,7 @@ impl CursorRegistry {
 pub struct GenerationRetention {
     database: PathBuf,
     owner: [u8; 16],
+    health: crate::recovery::IndexReadGuard,
 }
 
 /// Read-only descriptor. Owning/dropping this value does not perform writes.
@@ -602,11 +634,15 @@ pub struct GenerationPin {
     pub(crate) database: PathBuf,
     pub(crate) owner: [u8; 16],
     pub(crate) id: [u8; 16],
+    pub(crate) health: crate::recovery::IndexReadGuard,
     generation: u64,
 }
 impl GenerationPin {
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+    pub fn incarnation(&self) -> &str {
+        self.health.incarnation()
     }
     pub fn open_view(&self) -> Result<ReadView> {
         ReadView::open_pinned(self)
@@ -634,43 +670,55 @@ pub(crate) fn storage_active(connection: &Connection) -> Result<bool> {
     Ok(true)
 }
 
-fn open_writer_controlled(path: &Path, execution: Option<Execution>) -> Result<Connection> {
-    if !path.is_file() {
-        return Err(Error::NotReady);
-    }
-    let mut connection = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    if let Some(execution) = execution {
-        execution.check()?;
-        let progress = execution.clone();
-        connection.progress_handler(1_000, Some(move || progress.check().is_err()))?;
-        connection.busy_handler(Some(move |count| {
-            if count >= 2_000 {
-                return false;
-            }
-            match execution.remaining() {
-                Ok(remaining) => {
-                    std::thread::sleep(remaining.min(Duration::from_millis(1)));
-                    true
+fn open_writer_controlled(
+    health: &crate::recovery::IndexReadGuard,
+    execution: Option<Execution>,
+) -> Result<Connection> {
+    health.check()?;
+    let result = (|| -> Result<Connection> {
+        let path = health.physical_path();
+        if !path.is_file() {
+            return Err(Error::NotReady);
+        }
+        let mut connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        if let Some(execution) = execution {
+            execution.check()?;
+            let progress = execution.clone();
+            let progress_health = health.clone();
+            connection.progress_handler(
+                1_000,
+                Some(move || progress.check().is_err() || progress_health.check().is_err()),
+            )?;
+            connection.busy_handler(Some(move |count| {
+                if count >= 2_000 {
+                    return false;
                 }
-                Err(_) => false,
-            }
-        }))?;
-    } else {
-        connection.busy_timeout(Duration::from_secs(2))?;
-    }
-    connection.execute_batch(
-        "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048;",
-    )?;
-    let version: u32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if !(2..=crate::store::SCHEMA_VERSION as u32).contains(&version) {
-        return Err(Error::UpdateRequired(format!(
-            "index format {version} cannot retain cursor generations"
-        )));
-    }
-    Ok(connection)
+                match execution.remaining() {
+                    Ok(remaining) => {
+                        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }))?;
+        } else {
+            connection.busy_timeout(Duration::from_secs(2))?;
+        }
+        connection.execute_batch(
+            "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-2048;",
+        )?;
+        let version: u32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if !(2..=crate::store::SCHEMA_VERSION as u32).contains(&version) {
+            return Err(Error::UpdateRequired(format!(
+                "index format {version} cannot retain cursor generations"
+            )));
+        }
+        Ok(connection)
+    })();
+    crate::index_result(health, result)
 }
 
 impl GenerationRetention {
@@ -684,38 +732,43 @@ impl GenerationRetention {
         owner: [u8; 16],
         execution: Option<Execution>,
     ) -> Result<Self> {
-        let mut connection = open_writer_controlled(database, execution.clone())?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let active = storage_active(&tx)?;
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS staging_generations(generation INTEGER PRIMARY KEY REFERENCES generations(id) ON DELETE CASCADE);
+        let health = crate::recovery::IndexReadGuard::open(database, execution.clone())?;
+        let result = (|| -> Result<Self> {
+            let mut connection = open_writer_controlled(&health, execution.clone())?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let active = storage_active(&tx)?;
+            tx.execute_batch("CREATE TABLE IF NOT EXISTS staging_generations(generation INTEGER PRIMARY KEY REFERENCES generations(id) ON DELETE CASCADE);
           CREATE TABLE IF NOT EXISTS cursor_retention_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),version INTEGER NOT NULL,owner BLOB NOT NULL CHECK(length(owner)=16));
           CREATE TABLE IF NOT EXISTS cursor_generation_pins(id BLOB PRIMARY KEY CHECK(length(id)=16),generation INTEGER NOT NULL REFERENCES generations(id) ON DELETE CASCADE,owner BLOB NOT NULL CHECK(length(owner)=16));
           CREATE INDEX IF NOT EXISTS cursor_pin_generation ON cursor_generation_pins(generation);
           CREATE TABLE IF NOT EXISTS cursor_unit_costs_v1(owner_generation INTEGER,compilation_id TEXT,bytes INTEGER NOT NULL CHECK(bytes>=0),store_format INTEGER NOT NULL,PRIMARY KEY(owner_generation,compilation_id),FOREIGN KEY(owner_generation,compilation_id) REFERENCES compilations(generation,id) ON DELETE CASCADE);")?;
-        let prior: Option<Vec<u8>> = if active {
-            tx.query_row(
-                "SELECT owner FROM cursor_retention_state WHERE singleton=1",
-                [],
-                |r| r.get(0),
-            )
-            .optional()?
-        } else {
-            None
-        };
-        if prior.as_deref() != Some(owner.as_slice()) {
-            tx.execute("DELETE FROM cursor_generation_pins", [])?;
-            tx.execute("INSERT INTO cursor_retention_state VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version,owner=excluded.owner", params![RETENTION_VERSION, owner.as_slice()])?;
-            tx.execute("DELETE FROM generation_units WHERE generation IS NOT (SELECT current_generation FROM state) AND generation NOT IN (SELECT generation FROM staging_generations)", [])?;
-            crate::store::reclaim(&tx)?;
-        }
-        if let Some(execution) = execution {
-            execution.check()?;
-        }
-        tx.commit()?;
-        Ok(Self {
-            database: database.to_path_buf(),
-            owner,
-        })
+            let prior: Option<Vec<u8>> = if active {
+                tx.query_row(
+                    "SELECT owner FROM cursor_retention_state WHERE singleton=1",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?
+            } else {
+                None
+            };
+            if prior.as_deref() != Some(owner.as_slice()) {
+                tx.execute("DELETE FROM cursor_generation_pins", [])?;
+                tx.execute("INSERT INTO cursor_retention_state VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET version=excluded.version,owner=excluded.owner", params![RETENTION_VERSION, owner.as_slice()])?;
+                tx.execute("DELETE FROM generation_units WHERE generation IS NOT (SELECT current_generation FROM state) AND generation NOT IN (SELECT generation FROM staging_generations)", [])?;
+                crate::store::reclaim(&tx)?;
+            }
+            if let Some(execution) = execution {
+                execution.check()?;
+            }
+            tx.commit()?;
+            Ok(Self {
+                database: database.to_path_buf(),
+                owner,
+                health: health.clone(),
+            })
+        })();
+        crate::index_result(&health, result)
     }
 
     fn check_owner(&self, connection: &Connection) -> Result<()> {
@@ -737,53 +790,65 @@ impl GenerationRetention {
         self.pin_controlled(None)
     }
     fn pin_controlled(&self, execution: Option<Execution>) -> Result<GenerationPin> {
-        let id = nonce()?;
-        let mut connection = open_writer_controlled(&self.database, execution.clone())?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        self.check_owner(&tx)?;
-        let generation: Option<u64> = tx.query_row(
-            "SELECT current_generation FROM state WHERE singleton=1",
-            [],
-            |r| r.get(0),
-        )?;
-        let generation = generation.ok_or(Error::NotReady)?;
-        tx.execute(
-            "INSERT INTO cursor_generation_pins VALUES(?,?,?)",
-            params![id.as_slice(), generation, self.owner.as_slice()],
-        )?;
-        if let Some(execution) = execution {
-            execution.check()?;
-        }
-        tx.commit()?;
-        Ok(GenerationPin {
-            database: self.database.clone(),
-            owner: self.owner,
-            id,
-            generation,
-        })
+        self.health.check()?;
+        let result = (|| -> Result<GenerationPin> {
+            let id = nonce()?;
+            let mut connection = open_writer_controlled(&self.health, execution.clone())?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            self.check_owner(&tx)?;
+            let generation: Option<u64> = tx.query_row(
+                "SELECT current_generation FROM state WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?;
+            let generation = generation.ok_or(Error::NotReady)?;
+            tx.execute(
+                "INSERT INTO cursor_generation_pins VALUES(?,?,?)",
+                params![id.as_slice(), generation, self.owner.as_slice()],
+            )?;
+            if let Some(execution) = execution {
+                execution.check()?;
+            }
+            tx.commit()?;
+            Ok(GenerationPin {
+                database: self.database.clone(),
+                owner: self.owner,
+                id,
+                generation,
+                health: self.health.clone(),
+            })
+        })();
+        crate::index_result(&self.health, result)
     }
 
     pub fn release(&self, pin: &GenerationPin) -> Result<()> {
         self.release_controlled(pin, None)
     }
     fn release_controlled(&self, pin: &GenerationPin, execution: Option<Execution>) -> Result<()> {
-        if pin.database != self.database || pin.owner != self.owner {
-            return Err(Error::CursorInvalidated);
-        }
-        let mut connection = open_writer_controlled(&self.database, execution.clone())?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        self.check_owner(&tx)?;
-        tx.execute(
-            "DELETE FROM cursor_generation_pins WHERE id=? AND owner=?",
-            params![pin.id.as_slice(), self.owner.as_slice()],
-        )?;
-        tx.execute("DELETE FROM generation_units WHERE generation=? AND generation IS NOT (SELECT current_generation FROM state) AND NOT EXISTS(SELECT 1 FROM cursor_generation_pins WHERE generation=?)", params![pin.generation, pin.generation])?;
-        crate::store::reclaim(&tx)?;
-        if let Some(execution) = execution {
-            execution.check()?;
-        }
-        tx.commit()?;
-        Ok(())
+        self.health.check()?;
+        let result = (|| -> Result<()> {
+            if pin.database != self.database
+                || pin.owner != self.owner
+                || pin.incarnation() != self.health.incarnation()
+            {
+                return Err(Error::CursorInvalidated);
+            }
+            let mut connection = open_writer_controlled(&self.health, execution.clone())?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            self.check_owner(&tx)?;
+            tx.execute(
+                "DELETE FROM cursor_generation_pins WHERE id=? AND owner=?",
+                params![pin.id.as_slice(), self.owner.as_slice()],
+            )?;
+            tx.execute("DELETE FROM generation_units WHERE generation=? AND generation IS NOT (SELECT current_generation FROM state) AND NOT EXISTS(SELECT 1 FROM cursor_generation_pins WHERE generation=?)", params![pin.generation, pin.generation])?;
+            crate::store::reclaim(&tx)?;
+            if let Some(execution) = execution {
+                execution.check()?;
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        crate::index_result(&self.health, result)
     }
 }
 

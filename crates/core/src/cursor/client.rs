@@ -94,6 +94,7 @@ struct Lease<'a> {
     status: Option<WorkspaceStatus>,
     execution: Execution,
     creator: bool,
+    health: crate::recovery::IndexReadGuard,
 }
 impl<'a> Lease<'a> {
     fn from_response(
@@ -119,6 +120,22 @@ impl<'a> Lease<'a> {
         unhex::<16>(&reply.lease)?;
         let execution = execution.cap_at(Duration::from_millis(reply.lease_deadline_ms))?;
         execution.check()?;
+        let health = if reply.index_incarnation.is_empty() {
+            let health = crate::recovery::IndexReadGuard::open(
+                Path::new(database),
+                Some(execution.clone()),
+            )?;
+            if !health.incarnation().is_empty() {
+                return Err(Error::Protocol("missing cursor index incarnation".into()));
+            }
+            health
+        } else {
+            crate::recovery::IndexReadGuard::open_incarnation(
+                Path::new(database),
+                &reply.index_incarnation,
+                execution.clone(),
+            )?
+        };
         Ok(Self {
             root,
             database,
@@ -127,6 +144,7 @@ impl<'a> Lease<'a> {
             status: response.workspaces.into_iter().next(),
             execution,
             creator,
+            health,
         })
     }
     fn call(&self, mut request: CursorRequest) -> Result<ControlResponse> {
@@ -135,17 +153,19 @@ impl<'a> Lease<'a> {
         rpc(self.root, self.database, request, self.execution.clone())
     }
     fn finish(mut self, result: Result<String>) -> Result<String> {
-        let result = result.and_then(|json| {
+        let result = crate::index_result(&self.health, result).and_then(|json| {
             self.call(CursorRequest {
                 action: "finish".into(),
                 ..Default::default()
             })?;
             self.execution.check()?;
+            self.health.check()?;
             Ok(json)
         });
         match result {
             Ok(json) => Ok(json),
             Err(error) => {
+                control::report_index_corruption(&error, &self.execution);
                 // Cleanup cannot inherit a cancelled flag. It has a separate
                 // small budget, never extending the coordinator read lease.
                 if let Ok(cleanup) = Execution::new(Default::default(), Some(200))
@@ -176,6 +196,7 @@ impl<'a> Lease<'a> {
             owner: self.handle.owner,
             id: self.handle.id,
             generation: self.reply.generation,
+            health: self.health.clone(),
         }
     }
     fn open_result(&self, reply: &CursorReply) -> Result<File> {
@@ -453,6 +474,7 @@ mod tests {
                         panic!("expected control request");
                     };
                     let mut response = ControlResponse {
+                        index_lifecycle_version: crate::protocol::INDEX_LIFECYCLE_VERSION,
                         cursor_control_version: CONTROL_VERSION,
                         resource_control_version: crate::resource::CONTROL_VERSION,
                         analysis_settings_version: crate::settings::VERSION,
@@ -543,6 +565,7 @@ mod tests {
                 &Envelope {
                     protocol_version: VERSION,
                     payload: Some(Payload::ControlResponse(ControlResponse {
+                        index_lifecycle_version: crate::protocol::INDEX_LIFECYCLE_VERSION,
                         error_code: "coordinator_error".into(),
                         error_message: "unknown control operation".into(),
                         ..Default::default()

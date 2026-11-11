@@ -125,12 +125,12 @@ impl GenerationRetention {
         execution: Execution,
     ) -> Result<RetainedUsage> {
         execution.check()?;
-        let result = self.measure(proposed, execution.clone());
+        let result = crate::index_result(&self.health, self.measure(proposed, execution.clone()));
         execution.check()?;
         result
     }
     fn open_accounting(&self, execution: Execution) -> Result<Connection> {
-        let connection = open_writer_controlled(&self.database, Some(execution))?;
+        let connection = open_writer_controlled(&self.health, Some(execution))?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version != crate::store::SCHEMA_VERSION {
             return Err(Error::UpdateRequired(

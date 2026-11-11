@@ -17,7 +17,7 @@ use std::{
     },
 };
 
-pub const CONTROL_VERSION: u32 = 1;
+pub const CONTROL_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -97,7 +97,7 @@ impl CursorService {
         // Retire previous-owner pins even if result-cache cleanup later fails.
         // A damaged cache must not retain obsolete index generations forever.
         for database in databases {
-            if database.is_file() {
+            if crate::recovery::selected_path(&database).is_ok_and(|path| path.is_file()) {
                 let activated = startup
                     .phase(Duration::from_millis(20))
                     .and_then(|execution| {
@@ -107,6 +107,7 @@ impl CursorService {
                     Ok(_) => {
                         initialized.insert(database);
                     }
+                    Err(Error::IndexCorrupt { .. } | Error::IndexRecovering(_)) => {}
                     Err(error) => {
                         cleanup_pending.insert(database, error.to_string());
                     }
@@ -199,6 +200,21 @@ impl CursorService {
         self.changed.notify_all();
         Ok(())
     }
+    /// Corrupt pin SQL is abandoned with the physical incarnation. Results
+    /// still retire through normal file cleanup, retaining failed charges.
+    pub fn invalidate_corrupt(&self, database: &Path, incarnation: &str) -> Result<()> {
+        let mut state = self.lock()?;
+        state.initialized.remove(database);
+        state.cleanup_pending.remove(database);
+        state.cleanup_queue.retain(|path| path != database);
+        for entry in state.registry.entries.values_mut() {
+            if entry.pin.database == database && entry.pin.incarnation() == incarnation {
+                entry.retiring = true;
+            }
+        }
+        self.changed.notify_all();
+        Ok(())
+    }
     pub fn register(&self, database: &Path) -> Result<()> {
         self.lock()?.disabled.remove(database);
         Ok(())
@@ -266,6 +282,7 @@ impl CursorService {
                         .next()
                         .map(|error| format!("previous cursor pin cleanup is pending: {error}"))
                 })
+                .or_else(|| state.registry.retirement_warning.clone())
                 .or_else(|| state.pressure.clone())
                 .or_else(|| state.maintenance_error.clone())
                 .unwrap_or_default();
@@ -292,8 +309,8 @@ impl CursorService {
                 "cursor result storage unavailable: {error}; repair the cursor cache permissions/contents and restart the coordinator"
             )));
         }
-        Self::initialize(&mut state, database, execution.clone())?;
         if request.action == "admit" {
+            Self::initialize(&mut state, database, execution.clone())?;
             if !state.cleanup_pending.is_empty() {
                 return Err(Error::ResourceLimited("previous cursor pins are still being cleaned up; retry when cursor settings no longer report pending cleanup".into()));
             }
@@ -328,6 +345,10 @@ impl CursorService {
                 .entries
                 .get(&handle.id)
                 .ok_or(Error::CursorInvalidated)?;
+            if entry.pin.database != database || entry.retiring || entry.pin.health.check().is_err()
+            {
+                return Err(Error::CursorInvalidated);
+            }
             if entry.creator.is_some() {
                 return Err(Error::ResourceLimited(
                     "cursor result is not complete yet".into(),
@@ -344,7 +365,8 @@ impl CursorService {
                 .borrow_controlled(database, handle, execution)?;
             return Self::reply(&state, &read, Some(&stored));
         }
-        let read = Self::read(&state.registry, database, handle, &request.lease)?;
+        let cleanup = matches!(request.action.as_str(), "finish" | "discard" | "invalidate");
+        let read = Self::read(&state.registry, database, handle, &request.lease, cleanup)?;
         let creator = state.registry.entries[&handle.id].creator == Some(read.id);
         match request.action.as_str() {
             "reserve" if creator => {
@@ -388,6 +410,19 @@ impl CursorService {
                 Self::reply(&state, &read, Some(&stored))
             }
             "finish" => {
+                if read.pin.health.check().is_err() {
+                    let entry = state
+                        .registry
+                        .entries
+                        .get_mut(&handle.id)
+                        .expect("read cursor");
+                    entry.reads.remove(&read.id);
+                    entry.retiring = true;
+                    if entry.reads.is_empty() {
+                        state.registry.retire(handle.id, execution)?;
+                    }
+                    return Ok(CursorReply::default());
+                }
                 if creator {
                     state
                         .registry
@@ -439,6 +474,7 @@ impl CursorService {
         database: &Path,
         handle: CursorHandle,
         lease: &str,
+        cleanup: bool,
     ) -> Result<CursorRead> {
         let entry = registry
             .entries
@@ -447,7 +483,11 @@ impl CursorService {
         let now = crate::execution::continuous_time()?;
         let id = unhex::<16>(lease)?;
         let until = *entry.reads.get(&id).ok_or(Error::CursorInvalidated)?;
-        if entry.pin.database != database || entry.retiring || entry.expired(now) || until <= now {
+        if entry.pin.database != database
+            || (!cleanup && (entry.retiring || entry.pin.health.check().is_err()))
+            || entry.expired(now)
+            || until <= now
+        {
             return Err(Error::CursorInvalidated);
         }
         Ok(CursorRead {
@@ -463,12 +503,14 @@ impl CursorService {
         read: &CursorRead,
         stored: Option<&result_store::StoredResult>,
     ) -> Result<CursorReply> {
+        read.pin.health.check()?;
         let mut reply = CursorReply {
             cursor: read.handle.prefix(),
             lease: hexadecimal(&read.id),
             owner: read.pin.owner.to_vec(),
             pin: read.pin.id.to_vec(),
             generation: read.pin.generation,
+            index_incarnation: read.pin.incarnation().into(),
             lease_deadline_ms: read.until.as_millis().try_into().map_err(|_| {
                 Error::InvalidRequest("cursor deadline is not representable".into())
             })?,
@@ -624,6 +666,75 @@ mod tests {
         result
     }
     #[test]
+    fn bad_pin_retirement_preserves_other_workspaces_and_failed_file_charges() {
+        for fail_cleanup in [false, true] {
+            let (root, db, prior) = fixture();
+            drop(prior);
+            let healthy = crate::cursor::lifecycle_tests::database()
+                .canonicalize()
+                .unwrap();
+            crate::recovery::adopt(&db, 1).unwrap();
+            let service = CursorService::new(&root, [db.clone(), healthy.clone()]).unwrap();
+            let bad_result = ready(&service, &db);
+            let healthy_result = ready(&service, &healthy);
+            let guard = crate::recovery::IndexReadGuard::open_unbudgeted(&db).unwrap();
+            assert_eq!(bad_result.index_incarnation, guard.incarnation());
+            std::fs::write(&db, b"owned corrupt SQLite header").unwrap();
+            let connection = rusqlite::Connection::open(&db).unwrap();
+            let error = connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
+                .unwrap_err();
+            assert!(matches!(
+                guard.map_sqlite(error),
+                Error::IndexCorrupt { .. }
+            ));
+            drop(connection);
+            if fail_cleanup {
+                std::fs::remove_file(&bad_result.result_path).unwrap();
+                std::fs::create_dir(&bad_result.result_path).unwrap();
+            }
+            service
+                .invalidate_corrupt(&db, guard.incarnation())
+                .unwrap();
+            assert!(matches!(
+                call(&service, &db, action("borrow", Some(&bad_result))),
+                Err(Error::CursorInvalidated)
+            ));
+            let borrowed =
+                call(&service, &healthy, action("borrow", Some(&healthy_result))).unwrap();
+            assert_eq!(std::fs::read(&borrowed.result_path).unwrap(), b"saved");
+            call(&service, &healthy, action("finish", Some(&borrowed))).unwrap();
+            let handle = CursorHandle::parse_prefix(&bad_result.cursor).unwrap();
+            {
+                let state = service.lock().unwrap();
+                assert_eq!(
+                    state.registry.entries.contains_key(&handle.id),
+                    fail_cleanup
+                );
+                if fail_cleanup {
+                    assert_eq!(state.registry.entries[&handle.id].result_bytes_reserved, 5);
+                    assert!(state.registry.retirement_warning.is_some());
+                }
+            }
+            if fail_cleanup {
+                std::fs::remove_dir(&bad_result.result_path).unwrap();
+                service.sweep().unwrap();
+                assert!(
+                    !service
+                        .lock()
+                        .unwrap()
+                        .registry
+                        .entries
+                        .contains_key(&handle.id)
+                );
+            }
+            assert!(
+                db.exists(),
+                "a legacy physical family was deleted while safety was unknown"
+            );
+        }
+    }
+    #[test]
     fn streamed_result_survives_publication_but_not_restart() {
         let (root, db, service) = fixture();
         let stored = ready(&service, &db);
@@ -637,6 +748,7 @@ mod tests {
             owner: handle.owner,
             id: handle.id,
             generation: borrowed.generation,
+            health: crate::recovery::IndexReadGuard::open_unbudgeted(&db).unwrap(),
         };
         let request = serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap();
         assert_eq!(
