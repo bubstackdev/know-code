@@ -93,6 +93,27 @@ impl Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
+// Preserve the typed SQLite cause and the exact guarded incarnation. A
+// coordinator registry error never crosses this index-connection boundary.
+pub(crate) fn index_result<T>(guard: &recovery::IndexReadGuard, result: Result<T>) -> Result<T> {
+    match result {
+        Ok(value) => {
+            guard.check()?;
+            Ok(value)
+        }
+        Err(Error::Sqlite(error)) => {
+            let error = guard.map_sqlite(error);
+            if matches!(error, Error::IndexCorrupt { .. }) {
+                Err(error)
+            } else {
+                guard.check()?;
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub fn query_json(database: &str, request: &str) -> String {
     query_json_started(database, request, execution::QueryStart::default())
 }

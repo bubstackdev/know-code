@@ -152,6 +152,7 @@ pub struct Writer {
     _ownership: File,
     pub generation: u64,
     published: bool,
+    health: Option<crate::recovery::IndexReadGuard>,
 }
 
 impl Writer {
@@ -172,8 +173,36 @@ impl Writer {
         replacements: Option<&[String]>,
         control: &crate::resource::Control,
     ) -> Result<Self> {
+        Self::open_target(path, None, replacements, 0, control)
+    }
+
+    /// Recovery writes only its unpublished physical destination while holding
+    /// the same stable logical workspace writer fence as ordinary updates.
+    pub fn open_destination(
+        logical: &Path,
+        physical: &Path,
+        replacements: Option<&[String]>,
+        minimum_generation: u64,
+        control: &crate::resource::Control,
+    ) -> Result<Self> {
+        Self::open_target(
+            logical,
+            Some(physical),
+            replacements,
+            minimum_generation,
+            control,
+        )
+    }
+
+    fn open_target(
+        logical: &Path,
+        destination: Option<&Path>,
+        replacements: Option<&[String]>,
+        minimum_generation: u64,
+        control: &crate::resource::Control,
+    ) -> Result<Self> {
         control.check()?;
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = logical.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let ownership = OpenOptions::new()
@@ -181,13 +210,27 @@ impl Writer {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(path.with_extension("writer.lock"))?;
+            .open(logical.with_extension("writer.lock"))?;
         ownership
             .try_lock()
             .map_err(|e| Error::Provider(format!("workspace index already has a writer: {e}")))?;
-        let mut connection = Connection::open(path)?;
-        let interrupt = connection.get_interrupt_handle();
-        control.interruptible(interrupt, || {
+        // Resolve after the logical fence. A candidate is unpublished and may
+        // be written even though the selected serving incarnation is BAD.
+        let health = if destination.is_none() {
+            Some(crate::recovery::IndexReadGuard::open_unbudgeted(logical)?)
+        } else {
+            None
+        };
+        let path = destination.unwrap_or_else(|| {
+            health
+                .as_ref()
+                .expect("selected index guard")
+                .physical_path()
+        });
+        let result = (|| -> Result<Self> {
+            let mut connection = Connection::open(path)?;
+            let interrupt = connection.get_interrupt_handle();
+            control.interruptible(interrupt, || {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if ![0, 1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION].contains(&version) {
@@ -239,6 +282,8 @@ impl Writer {
             [],
             |r| r.get(0),
         )?;
+        let generation = generation.max(minimum_generation).max(crate::recovery::generation_floor(logical, 0)?);
+        crate::recovery::reserve_generation(logical,generation)?;
         tx.execute("INSERT INTO generations VALUES(?)", [generation])?;
         tx.execute("INSERT INTO staging_generations VALUES(?)", [generation])?;
         if let Some(replacements) = replacements {
@@ -263,11 +308,30 @@ impl Writer {
             _ownership: ownership,
             generation,
             published: false,
+            health: health.clone(),
         })
         })
+        })();
+        if let Some(guard) = &health {
+            crate::index_result(guard, result)
+        } else {
+            result
+        }
     }
 
     pub fn stage(&mut self, payload: envelope::Payload) -> Result<()> {
+        if let Some(health) = &self.health {
+            health.check()?;
+        }
+        let result = self.stage_inner(payload);
+        if let Some(health) = &self.health {
+            crate::index_result(health, result)
+        } else {
+            result
+        }
+    }
+
+    fn stage_inner(&mut self, payload: envelope::Payload) -> Result<()> {
         // A frame is already received before this short transaction begins.
         let tx = self
             .connection
@@ -560,8 +624,17 @@ impl Writer {
     }
 
     pub fn publish_controlled(self, control: &crate::resource::Control) -> Result<u64> {
+        let health = self.health.clone();
+        if let Some(guard) = &health {
+            guard.check()?;
+        }
         let interrupt = self.connection.get_interrupt_handle();
-        control.interruptible(interrupt, || self.finish_publication(control))
+        let result = control.interruptible(interrupt, || self.finish_publication(control));
+        if let Some(guard) = &health {
+            crate::index_result(guard, result)
+        } else {
+            result
+        }
     }
     fn finish_publication(mut self, control: &crate::resource::Control) -> Result<u64> {
         control.check()?;
@@ -595,6 +668,9 @@ impl Writer {
         discard_unretained_manifests(&tx)?;
         reclaim(&tx)?;
         control.publish(|| {
+            if let Some(health) = &self.health {
+                health.check()?;
+            }
             tx.commit()?;
             Ok(())
         })?;
@@ -612,7 +688,12 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        if !self.published {
+        if !self.published
+            && self
+                .health
+                .as_ref()
+                .is_none_or(|health| health.check().is_ok())
+        {
             let _ = self.connection.execute(
                 "DELETE FROM staging_generations WHERE generation=?",
                 [self.generation],
