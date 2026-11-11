@@ -72,7 +72,7 @@ def query(request, parity=False):
     return result['result']
 
 def symbol(name, project, target=None, external=False):
-    rows = query({'op': 'symbols', 'name': name})['symbols']
+    rows = query({'op': 'symbols', 'name': name, 'target': target})['symbols']
     rows = [s for s in rows if s['compilation_id'].startswith(project) and s['external'] == external and (target is None or s['target'] == target)]
     assert len(rows) == 1, (name, project, target, rows)
     return rows[0]['id']

@@ -82,7 +82,7 @@ def query(request,parity=True):
                 raise AssertionError(f'parity mismatch: {RUN}')
     return response['result']
 def symbol(name,project,target=None,signature=None):
-    rows=query({'op':'symbols','name':name},False)['symbols']
+    rows=query({'op':'symbols','name':name,'target':target},False)['symbols']
     rows=[s for s in rows if s['compilation_id'].startswith(project) and not s['external'] and (target is None or s['target']==target) and (signature is None or signature in s['signature'])]
     assert len(rows)==1,(name,project,rows);return rows[0]['id']
 checks=[]

@@ -117,7 +117,7 @@ def query(request, parity=False):
 
 
 def symbol(name, language, signature=None):
-    result = query({'op': 'symbols', 'name': name})
+    result = query({'op': 'symbols', 'name': name, 'target': 'net10.0' if language == 'cs' else None})
     rows = [s for s in result['symbols'] if s['compilation_id'].startswith('ts:' if language == 'ts' else 'cs:')
             and not s['kind'].startswith('Alias') and (language == 'ts' or s['target'] == 'net10.0')]
     if signature:
