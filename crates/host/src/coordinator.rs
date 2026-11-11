@@ -2118,6 +2118,18 @@ fn revoke_entry_execution(shared: &Shared, entry: &mut Entry) {
 }
 
 fn defer_permission_interruption(entry: &mut Entry, done: &JobResult) -> AnyResult<()> {
+    // A user cancellation may be accepted after permission stopped the worker
+    // but before its result is handed off. Regranting permission cannot revive
+    // that revoked work authorization; a later explicit refresh can.
+    if entry.recovery_blocked && !entry.recovery_explicit {
+        entry.pending = false;
+        if entry.status.phase == "cancelling" {
+            entry.status.phase = "cancelled".into();
+            entry.status.outcome_code = "cancelled".into();
+            entry.status.error = "index replacement cancelled; explicit refresh is required".into();
+        }
+        return Ok(());
+    }
     let allocated_failure =
         done.recovering && recovery::failure(Path::new(&done.database))?.is_some();
     if allocated_failure {
@@ -2979,6 +2991,54 @@ mod live_lifetime_tests {
             assert!(entry.pending && entry.force && !entry.cancel_pending);
             assert_eq!(entry.failed_input_hash, "saved-failure");
             assert_eq!(entry.analysis_error, "prior dependency setup failed");
+        }
+    }
+    #[test]
+    fn permission_handoff_cannot_revive_cancelled_unallocated_recovery() {
+        let job = cancellation_job();
+        for later_refresh in [false, true] {
+            let mut entry = permission_entry(&job.root, &job.database);
+            entry.recovering = true;
+            entry.pending = true;
+            entry.trust_epoch = 1;
+            begin_cancellation(&mut entry);
+            entry.project_trusted = true; // permission regranted before Finished
+            entry.recovering = false;
+            if later_refresh {
+                entry.recovery_explicit = true;
+                entry.recovery_blocked = false;
+                entry.retry_preparation = true;
+                queue(&mut entry, None, true);
+            }
+            let done = JobResult {
+                registration: 1,
+                trust_epoch: 0,
+                analysis_started: false,
+                authorization: DeferredAuthorization {
+                    force: true,
+                    retry_preparation: true,
+                    recovery_explicit: true,
+                },
+                input_hash: String::new(),
+                database: job.database.clone(),
+                epoch: 1,
+                result: Err(Failure {
+                    code: "trust_required".into(),
+                    message: "permission revoked before allocation".into(),
+                    index_fault: None,
+                }),
+                cancel_baseline: false,
+                recovering: true,
+            };
+            defer_permission_interruption(&mut entry, &done).unwrap();
+            assert_eq!(entry.pending, later_refresh);
+            assert_eq!(entry.force, later_refresh);
+            assert_eq!(entry.recovery_explicit, later_refresh);
+            assert_eq!(entry.retry_preparation, later_refresh);
+            if !later_refresh {
+                assert!(entry.recovery_blocked);
+                assert_eq!(entry.snapshot().phase, "cancelled");
+            }
         }
     }
     #[test]
