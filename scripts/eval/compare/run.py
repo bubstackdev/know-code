@@ -50,8 +50,9 @@ def ask(args):
     out = Path(args.out)
     indexed = json.loads((out/'index.json').read_text())
     types = set(args.types.split(','))
-    questions = [q for q in map(json.loads, Path(args.questions).read_text().splitlines())
-                 if q['repo'] == args.repo and q['type'] in types]
+    from compare import questions as draw
+    asked = draw.expand([json.loads(l) for l in Path(args.questions).read_text().splitlines() if l.strip()])
+    questions = [q for q in asked if q['repo'] == args.repo and q['type'] in types]
     with open(out/'answers.jsonl', 'w') as f:
         for tool in tools.TOOLS:
             session = None
@@ -138,7 +139,8 @@ def summarise(questions, answers, decls, bound, clones):
 
 
 def score_command(args):
-    questions = [json.loads(l) for l in Path(args.questions).read_text().splitlines() if l.strip()]
+    from compare import questions as draw
+    questions = draw.expand([json.loads(l) for l in Path(args.questions).read_text().splitlines() if l.strip()])
     answers = []
     for d in args.outs:
         answers += [json.loads(l) for l in (Path(d)/'answers.jsonl').read_text().splitlines() if l.strip()]

@@ -134,6 +134,17 @@ def draw(rows):
     return questions, strata
 
 
+def expand(questions):
+    """The questions as asked: each impact question also stands as a callers question on the same target, with its
+    hop-1 labels (README, "The draw": callers and impact share their targets)."""
+    out = list(questions)
+    for q in questions:
+        if q['type'] == 'impact' and 'callers' in q:
+            out.append({'type': 'callers', 'repo': q['repo'], 'stratum': q['stratum'], 'key': q['key'],
+                        'target': q['target'], 'labels': q['callers'], 'id': q['id'].replace(':impact:', ':callers:', 1)})
+    return out
+
+
 def bound_lines(rows, name):
     """Per (file, line), the keys a reference row named `name` is bound to: the scorer's view of a refs answer."""
     out = defaultdict(set)
