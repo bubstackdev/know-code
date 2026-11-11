@@ -4,6 +4,8 @@ Status: **first end-to-end slice implemented**, with explicitly partial TS/C# ca
 
 ## Implemented slice
 
+[Graph declaration source projection](GRAPH_SOURCE_PROJECTION.md) adds opt-in bounded bodies on findings and their exact target supports through native query contract 6 (current store 8). It reuses the symbol-context projector after traversal, preserving selected project contexts and paths. Source exhaustion labels clipping/omission while retaining findings under existing graph/response limits; compact defaults remain unchanged. Compiler call/dependency capabilities remain explicitly partial.
+
 Worker/control protocol v7 retains relationship resolution, source artifact/byte range, implicit-call flag and dispatch form, plus capability-specific reports. Unknown targets remain nullable evidence, without a fabricated target symbol. Formats v2/v3/v4/v5 remain readable; old relationship triples migrate as `legacy_unknown`, never compiler-proven calls. Readers pinned before migration/publication retain their original snapshot. Endpoint/artifact foreign keys have cleanup indexes.
 
 The TypeScript adapter records direct function/method/constructor/tagged calls, file/module and variable/property initialization contexts, accessor calls, and value/type/import/inheritance evidence. A resolved signature alone does not identify a function-valued variable's runtime target: mutable callbacks and aliases of function values remain unresolved unless the binding directly owns a constant function literal. Ordinary import aliases resolve through the compiler. Synthetic accessor/constructor/lambda/initializer identities stay within the provider; Rust does not interpret their ID strings.

@@ -4,6 +4,8 @@ The user accepted this slice after the first [agent-use probe](DOGFOODING.md): m
 
 ## Reading a symbol
 
+The concrete declaration projector is also shared by [opt-in graph source](GRAPH_SOURCE_PROJECTION.md). Symbol context keeps its default source inclusion and logical declaration-slot budget. Graph findings default source off, use a separate aggregate `source_max_bytes`, and project only concrete members already selected by traversal; calling the whole context operation from graph enrichment would incorrectly expand peers or reapply root filters.
+
 After `search_symbols`, use MCP `symbol_context` or a native/CLI request:
 
 ```json
