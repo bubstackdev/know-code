@@ -7,7 +7,7 @@ import {pathToFileURL} from 'node:url';
 
 const [addon,database,mode,encoded,delay] = process.argv.slice(2);
 const native = createRequire(pathToFileURL(addon))('./know_code.node');
-assert.equal(native.queryContractVersion(),7,'matching cancellation-native contract required');
+assert.equal(native.queryContractVersion(),8,'matching cancellation-native contract required');
 const {Index} = await import(pathToFileURL(addon));
 const index = new Index(database);
 const reason = 'owned query cancellation fixture';
@@ -29,27 +29,24 @@ if (mode === 'preabort') {
   details={error:failure,index_created:false,serialized};
 } else if (mode === 'queue') {
   assert.equal(process.env.UV_THREADPOOL_SIZE,'1');assert(!existsSync(database));
-  let blockerDone=false,settled=false,settledBeforeBlocker=false;
+  let blockerDone=false;
   const blocker = new Promise((resolve,reject) => pbkdf2('owned fixture','cancel',1_000_000,32,'sha256',error => {
     blockerDone=true;error?reject(error):resolve();
   }));
   const controller=new AbortController();
-  const pending=index.query({op:'symbols',deadline_ms:5000},{signal:controller.signal}).then(
-    response => {settled=true;settledBeforeBlocker=!blockerDone;return {response};},
-    error => {settled=true;settledBeforeBlocker=!blockerDone;return {error};});
-  await new Promise((resolve,reject) => setTimeout(() => {
-    try {assert(!blockerDone,'PBKDF2 did not hold the actual libuv queue');controller.abort(reason);}
-    catch(error) {reject(error);return;}
-    setImmediate(() => {
-      try {assert(!settled || blockerDone,'query detached from queued native work');resolve();}
-      catch(error) {reject(error);}
-    });
-  },5));
-  const outcome=await pending;await blocker;
-  assert(!settledBeforeBlocker,'cancelled query settled before the occupied libuv slot drained');
-  const failure=aborted(outcome.error);assert(!existsSync(database),'cancelled queued query opened index');
-  const recovery=await index.query({op:'symbols'});assert.equal(recovery.error?.code,'not_ready');
-  details={error:failure,recovery,blocker_done:blockerDone};
+  try {
+    const response=await index.query({op:'symbols',deadline_ms:5000},{signal:controller.signal});
+    assert(!blockerDone,'native query waited for the unrelated occupied libuv pool');
+    assert.equal(response.error?.code,'not_ready');assert(!existsSync(database));
+    // This request already completed. A later abort cannot change it or cancel
+    // a sibling; a newly submitted pre-aborted request must not serialize.
+    controller.abort(reason);let serialized=false,failure;
+    try {await index.query({toJSON(){serialized=true;throw new Error('preabort serialized');}},{signal:controller.signal});}
+    catch(error) {failure=aborted(error);}
+    assert(failure&&!serialized&&!existsSync(database));
+    const recovery=await index.query({op:'symbols'});assert.equal(recovery.error?.code,'not_ready');
+    details={error:failure,recovery,libuv_independent:true,preabort_serialized:serialized};
+  } finally {await blocker;}
 } else if (mode === 'query') {
   const request=JSON.parse(encoded),controller=new AbortController(),started=performance.now();
   const pending=index.query(request,{signal:controller.signal});
@@ -70,4 +67,4 @@ if (mode === 'preabort') {
   }
   details={responses,late_cancels:3};
 } else {throw new Error('unknown cancellation fixture mode');}
-console.log(JSON.stringify({passed:true,contract:7,mode,...details}));
+console.log(JSON.stringify({passed:true,contract:8,mode,...details}));

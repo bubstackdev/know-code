@@ -4,6 +4,7 @@ Run only after a matching build. All scopes, coordinator state and evidence are
 owned by this durable run; default account admission and live runtime are unused.
 """
 from pathlib import Path
+from fixture_trust import grant_fixture
 import atexit,ctypes,hashlib,json,os,selectors,subprocess,time,traceback
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -44,7 +45,7 @@ def error(response,code):assert response.get('error',{}).get('code')==code,respo
 def node(mode,*,db=None,scope=None,payload=None,env=None):
  result=json.loads(run(['node',ROOT/'tests/query_admission.mjs',ADDON,scope or SCOPE,db or MISSING,
                         mode,json.dumps(payload) if payload is not None else ''],env=env).stdout)
- assert result['passed'] and result['contract']==7,result
+ assert result['passed'] and result['contract']==8,result
  return result
 
 def dotnet(*args,**kwargs):return json.loads(run(['dotnet',SMOKE,*args],**kwargs).stdout)
@@ -95,7 +96,7 @@ def holder():
  CHILDREN.append((child,stderr));selector=selectors.DefaultSelector();selector.register(child.stdout,selectors.EVENT_READ)
  try:
   assert selector.select(10),('Node holder did not report ready',child.poll())
-  line=child.stdout.readline();receipt=json.loads(line);assert receipt['ready'] and receipt['contract']==7,receipt
+  line=child.stdout.readline();receipt=json.loads(line);assert receipt['ready'] and receipt['contract']==8,receipt
   (RUN/'node-holder-ready.json').write_text(json.dumps(receipt,indent=2)+'\n')
   log({'args':child.args,'pid':child.pid,'ready':receipt})
   return child
@@ -130,7 +131,7 @@ try:
  assert all(record['outputs'][path]==digest for path,digest in hashes.items()),'outputs differ from producer'
  IDENTITY={'source_revision':record['source_revision'],'build_id':record['build_id'],'record_sha256':sha(record_path),
            'artifacts_sha256':hashes,'test_source_sha256':{path:sha(ROOT/path) for path in [
-               'tests/query_admission.py','tests/query_admission.mjs','bindings/dotnet/Smoke/Program.cs']}}
+               'tests/query_admission.py','tests/query_admission.mjs','bindings/dotnet/Smoke/Program.cs','tests/fixture_trust.py']}}
  ffi=ctypes.CDLL(str(FFI))
  ffi.kc_query_contract_version.restype=ctypes.c_uint32
  ffi.kc_query_max_request_bytes.restype=ctypes.c_uint32
@@ -147,7 +148,7 @@ try:
  ffi.kc_query_cancel_free.argtypes=[ctypes.c_void_p];ffi.kc_query_cancel_free.restype=None
  ffi.kc_workspace_json.argtypes=[ctypes.c_char_p];ffi.kc_workspace_json.restype=ctypes.c_void_p
  ffi.kc_string_free.argtypes=[ctypes.c_void_p];ffi.kc_string_free.restype=None
- assert ffi.kc_query_contract_version()==7 and ffi.kc_query_max_request_bytes()==262144
+ assert ffi.kc_query_contract_version()==8 and ffi.kc_query_max_request_bytes()==262144
  policy=value('queries')['result'];assert policy=={'version':1,'max_active_queries':4},policy
  assert value('queries','--scope',SCOPE)['result']==policy
  guard_and_slots=[SCOPE/'policy.lock',*[SCOPE/f'slot-{i:02}.lock' for i in range(4)]]
@@ -184,6 +185,7 @@ try:
  CHECKS.append('partial_FFI_release_real_Node_native_image_reuse_and_process_crash_release')
  # Consumer saturation must not block coordinator registration, internal
  # readiness, cancellation or saved-source publication.
+ grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')
  registration=value('watch',WORKSPACE);database=registration['database'];initial=ready()
  assert control('status')['status']['database']==database
  assert control('refresh')['status']['database']==database
@@ -251,7 +253,7 @@ try:
  DETAILS['node_queue']=node('duplicate-queue')
  assert dotnet('--admission-typed',MISSING,SCOPE)=={'serialization_failed':True}
  queued=dotnet('--admission-queue',MISSING,SCOPE,4);assert queued['passed'],queued
- CHECKS.append('Node_serializer_parse_failure_and_parse_lifetime_raw_duplicate_queue_plus_DotNet_typed_serializer_queue_cancel_ownership')
+ CHECKS.append('Node_serializer_parse_failure_and_parse_lifetime_raw_duplicate_dispatch_plus_DotNet_typed_serializer_queue_cancel_ownership')
  # Resize through the supported setter only; no stable lock inode is replaced.
  assert value('queries','--max-active','2')['result']['max_active_queries']==2
  two=[acquire() for _ in range(2)];_,problem=reserve();error(problem,'busy')

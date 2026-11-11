@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 const [addon,scope,database,mode,encoded] = process.argv.slice(2);
 const native = createRequire(pathToFileURL(addon))('./know_code.node');
 const {Index,Workspace,QueryLimitScope} = await import(pathToFileURL(addon));
-assert.equal(native.queryContractVersion(),7);
+assert.equal(native.queryContractVersion(),8);
 assert.equal(native.queryMaxRequestBytes(),262144);
 const index = new Index(database,new QueryLimitScope(scope));
 const request = {op:'symbols',name:'admissionTarget'};
@@ -30,7 +30,7 @@ if(mode==='hold') {
   const reservation=new native.QueryReservation(scope);
   try {
     assert.equal(reservation.errorJson,null);
-    console.log(JSON.stringify({ready:true,pid:process.pid,contract:7}));
+    console.log(JSON.stringify({ready:true,pid:process.pid,contract:8}));
     const lines=createInterface({input:process.stdin});
     for await(const line of lines) { if(line==='release') {lines.close();break;} }
   } finally {reservation.release();}
@@ -91,21 +91,19 @@ if(mode==='hold') {
     assert.equal(typeof pending.then,'function');
     const done=pending.then(value=>{settled=true;return decode(value);});
     const duplicate=native.queryJsonReserved(database,JSON.stringify(request),0,reservation);
-    assert.equal(typeof duplicate,'string','duplicate entered libuv queue');error(decode(duplicate),'invalid_request');
-    // Releasing the wrapper must not release the charge owned by queued work.
+    assert.equal(typeof duplicate,'string','duplicate entered native dispatch');error(decode(duplicate),'invalid_request');
+    // Releasing the wrapper must not release native/completion ownership before JS delivery.
     reservation.release();
-    await new Promise(resolve=>setTimeout(resolve,5));
-    assert(!blockerDone&&!settled,'actual libuv blocker did not hold the queued task');
     for(let i=0;i<3;i++) {
       const handle=new native.QueryReservation(scope);other.push(handle);assert.equal(handle.errorJson,null);
     }
     const blocked=new native.QueryReservation(scope);other.push(blocked);error(decode(blocked.errorJson),'busy');
     const raw=native.queryJsonElapsed(database,JSON.stringify(request),0);
-    assert.equal(typeof raw,'string','raw saturated query entered libuv queue');error(decode(raw),'busy');
+    assert.equal(typeof raw,'string','raw saturated query entered native dispatch');error(decode(raw),'busy');
     for(const handle of other) handle.release();
-    const response=await done;await blocker;
+    const response=await done;assert(settled&&!blockerDone,'query waited for unrelated libuv work');await blocker;
     assert(response.result||response.error?.code==='not_ready',response);allFree();
-    details={duplicate_immediate:true,raw_busy_immediate:true,queued_task_kept_charge:true};
+    details={duplicate_immediate:true,raw_busy_immediate:true,native_completion_kept_charge:true,libuv_independent:true};
   } finally {
     reservation.release();for(const handle of other) handle.release();await blocker;
   }
@@ -124,4 +122,4 @@ if(mode==='hold') {
   const response=await index.query(encoded?decode(encoded):request);
   details={response};
 } else {throw new Error('unknown admission fixture mode: '+mode);}
-if(mode!=='hold') console.log(JSON.stringify({passed:true,contract:7,mode,...details}));
+if(mode!=='hold') console.log(JSON.stringify({passed:true,contract:8,mode,...details}));
