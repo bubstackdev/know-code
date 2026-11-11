@@ -8,10 +8,10 @@ function abortError(signal) {
 }
 function checkAborted(signal) { if (signal?.aborted) throw abortError(signal); }
 function checkQueryContract() {
-  if (typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 7
+  if (typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 8
       || typeof native.QueryReservation !== 'function' || typeof native.queryJsonReserved !== 'function'
       || typeof native.queryMaxRequestBytes !== 'function')
-    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; shared query admission is missing or incompatible.');
+    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; project execution trust or shared query admission is missing or incompatible.');
 }
 /** Select one shared scope for an embedding/server host; default queries use the account scope. */
 export class QueryLimitScope {
@@ -66,6 +66,8 @@ function checked(response) {
   return response;
 }
 async function control(request) {
+  // Refuse pre-trust native images before open/control can execute a project.
+  checkQueryContract();
   if (typeof native.workspaceJson !== 'function')
     throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; workspace operations are missing.');
   return checked(JSON.parse(await native.workspaceJson(JSON.stringify(request)))).result;
@@ -108,6 +110,10 @@ export class Workspace {
   cancelIndexing() { return this.#operation('cancel'); }
   settings() { return this.#operation('settings'); }
   configure(personalSettings) { return this.#operation('configure',{personal_settings:personalSettings}); }
+  trust(grant) {
+    if (typeof grant !== 'boolean') return Promise.reject(new KnowCodeError('invalid_request','Project trust requires an explicit boolean grant.'));
+    return this.#operation('trust',{grant});
+  }
   refresh(options = {}) { return this.#operation('refresh',{configuration:options.configuration}); }
   waitForIndex(options = {}) { return this.#operation('wait',{wait_ms:options.waitMs}); }
   async query(request, options) {

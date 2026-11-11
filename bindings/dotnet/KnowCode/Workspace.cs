@@ -7,7 +7,8 @@ public sealed record IndexProgress(string Stage, string ProjectPath, string Mess
 public sealed record CSharpBuildContext(string? Configuration, string? SolutionPath);
 public sealed record NodePreparationPolicy(string CacheDirectory, bool AllowInstallScripts);
 public sealed record AnalysisSettings(CSharpBuildContext Csharp, NodePreparationPolicy Node,
-    string ConfigurationOrigin, string SolutionOrigin, string ProjectFile, string PersonalFile);
+    string ConfigurationOrigin, string SolutionOrigin, string ProjectFile, string PersonalFile,
+    bool ProjectExecutionAllowed = false);
 public sealed record WorkspaceStatus(string WorkspaceRoot, string Database, string Phase, ulong ObservedEpoch,
     ulong PublishedEpoch, ulong Generation, bool Available, string Error, IndexProgress? Progress, string OutcomeCode = "", AnalysisSettings? RequestedSettings = null);
 internal sealed record WorkspaceDescriptor(string DataDirectory, string? CoordinatorExecutable, WorkspaceStatus Status);
@@ -43,6 +44,8 @@ public sealed class Workspace : IDisposable
     public Task<WorkspaceStatus> StatusAsync() => OperationAsync("status");
     public Task<WorkspaceStatus> CancelIndexingAsync() => OperationAsync("cancel");
     public Task<WorkspaceStatus> SettingsAsync() => OperationAsync("settings");
+    /// <summary>Grants/revokes project execution for this workspace identity. Opening never grants trust.</summary>
+    public Task<WorkspaceStatus> SetProjectTrustAsync(bool grant) => OperationAsync("trust", grant: grant);
     /// <summary>Replaces personal settings. Omitted fields inherit/default; explicit null selects compiler defaults.</summary>
     public Task<WorkspaceStatus> ConfigureJsonAsync(string settings)
     {
@@ -54,11 +57,11 @@ public sealed class Workspace : IDisposable
     }
     public Task<WorkspaceStatus> RefreshAsync(string? configuration = null) => OperationAsync("refresh",configuration);
     public Task<WorkspaceStatus> WaitForIndexAsync(uint waitMs = 500) => OperationAsync("wait",waitMs:waitMs);
-    private async Task<WorkspaceStatus> OperationAsync(string op, string? configuration = null, uint? waitMs = null, JsonElement? personalSettings = null)
+    private async Task<WorkspaceStatus> OperationAsync(string op, string? configuration = null, uint? waitMs = null, JsonElement? personalSettings = null, bool? grant = null)
     {
         CheckOpen();
         var result = await ControlAsync(new { Op = op, descriptor.Status.Database, descriptor.DataDirectory,
-            CoordinatorExecutable = executable, Configuration = configuration, WaitMs = waitMs, PersonalSettings = personalSettings }).ConfigureAwait(false);
+            CoordinatorExecutable = executable, Configuration = configuration, WaitMs = waitMs, PersonalSettings = personalSettings, Grant = grant }).ConfigureAwait(false);
         return result.Status;
     }
     public async Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
@@ -88,6 +91,7 @@ public sealed class Workspace : IDisposable
     }
     private static async Task<WorkspaceDescriptor> ControlAsync(object request)
     {
+        Native.CheckQueryContract();
         var json = JsonSerializer.Serialize(request,Native.JsonOptions);
         using var response = await Task.Run(() => Native.Invoke(() => Native.Workspace(json))).ConfigureAwait(false);
         Native.Check(response);

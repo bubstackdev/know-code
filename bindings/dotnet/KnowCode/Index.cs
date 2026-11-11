@@ -117,8 +117,13 @@ internal static partial class Native
     };
     internal static void CheckQueryContract()
     {
-        if (QueryContractVersion() != 7)
-            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; shared query admission is missing or incompatible.");
+        try
+        {
+            if (AbiVersion() != 1 || QueryContractVersion() != 8)
+                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; project execution trust or shared query admission is missing or incompatible.");
+        }
+        catch (EntryPointNotFoundException error) { throw new KnowCodeException("update_required", $"Update the Know Code managed/native packages together: {error.Message}"); }
+        catch (DllNotFoundException error) { throw new KnowCodeException("native_library_unavailable", $"Install the matching Know Code native library: {error.Message}"); }
     }
     internal static (QueryReservationHandle? Reservation, JsonDocument? Error) Reserve(QueryLimitScope? scope)
     {

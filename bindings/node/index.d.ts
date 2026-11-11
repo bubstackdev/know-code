@@ -77,11 +77,13 @@ export interface SymbolResult {
   test_classification: TestClassification;
   id: string; name: string; kind: string; signature: string; external: boolean;
   compilation_id: string; target: string; locations: Location[];
+  locations_limited?: boolean;
   supporting_targets?: SymbolSupport[];
 }
 export interface SymbolSupport {
   symbol_id: string; compilation_id: string; target: string; signature: string;
   locations: Location[]; test_classification: TestClassification;
+  locations_limited?: boolean;
 }
 export interface OccurrenceSupport {
   symbol_id: string; compilation_id: string; target: string;
@@ -154,6 +156,7 @@ export interface AnalysisSettings {
   node: {cache_directory: string; allow_install_scripts: boolean};
   configuration_origin: string; solution_origin: string;
   project_file: string; personal_file: string;
+  project_execution_allowed: boolean;
 }
 export interface PersonalWorkspaceSettings {
   csharp?: {configuration?: string | null; solution?: string | null};
@@ -171,6 +174,8 @@ export class Workspace {
   settings(): Promise<WorkspaceStatus>;
   /** Replaces personal settings; omitted fields inherit/default. */
   configure(settings: PersonalWorkspaceSettings): Promise<WorkspaceStatus>;
+  /** Grants/revokes project execution for the current workspace identity. Opening never grants trust. */
+  trust(grant: boolean): Promise<WorkspaceStatus>;
   refresh(options?: {configuration?: string}): Promise<WorkspaceStatus>;
   waitForIndex(options?: {waitMs?: number}): Promise<WorkspaceStatus>;
   query(request: QueryRequest, options?: QueryOptions): Promise<{result: QueryResult}>;
