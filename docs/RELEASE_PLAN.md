@@ -4,6 +4,12 @@ Updated 2026-11-09 after the user accepted best-effort activity notifications an
 
 A [draft acceptance contract and subagent execution plan](RELEASE_ACCEPTANCE.md) derives the current requirements into observable release outcomes, separating decisions, provisional targets and later-release work. It remains under Q&A review and does not start a goal or certify a candidate.
 
+## Current upgrade checkpoint — 2026-11-11
+
+[Upgrade implementation and finite evidence](INDEX_UPGRADES.md#combined-checkpoint--2026-11-11) supersede older missing-S07 descriptions below. Managed formats 1–2 rebuild alongside the prior index; format 2 stays readable with coherent cursors, failures wait for explicit retry, and unknown/future formats stay untouched. Runtime transitions use actual workspace contracts and a narrow prior-lifecycle control bridge. 185 Rust tests and ten affected combined Debug runs pass; the matching runtime/npm/NuGet archives pass 23 installed offline checks and segmented installer acceptance (4 prior-runtime +15 current-runtime checks). Exact source/artifact evidence is linked from that checkpoint. This does not announce a complete release candidate.
+
+Remaining implementation/acceptance work includes Q06 graph-wide body projection, general query admission and final physical WAL/reader-pressure evidence. Full frozen Debug/optimized, supported compiler/package/platform matrix, real encoding, final license/zero-telemetry review and signed/notarized normal-security distribution still require the final candidate. Historical checkpoints below retain their original scope.
+
 ## Current grouping/recovery checkpoint — 2026-11-11
 
 [Combined source-bound integration evidence](INDEX_RECOVERY.md#combined-integration-checkpoint--2026-11-11) supersedes older missing-work descriptions for Q07 cross-target finding presentation and S06 corrupt-index recovery. Evidence-bearing test filters Q08 are also implemented. Shared Rust/core operators preserve concrete paths and target supports; one coordinator recovery engine owns fencing, bounded replacement and explicit retry. 166 Rust and twelve focused assembled Debug runs pass. All 23 installed offline checks pass for the exact runtime/npm/NuGet archives, with both checkouts denied. This remains a focused unsigned Debug checkpoint, not a complete release candidate.
