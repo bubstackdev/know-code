@@ -30,6 +30,19 @@ pub enum DependencyKind {
     Initializes,
 }
 impl DependencyKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Call => "call",
+            Self::Reference => "reference",
+            Self::TypeReference => "type_reference",
+            Self::Inherits => "inherits",
+            Self::Imports => "imports",
+            Self::Implements => "implements",
+            Self::Overrides => "overrides",
+            Self::Contains => "contains",
+            Self::Initializes => "initializes",
+        }
+    }
     pub fn parse(value: &str) -> Result<Self> {
         Ok(match value {
             "call" => Self::Call,
@@ -187,8 +200,17 @@ pub(crate) fn create_view(connection: &Connection, version: i32) -> Result<()> {
     Ok(())
 }
 
+impl GraphResult {
+    fn limit(&mut self, reason: &'static str) {
+        if !self.limits.iter().any(|existing| existing == reason) {
+            self.limits.push(reason.into());
+        }
+    }
+}
+
 struct Step {
     node: i64,
+    terminal: bool,
     parent: Option<usize>,
     edge: Option<Edge>,
     possible: bool,
@@ -355,17 +377,11 @@ fn contains(steps: &[Step], mut index: usize, node: i64) -> bool {
         }
     }
 }
-pub(crate) fn symbol_full(connection: &Connection, key: i64) -> Result<SymbolResult> {
-    symbol_projection(connection, key, false)
-}
 pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<SymbolResult> {
-    symbol_projection(connection, key, true)
-}
-fn symbol_projection(connection: &Connection, key: i64, bounded: bool) -> Result<SymbolResult> {
     let mut result=connection.query_row("SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation FROM symbols s JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE s.rowid=?",[key],|r|Ok(SymbolResult{
         id:r.get(0)?,name:r.get(1)?,kind:r.get(2)?,signature:r.get(3)?,external:r.get(4)?,compilation_id:r.get(5)?,target:r.get(6)?,owner_generation:r.get(7)?,locations:vec![],test_classification:Default::default(),locations_limited:false,supporting_targets:vec![]
     }))?;
-    let mut locations=connection.prepare_cached(if bounded {"SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte LIMIT 17"} else {"SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte"})?;
+    let mut locations=connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte LIMIT 17")?;
     result.locations = locations
         .query_map(
             params![result.owner_generation, result.compilation_id, result.id],
@@ -373,10 +389,8 @@ fn symbol_projection(connection: &Connection, key: i64, bounded: bool) -> Result
         )?
         .collect::<std::result::Result<_, _>>()?;
     result.test_classification = crate::testing::symbol(connection, key)?;
-    result.locations_limited = bounded && result.locations.len() > 16;
-    if bounded {
-        result.locations.truncate(16);
-    }
+    result.locations_limited = result.locations.len() > 16;
+    result.locations.truncate(16);
     Ok(result)
 }
 fn external_boundary(view: &ReadView, key: i64) -> Result<&'static str> {
@@ -418,7 +432,7 @@ fn bounded(value: Option<u32>, default: u32, maximum: u32, name: &str) -> Result
 }
 // Keep the bounded edge stream on the left of lookup joins. SQLite otherwise
 // may materialize all neighbors into an automatic index before honoring LIMIT.
-fn adjacency_sql(incoming: bool, virtual_calls: bool, keys: bool) -> String {
+fn adjacency_sql(incoming: bool, virtual_calls: bool, keys: bool, predicates: &str) -> String {
     let key = if keys { "rk.dispatch_key" } else { "''" };
     let key_join = if keys {
         " CROSS JOIN relationships rk ON rk.rowid=e.ordinal"
@@ -442,7 +456,41 @@ fn adjacency_sql(incoming: bool, virtual_calls: bool, keys: bool) -> String {
       CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id
       CROSS JOIN generation_units u ON u.owner_generation=s.generation AND u.compilation_id=s.compilation_id
       CROSS JOIN artifacts a ON a.rowid=e.artifact_key LEFT JOIN symbols b ON b.rowid=e.binding_key LEFT JOIN artifacts p ON p.rowid=e.proof_artifact LEFT JOIN symbols dr ON dr.rowid=e.definition_reference_key
-      {key_join} WHERE u.generation=? AND {column}=?{filter} LIMIT ?")
+      {key_join} WHERE u.generation=?1 AND {column}=?2{filter}{predicates} LIMIT ?3")
+}
+fn edge_predicates(request: &QueryRequest) -> String {
+    let mut predicates = String::new();
+    if request.op != "impact" {
+        predicates.push_str(" AND e.kind='call'");
+    } else if let Some(kinds) = &request.kinds {
+        let kinds = kinds
+            .iter()
+            .map(|kind| format!("'{}'", kind.as_str()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(",");
+        predicates.push_str(&format!(" AND e.kind IN ({kinds})"));
+    }
+    if !request.include_implicit {
+        predicates.push_str(" AND e.implicit=0");
+    }
+    if request.exact_only {
+        predicates.push_str(" AND e.resolution<>'possible_dispatch'");
+    }
+    predicates
+}
+fn frontier_predicates(incoming: bool, request: &QueryRequest) -> String {
+    let mut predicates = edge_predicates(request);
+    let next = if incoming {
+        "e.source_key"
+    } else {
+        "e.target_key"
+    };
+    predicates.push_str(&format!(
+        " AND ({next} IS NULL OR {next} NOT IN (SELECT value FROM json_each(?4)))"
+    ));
+    predicates
 }
 struct Neighbor {
     source: i64,
@@ -557,7 +605,7 @@ pub(crate) fn query(
     let (roots, roots_limited) =
         crate::grouping::roots_bounded(view, request, Some(node_budget as usize))?;
     if roots_limited {
-        result.limits.push("node_budget".into());
+        result.limit("node_budget");
     }
     if view.format_version < 4 {
         result.boundaries.push(Boundary {
@@ -637,6 +685,7 @@ pub(crate) fn query(
         let index = steps.len();
         steps.push(Step {
             node: root,
+            terminal: false,
             parent: None,
             edge: None,
             possible: false,
@@ -656,24 +705,26 @@ pub(crate) fn query(
     while let Some(Reverse((possible, distance, index))) = pending.pop() {
         view.check()?;
         if expand && started.elapsed() >= duration {
-            result.limits.push("time_budget".into());
+            result.limit("time_budget");
             expand = false;
         }
         let node = steps[index].node;
         // Keep bounded and possible states separate: a shorter possible
         // route can reach more nodes within the depth budget even when the
         // projected path to this node prefers a longer bound route.
-        let seen = visits
-            .entry((node, possible, steps[index].context))
-            .or_default();
-        if *seen >= paths {
-            continue;
+        if !steps[index].terminal {
+            let seen = visits
+                .entry((node, possible, steps[index].context))
+                .or_default();
+            if *seen >= paths {
+                continue;
+            }
+            *seen += 1;
         }
         if !visited_nodes.contains(&node) && result.visited_nodes == node_budget {
-            result.limits.push("node_budget".into());
+            result.limit("node_budget");
             break;
         }
-        *seen += 1;
         if visited_nodes.insert(node) {
             result.visited_nodes += 1;
         }
@@ -690,7 +741,7 @@ pub(crate) fn query(
             if let Some(position) = findings.get(&node) {
                 let added = serde_json::to_vec(&p)?.len();
                 if size + added > bytes {
-                    result.limits.push("response_bytes".into());
+                    result.limit("response_bytes");
                     break;
                 }
                 size += added;
@@ -701,7 +752,7 @@ pub(crate) fn query(
                     // The omitted finding does not stop other concrete peers
                     // from contributing to admitted groups or being traversed.
                     if !result.limits.iter().any(|s| s == "result_limit") {
-                        result.limits.push("result_limit".into());
+                        result.limit("result_limit");
                     }
                 } else {
                     let position = groups.len();
@@ -745,7 +796,7 @@ pub(crate) fn query(
                             .map(Vec::len)
                             .sum::<usize>();
                     if size + added > bytes {
-                        result.limits.push("response_bytes".into());
+                        result.limit("response_bytes");
                         break;
                     }
                     size += added;
@@ -758,7 +809,19 @@ pub(crate) fn query(
         }
         // Once search is limited, project already discovered paths without
         // fetching more adjacency. Do not discard valid frontier evidence.
-        if !expand {
+        if !expand || steps[index].terminal {
+            continue;
+        }
+        if distance >= depth {
+            let mut ancestors = vec![];
+            let mut at = Some(index);
+            while let Some(position) = at {
+                ancestors.push(steps[position].node);
+                at = steps[position].parent;
+            }
+            if dispatch::has_frontier(view, node, incoming, request, &ancestors)? {
+                result.limit("depth_budget");
+            }
             continue;
         }
         let work = dispatch::Budget {
@@ -774,7 +837,7 @@ pub(crate) fn query(
         } in neighbors
         {
             if contexts.sets.len() > node_budget as usize {
-                result.limits.push("context_budget".into());
+                result.limit("context_budget");
                 break;
             }
             let kind = edge.kind;
@@ -794,7 +857,7 @@ pub(crate) fn query(
                 };
                 let added = serde_json::to_vec(&boundary)?.len();
                 if size + added > bytes {
-                    result.limits.push("response_bytes".into());
+                    result.limit("response_bytes");
                     break;
                 }
                 size += added;
@@ -817,7 +880,7 @@ pub(crate) fn query(
                     };
                     let added = serde_json::to_vec(&boundary)?.len();
                     if size + added > bytes {
-                        result.limits.push("response_bytes".into());
+                        result.limit("response_bytes");
                         break;
                     }
                     size += added;
@@ -830,15 +893,15 @@ pub(crate) fn query(
             } else {
                 target.expect("checked target")
             };
-            if contains(&steps, index, next) {
-                continue;
-            }
-            if distance >= depth {
-                result.limits.push("depth_budget".into());
+            let terminal = request.op != "impact"
+                && kind == DependencyKind::Call
+                && next == node
+                && steps[index].parent.is_none();
+            if contains(&steps, index, next) && !terminal {
                 continue;
             }
             if steps.len() >= edge_budget as usize + node_budget as usize {
-                result.limits.push("state_budget".into());
+                result.limit("state_budget");
                 break;
             }
             let next_compilation = if incoming {
@@ -870,7 +933,7 @@ pub(crate) fn query(
                 };
                 let added = serde_json::to_vec(&boundary)?.len();
                 if size + added > bytes {
-                    result.limits.push("response_bytes".into());
+                    result.limit("response_bytes");
                     break;
                 }
                 size += added;
@@ -931,7 +994,7 @@ pub(crate) fn query(
                     };
                     let added = serde_json::to_vec(&boundary)?.len();
                     if size + added > bytes {
-                        result.limits.push("response_bytes".into());
+                        result.limit("response_bytes");
                         break;
                     }
                     size += added;
@@ -939,11 +1002,11 @@ pub(crate) fn query(
                     continue;
                 }
                 if contexts.sets.len() > node_budget as usize {
-                    result.limits.push("context_budget".into());
+                    result.limit("context_budget");
                     break;
                 }
                 if steps.len() >= edge_budget as usize + node_budget as usize {
-                    result.limits.push("state_budget".into());
+                    result.limit("state_budget");
                     break;
                 }
                 let mut edge = edge.clone();
@@ -955,6 +1018,7 @@ pub(crate) fn query(
                 let possible = possible || resolution == "possible_dispatch";
                 steps.push(Step {
                     node: next,
+                    terminal,
                     parent: Some(index),
                     edge: Some(edge),
                     possible,
@@ -1020,10 +1084,10 @@ pub(crate) fn query(
                     &mut metadata,
                 )?;
                 if limits.declarations {
-                    result.limits.push("declaration_limit".into());
+                    result.limit("declaration_limit");
                 }
                 if limits.source {
-                    result.limits.push("source_budget".into());
+                    result.limit("source_budget");
                 }
                 member.context = Some(context);
             }
@@ -1032,7 +1096,7 @@ pub(crate) fn query(
             let finding = members.pop().expect("one member");
             projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(&finding)?.len());
             if projection_bytes > bytes {
-                result.limits.push("response_bytes".into());
+                result.limit("response_bytes");
                 break;
             }
             if let Some(projection) = &mut projection {
@@ -1057,7 +1121,7 @@ pub(crate) fn query(
         };
         projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(&finding)?.len());
         if projection_bytes > bytes {
-            result.limits.push("response_bytes".into());
+            result.limit("response_bytes");
             break;
         }
         if let Some(projection) = &mut projection {
@@ -1105,10 +1169,29 @@ mod tests {
         let view = crate::query::fixture_view(path).unwrap();
         let c = &view.connection;
         for incoming in [true, false] {
-            for query in [
-                adjacency_sql(incoming, false, true),
-                dispatch::proof_sql(incoming),
+            let mut shapes = vec![(dispatch::proof_sql(incoming), false)];
+            for fields in [
+                serde_json::json!({"op":"callers"}),
+                serde_json::json!({"op":"callees","include_implicit":false,"exact_only":true}),
+                serde_json::json!({"op":"impact","kinds":["call","reference"]}),
+                serde_json::json!({"op":"impact","kinds":["type_reference"]}),
             ] {
+                let request: QueryRequest = serde_json::from_value(fields).unwrap();
+                shapes.push((
+                    adjacency_sql(incoming, false, true, &edge_predicates(&request)),
+                    false,
+                ));
+                shapes.push((
+                    adjacency_sql(
+                        incoming,
+                        false,
+                        false,
+                        &frontier_predicates(incoming, &request),
+                    ),
+                    true,
+                ));
+            }
+            for (query, frontier) in shapes {
                 // Parameter changes must not repeatedly replan these nested views.
                 let mut adjacency = c.prepare(&query).unwrap();
                 for parameters in [
@@ -1116,7 +1199,16 @@ mod tests {
                     [0, 1, 10001],
                     [1, i64::MAX, 100001],
                 ] {
-                    let mut rows = adjacency.query(parameters).unwrap();
+                    let mut parameters = parameters
+                        .into_iter()
+                        .map(rusqlite::types::Value::Integer)
+                        .collect::<Vec<_>>();
+                    if frontier {
+                        parameters.push(rusqlite::types::Value::Text("[1,2]".into()));
+                    }
+                    let mut rows = adjacency
+                        .query(rusqlite::params_from_iter(&parameters))
+                        .unwrap();
                     while rows.next().unwrap().is_some() {}
                 }
                 assert_eq!(
@@ -1125,8 +1217,18 @@ mod tests {
                 );
                 let sql = format!("EXPLAIN QUERY PLAN {query}");
                 let mut stmt = c.prepare(&sql).unwrap();
+                let mut parameters = vec![
+                    rusqlite::types::Value::Integer(0),
+                    rusqlite::types::Value::Integer(1),
+                    rusqlite::types::Value::Integer(10001),
+                ];
+                if frontier {
+                    parameters.push(rusqlite::types::Value::Text("[1,2]".into()));
+                }
                 for detail in stmt
-                    .query_map([0, 1, 10001], |r| r.get::<_, String>(3))
+                    .query_map(rusqlite::params_from_iter(&parameters), |r| {
+                        r.get::<_, String>(3)
+                    })
                     .unwrap()
                 {
                     let detail = detail.unwrap();
@@ -1299,6 +1401,64 @@ mod tests {
             }
         }
         graph
+    }
+    #[test]
+    fn compact_symbol_search_bounds_declarations_and_labels_every_exact_support() {
+        let path = declaration_graph(20, 1);
+        let view = crate::query::fixture_view(path).unwrap();
+        let result = view
+            .query(
+                serde_json::from_value(serde_json::json!({"op":"symbols","name":"f","limit":1}))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(result.truncated);
+        assert_eq!(result.symbols.len(), 1);
+        let symbol = &result.symbols[0];
+        assert_eq!(symbol.locations.len(), 16);
+        assert!(symbol.locations_limited);
+        assert_eq!(symbol.supporting_targets.len(), 3);
+        assert!(
+            symbol
+                .supporting_targets
+                .iter()
+                .all(|support| support.locations_limited && support.locations.len() == 16)
+        );
+        let wire = serde_json::to_value(&result).unwrap();
+        assert_eq!(wire["symbols"][0]["locations_limited"], true);
+        assert!(
+            wire["symbols"][0]["supporting_targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|s| s["locations_limited"] == true)
+        );
+        let exact = view
+            .query(
+                serde_json::from_value(
+                    serde_json::json!({"op":"symbols","name":"f","target":"target1","limit":1}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(exact.truncated);
+        assert_eq!(exact.symbols[0].target, "target1");
+        assert!(exact.symbols[0].supporting_targets.is_empty());
+        assert!(exact.symbols[0].locations_limited);
+        let complete = view
+            .query(
+                serde_json::from_value(
+                    serde_json::json!({"op":"symbols","name":"g","target":"target1","limit":1}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(!complete.truncated);
+        assert!(
+            serde_json::to_value(complete).unwrap()["symbols"][0]
+                .get("locations_limited")
+                .is_none()
+        );
     }
     #[test]
     fn graph_source_is_opt_in_and_default_executes_no_source_sql() {

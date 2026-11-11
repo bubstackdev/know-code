@@ -945,3 +945,152 @@ fn v5_dispatch_key_migration_preserves_pinned_body_queries() {
         assert!(g.findings[0].paths[0][0].dispatch_key.is_empty());
     }
 }
+
+#[test]
+fn depth_frontier_is_only_probed_without_expansion_or_out_of_depth_boundaries() {
+    let db = database("depth-frontier");
+    let mut writer = Writer::open(&db).unwrap();
+    let mut virtual_call = edge("middle", "slot", 3, "compiler_bound");
+    virtual_call.dispatch = "virtual".into();
+    virtual_call.dispatch_key.clear();
+    populate(
+        &mut writer,
+        "one",
+        &["root", "middle", "far", "slot"],
+        vec![
+            edge("root", "middle", 0, "compiler_bound"),
+            edge("middle", "far", 1, "compiler_bound"),
+            edge("middle", "", 2, "unresolved"),
+            virtual_call,
+        ],
+    );
+    writer.publish().unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
+    let result = query(
+        &view,
+        serde_json::json!({"op":"callees","symbol_id":"root","max_depth":1,"max_edges":1}),
+    );
+    let graph = result.graph.unwrap();
+    assert!(result.truncated);
+    assert_eq!(graph.examined_edges, 1);
+    assert_eq!(graph.findings.len(), 1);
+    assert_eq!(graph.findings[0].symbol.id, "middle");
+    assert_eq!(graph.limits, ["depth_budget"]);
+    assert!(
+        graph.boundaries.is_empty(),
+        "beyond-depth diagnostics must not leak into the request"
+    );
+    let expanded = query(
+        &view,
+        serde_json::json!({"op":"callees","symbol_id":"root","max_depth":2}),
+    )
+    .graph
+    .unwrap();
+    assert!(
+        expanded
+            .boundaries
+            .iter()
+            .any(|b| b.reason == "unresolved_target")
+    );
+    assert!(
+        expanded
+            .boundaries
+            .iter()
+            .any(|b| b.reason == "dispatch_specialization_unproven")
+    );
+}
+
+#[test]
+fn edge_filters_apply_before_the_sql_row_cap_in_both_directions() {
+    let db = database("filtered-cap");
+    let mut writer = Writer::open(&db).unwrap();
+    let mut names = vec!["root".to_owned(), "good".to_owned()];
+    names.extend((0..32).map(|n| format!("noise{n}")));
+    let mut edges = vec![];
+    for name in &names[2..] {
+        for (from, to) in [("root", name.as_str()), (name.as_str(), "root")] {
+            let mut reference = edge(from, to, 0, "compiler_bound");
+            reference.kind = "reference".into();
+            let mut implicit = edge(from, to, 1, "compiler_bound");
+            implicit.implicit = true;
+            edges.extend([reference, implicit, edge(from, to, 2, "possible_dispatch")]);
+        }
+    }
+    for (from, to) in [("root", "good"), ("good", "root")] {
+        edges.push(edge(from, to, 3, "compiler_bound"));
+        let mut typed = edge(from, to, 4, "compiler_bound");
+        typed.kind = "type_reference".into();
+        edges.push(typed);
+    }
+    let ids = names.iter().map(String::as_str).collect::<Vec<_>>();
+    populate(&mut writer, "one", &ids, edges);
+    writer.publish().unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
+    for op in ["callers", "callees", "impact"] {
+        let mut request = serde_json::json!({"op":op,"symbol_id":"root","max_depth":1,"max_edges":1,"include_implicit":false,"exact_only":true});
+        if op == "impact" {
+            request["kinds"] = serde_json::json!(["type_reference"]);
+        }
+        let result = query(&view, request);
+        let graph = result.graph.unwrap();
+        assert!(!result.truncated, "{op}: {:?}", graph.limits);
+        assert_eq!(graph.examined_edges, 1, "{op}");
+        assert_eq!(graph.findings.len(), 1, "{op}");
+        assert_eq!(graph.findings[0].symbol.id, "good");
+        assert_eq!(graph.findings[0].paths[0].len(), 1);
+        assert!(
+            graph.findings[0].paths[0]
+                .iter()
+                .all(|e| !e.implicit && e.resolution == "compiler_bound")
+        );
+    }
+}
+
+#[test]
+fn root_self_calls_are_terminal_findings_and_mutual_recursion_stays_bounded() {
+    let db = database("recursive-terminal");
+    let mut writer = Writer::open(&db).unwrap();
+    populate(
+        &mut writer,
+        "one",
+        &["root", "other"],
+        vec![
+            edge("root", "root", 0, "compiler_bound"),
+            edge("root", "other", 1, "compiler_bound"),
+            edge("other", "root", 2, "compiler_bound"),
+        ],
+    );
+    writer.publish().unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
+    for op in ["callers", "callees"] {
+        for depth in [1, 32] {
+            let result = query(
+                &view,
+                serde_json::json!({"op":op,"symbol_id":"root","max_depth":depth,"paths_per_symbol":8}),
+            );
+            let graph = result.graph.unwrap();
+            assert!(!result.truncated, "{op}: {:?}", graph.limits);
+            assert_eq!(graph.findings.len(), 2);
+            assert_eq!(graph.visited_nodes, 2);
+            let recursive = graph
+                .findings
+                .iter()
+                .find(|f| f.symbol.id == "root")
+                .unwrap();
+            assert_eq!(recursive.paths.len(), 1);
+            assert_eq!(recursive.paths[0].len(), 1);
+            assert_eq!(recursive.paths[0][0].source_id, "root");
+            assert_eq!(recursive.paths[0][0].target_id.as_deref(), Some("root"));
+            assert_eq!(recursive.paths[0][0].resolution, "compiler_bound");
+            assert_eq!(graph.examined_edges, if depth == 1 { 2 } else { 3 });
+        }
+    }
+    let impact = query(
+        &view,
+        serde_json::json!({"op":"impact","symbol_id":"root","max_depth":32,"paths_per_symbol":8}),
+    )
+    .graph
+    .unwrap();
+    assert_eq!(impact.findings.len(), 1);
+    assert_eq!(impact.findings[0].symbol.id, "other");
+}

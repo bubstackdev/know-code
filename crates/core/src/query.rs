@@ -97,11 +97,13 @@ pub struct SymbolResult {
     pub supporting_targets: Vec<SymbolSupport>,
     #[serde(skip)]
     pub(crate) owner_generation: u64,
-    #[serde(skip)]
-    pub(crate) locations_limited: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locations_limited: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct SymbolSupport {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locations_limited: bool,
     pub symbol_id: String,
     pub compilation_id: String,
     pub target: String,
@@ -112,6 +114,7 @@ pub struct SymbolSupport {
 impl From<&SymbolResult> for SymbolSupport {
     fn from(s: &SymbolResult) -> Self {
         Self {
+            locations_limited: s.locations_limited,
             symbol_id: s.id.clone(),
             compilation_id: s.compilation_id.clone(),
             target: s.target.clone(),
@@ -785,7 +788,8 @@ impl ReadView {
                     let mut representative = None;
                     let mut supports = vec![];
                     crate::grouping::members(self, &request, &group, |key| {
-                        let symbol = crate::graph::symbol_full(&self.connection, key)?;
+                        let symbol = crate::graph::symbol(&self.connection, key)?;
+                        result.truncated |= symbol.locations_limited;
                         if let Some(first) = &representative {
                             if supports.is_empty() {
                                 let support = SymbolSupport::from(first);

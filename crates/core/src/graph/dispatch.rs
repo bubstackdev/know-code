@@ -131,10 +131,10 @@ impl Budget {
     }
     fn take(&self, result: &mut GraphResult) -> bool {
         if self.started.elapsed() >= self.duration {
-            result.limits.push("time_budget".into());
+            result.limit("time_budget");
             false
         } else if self.remaining(result) == 0 {
-            result.limits.push("edge_budget".into());
+            result.limit("edge_budget");
             false
         } else {
             result.examined_edges += 1;
@@ -184,6 +184,7 @@ pub(super) fn neighbors(
         incoming,
         false,
         view.format_version >= 6,
+        &edge_predicates(request),
     ))?;
     let mut rows = stmt.query(params![view.generation, node, budget.remaining(result) + 1])?;
     while let Some(row) = rows.next()? {
@@ -216,9 +217,12 @@ pub(super) fn neighbors(
                 break;
             }
             let implementation = proof(row)?;
-            let mut calls = view
-                .connection
-                .prepare_cached(&adjacency_sql(true, true, true))?;
+            let mut calls = view.connection.prepare_cached(&adjacency_sql(
+                true,
+                true,
+                true,
+                &edge_predicates(request),
+            ))?;
             let mut call_rows = calls.query(params![
                 view.generation,
                 implementation.target,
@@ -275,4 +279,48 @@ pub(super) fn neighbors(
         output.extend(candidates);
     }
     Ok(output)
+}
+
+/// Existence only: no dispatch expansion, evidence construction, or edge-budget
+/// charge beyond the requested depth. Ancestor-only cycles are not more work.
+pub(super) fn has_frontier(
+    view: &ReadView,
+    node: i64,
+    incoming: bool,
+    request: &QueryRequest,
+    ancestors: &[i64],
+) -> Result<bool> {
+    view.check()?;
+    let ancestors = serde_json::to_string(ancestors)?;
+    let predicates = frontier_predicates(incoming, request);
+    let mut base =
+        view.connection
+            .prepare_cached(&adjacency_sql(incoming, false, false, &predicates))?;
+    if base
+        .query(params![view.generation, node, 1, &ancestors])?
+        .next()?
+        .is_some()
+    {
+        return Ok(true);
+    }
+    if !incoming
+        || view.format_version < 6
+        || request.exact_only
+        || request
+            .kinds
+            .as_ref()
+            .is_some_and(|k| !k.contains(&DependencyKind::Call))
+    {
+        return Ok(false);
+    }
+    // A proof is potential further work, not a finding or proof of a caller.
+    // Stop here rather than joining two UNION views or expanding dispatch
+    // beyond the requested depth just to prove that no caller exists.
+    let mut dispatch = view.connection.prepare_cached(&proof_sql(true))?;
+    let found = dispatch
+        .query(params![view.generation, node, 1])?
+        .next()?
+        .is_some();
+    view.check()?;
+    Ok(found)
 }
