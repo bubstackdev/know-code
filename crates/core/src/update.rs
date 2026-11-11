@@ -7,10 +7,14 @@ use crate::{
 use std::{
     collections::BTreeMap,
     ffi::{OsStr, OsString},
-    io::{BufReader, Read},
-    os::unix::ffi::OsStrExt,
+    io::{BufReader, Read, Write},
+    os::{fd::AsRawFd, unix::ffi::OsStrExt},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// PATH shared by top-level compiler workers, their nested tools and installed
@@ -58,6 +62,155 @@ fn worker_executable(program: &str, path: &OsStr) -> Result<PathBuf> {
     Err(Error::Provider(format!(
         "cannot locate executable {program} on the absolute toolchain PATH; install the required toolchain separately and configure an absolute PATH entry"
     )))
+}
+
+/// Owns one parent pipe endpoint. An escaped descendant can retain the other
+/// endpoint, but cannot postpone cancellation or the original worker's EOF.
+struct WorkerPipe<P> {
+    pipe: P,
+    control: Control,
+    leader: libc::pid_t,
+    reaped: Arc<AtomicBool>,
+    drain: Option<usize>,
+}
+impl<P: AsRawFd> WorkerPipe<P> {
+    fn new(
+        pipe: P,
+        control: &Control,
+        leader: u32,
+        reaped: &Arc<AtomicBool>,
+    ) -> std::io::Result<Self> {
+        let fd = pipe.as_raw_fd();
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self {
+            pipe,
+            control: control.clone(),
+            leader: leader as libc::pid_t,
+            reaped: Arc::clone(reaped),
+            drain: None,
+        })
+    }
+    fn check(&self) -> std::io::Result<()> {
+        self.control.check().map_err(std::io::Error::other)
+    }
+    fn exited(&self) -> std::io::Result<bool> {
+        if self.reaped.load(Ordering::Acquire) {
+            return Ok(true);
+        }
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                self.leader as libc::id_t,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+            )
+        };
+        if result == 0 {
+            return Ok(unsafe { info.assume_init() }.si_pid != 0);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ECHILD) {
+            return Ok(true);
+        }
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            return Ok(false);
+        }
+        Err(error)
+    }
+    fn poll(&self, events: i16) -> std::io::Result<()> {
+        let mut fd = libc::pollfd {
+            fd: self.pipe.as_raw_fd(),
+            events,
+            revents: 0,
+        };
+        let result = unsafe { libc::poll(&mut fd, 1, 20) };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+        if fd.revents & libc::POLLNVAL != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "worker pipe closed unexpectedly",
+            ));
+        }
+        self.check()
+    }
+}
+impl<P: Read + AsRawFd> Read for WorkerPipe<P> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            self.check()?;
+            if self.drain.is_none() && self.exited()? {
+                // Drain exactly the bytes already buffered when the owned
+                // leader exits. Later descendant writes are not worker output.
+                let mut available: libc::c_int = 0;
+                if unsafe { libc::ioctl(self.pipe.as_raw_fd(), libc::FIONREAD, &mut available) } < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                self.drain = Some(available.max(0) as usize);
+            }
+            let count = self
+                .drain
+                .map_or(buffer.len(), |left| left.min(buffer.len()));
+            if count == 0 {
+                return Ok(0);
+            }
+            match self.pipe.read(&mut buffer[..count]) {
+                Ok(count) => {
+                    if let Some(left) = &mut self.drain {
+                        *left = left.saturating_sub(count);
+                    }
+                    return Ok(count);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if self.drain.is_some() {
+                        return Ok(0);
+                    }
+                    self.poll(libc::POLLIN)?;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+}
+impl<P: Write + AsRawFd> Write for WorkerPipe<P> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            self.check()?;
+            if self.exited()? {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "worker exited before consuming the request",
+                ));
+            }
+            match self.pipe.write(buffer) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.poll(libc::POLLOUT)?
+                }
+                result => return result,
+            }
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.check()?;
+        self.pipe.flush()
+    }
 }
 
 pub struct WorkerCommand {
@@ -198,7 +351,14 @@ pub(crate) fn index_published(
                 )),
                 other => other,
             })?;
-        let mut stderr = child.child.stderr.take().expect("piped stderr");
+        let reaped = Arc::new(AtomicBool::new(false));
+        let leader = child.child.id();
+        let mut stderr = WorkerPipe::new(
+            child.child.stderr.take().expect("piped stderr"),
+            control,
+            leader,
+            &reaped,
+        )?;
         let errors = std::thread::spawn(move || {
             let mut retained = std::collections::VecDeque::with_capacity(8192);
             let mut buffer = [0; 1024];
@@ -217,14 +377,24 @@ pub(crate) fn index_published(
         });
         let execution = (|| -> Result<()> {
             protocol::write_frame(
-                &mut child.child.stdin.take().expect("piped stdin"),
+                &mut WorkerPipe::new(
+                    child.child.stdin.take().expect("piped stdin"),
+                    control,
+                    leader,
+                    &reaped,
+                )?,
                 &Envelope {
                     protocol_version: VERSION,
                     job_id: job_id.clone(),
                     payload: Some(Payload::Analyze(worker.request)),
                 },
             )?;
-            let mut stdout = BufReader::new(child.child.stdout.take().expect("piped stdout"));
+            let mut stdout = BufReader::new(WorkerPipe::new(
+                child.child.stdout.take().expect("piped stdout"),
+                control,
+                leader,
+                &reaped,
+            )?);
             let mut hello = false;
             let mut completed = false;
             while let Some(message) = protocol::read_frame(&mut stdout)? {
@@ -323,6 +493,7 @@ pub(crate) fn index_published(
             child.terminate();
         }
         let exit = child.wait()?;
+        reaped.store(true, Ordering::Release);
         let details = errors.join().unwrap_or_default();
         control.check()?;
         execution.map_err(|error| match error {
@@ -412,5 +583,222 @@ mod path_tests {
             std::fs::canonicalize(bin.join("owned-tool")).unwrap()
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod pipe_tests {
+    use super::*;
+    use std::{
+        io::BufRead,
+        os::unix::process::CommandExt,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.artifacts/worker-pipes")
+                .join(format!(
+                    "{}-{}",
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ));
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+        fn release(&self) {
+            let _ = std::fs::write(self.0.join("release"), b"done");
+            let until = Instant::now() + Duration::from_secs(3);
+            while !self.0.join("retainer-done").exists() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        fn ready(&self) {
+            let until = Instant::now() + Duration::from_secs(3);
+            while !self.0.join("retainer-pid").exists() {
+                assert!(
+                    Instant::now() < until,
+                    "fixture worker failed to start retained-pipe child"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        fn command(&self, mode: &str) -> Command {
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args([
+                "--exact",
+                "update::pipe_tests::fixture_worker",
+                "--nocapture",
+            ])
+            .env("KNOW_CODE_PIPE_FIXTURE", &self.0)
+            .env("KNOW_CODE_PIPE_MODE", mode)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+            cmd
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
+    #[test]
+    fn fixture_worker() {
+        let Some(root) = std::env::var_os("KNOW_CODE_PIPE_FIXTURE") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        // This owned shell leaves the worker's process group, retains both
+        // output endpoints, emits no bytes, and exits on release or watchdog.
+        // Tests release it through a file; they never kill an escaped process.
+        let retainer=Command::new("/bin/sh").args(["-c","n=0; while [ ! -f \"$KNOW_CODE_PIPE_FIXTURE/release\" ] && [ $n -lt 500 ]; do /bin/sleep 0.02; n=$((n+1)); done; : > \"$KNOW_CODE_PIPE_FIXTURE/retainer-done\""])
+            .env("KNOW_CODE_PIPE_FIXTURE",&root).process_group(0).stdin(Stdio::null()).spawn().unwrap();
+        std::fs::write(root.join("retainer-pid"), retainer.id().to_string()).unwrap();
+        // The fixture leader exits explicitly below; while alive it still
+        // arranges normal reaping if the retained child finishes first.
+        let _retainer_waiter = std::thread::spawn(move || {
+            let _ = retainer.wait();
+        });
+        println!("--worker-stream--");
+        std::io::stdout().flush().unwrap();
+        std::io::stdout().write_all(&[1, 0]).unwrap();
+        std::io::stdout().flush().unwrap();
+        eprintln!("owned-worker-stderr");
+        if std::env::var("KNOW_CODE_PIPE_MODE").unwrap() == "hold" {
+            let until = Instant::now() + Duration::from_secs(10);
+            while !root.join("release").exists() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        std::process::exit(0); // no harness epilogue in the framed stream
+    }
+    fn framed<R: Read>(reader: R) -> BufReader<R> {
+        let mut reader = BufReader::new(reader);
+        loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+            if line == "--worker-stream--\n" {
+                return reader;
+            }
+        }
+    }
+    #[test]
+    fn owned_exit_finishes_partial_frame_and_stderr_despite_live_escaped_pipe_holder() {
+        let fixture = Fixture::new();
+        let control = Control::default();
+        let mut worker = control.spawn(&mut fixture.command("exit")).unwrap();
+        let reaped = Arc::new(AtomicBool::new(false));
+        let pid = worker.child.id();
+        let stdout =
+            WorkerPipe::new(worker.child.stdout.take().unwrap(), &control, pid, &reaped).unwrap();
+        let mut stderr =
+            WorkerPipe::new(worker.child.stderr.take().unwrap(), &control, pid, &reaped).unwrap();
+        let (send, receive) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut stdout = framed(stdout);
+            send.send(protocol::read_frame(&mut stdout)).unwrap();
+        });
+        fixture.ready();
+        let error = receive
+            .recv_timeout(Duration::from_secs(3))
+            .expect("escaped stdout holder postponed worker EOF")
+            .unwrap_err();
+        assert!(
+            matches!(error,Error::Io(error) if error.kind()==std::io::ErrorKind::UnexpectedEof)
+        );
+        assert!(
+            !fixture.0.join("retainer-done").exists(),
+            "EOF must not depend on escaped holder exit"
+        );
+        let mut details = String::new();
+        stderr.read_to_string(&mut details).unwrap();
+        assert!(details.contains("owned-worker-stderr"));
+        assert!(worker.wait().unwrap().success());
+        reaped.store(true, Ordering::Release);
+        reader.join().unwrap();
+        fixture.release();
+        assert!(fixture.0.join("retainer-done").exists());
+    }
+    #[test]
+    fn cancellation_unblocks_full_stdin_and_retained_stdout_stderr_and_releases_the_slot() {
+        let fixture = Fixture::new();
+        let governor = crate::resource::Governor::new(crate::resource::Limits {
+            cpu_cores: 64.0,
+            memory_mib: 65536,
+            ..Default::default()
+        })
+        .unwrap();
+        let session = governor.start().unwrap();
+        let control = session.control();
+        let mut worker = control.spawn(&mut fixture.command("hold")).unwrap();
+        let reaped = Arc::new(AtomicBool::new(false));
+        let pid = worker.child.id();
+        let mut stdin =
+            WorkerPipe::new(worker.child.stdin.take().unwrap(), &control, pid, &reaped).unwrap();
+        let stdout =
+            WorkerPipe::new(worker.child.stdout.take().unwrap(), &control, pid, &reaped).unwrap();
+        let mut stderr =
+            WorkerPipe::new(worker.child.stderr.take().unwrap(), &control, pid, &reaped).unwrap();
+        fixture.ready();
+        let mut filled = 0;
+        loop {
+            match stdin.pipe.write(&[0; 8192]) {
+                Ok(n) => {
+                    filled += n;
+                    assert!(filled <= 2 * 1024 * 1024, "fixture pipe never became full");
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("fixture stdin fill failed: {error}"),
+            }
+        }
+        let (send, receive) = mpsc::channel();
+        let out = send.clone();
+        let (started, ready) = mpsc::channel();
+        let stdout_thread = std::thread::spawn(move || {
+            let mut stdout = framed(stdout);
+            started.send(()).unwrap();
+            let result = protocol::read_frame(&mut stdout);
+            out.send(("stdout", result.is_err())).unwrap();
+        });
+        let err = send.clone();
+        let stderr_thread = std::thread::spawn(move || {
+            let mut bytes = vec![];
+            let result = stderr.read_to_end(&mut bytes);
+            err.send(("stderr", result.is_err())).unwrap();
+        });
+        let stdin_thread = std::thread::spawn(move || {
+            send.send(("stdin", stdin.write_all(b"x").is_err()))
+                .unwrap();
+        });
+        ready
+            .recv_timeout(Duration::from_secs(3))
+            .expect("stdout reader did not reach the partial frame");
+        assert!(control.cancel());
+        for _ in 0..3 {
+            let (stream, stopped) = receive
+                .recv_timeout(Duration::from_secs(3))
+                .expect("cancelled retained pipe did not release");
+            assert!(stopped, "{stream}");
+        }
+        assert!(matches!(control.check(), Err(Error::Cancelled)));
+        worker.wait().unwrap();
+        reaped.store(true, Ordering::Release);
+        stdout_thread.join().unwrap();
+        stderr_thread.join().unwrap();
+        stdin_thread.join().unwrap();
+        assert!(!fixture.0.join("retainer-done").exists());
+        drop(session);
+        let next = governor
+            .start()
+            .expect("stopped worker retained the shared analysis slot");
+        drop(next);
+        fixture.release();
+        assert!(fixture.0.join("retainer-done").exists());
     }
 }
