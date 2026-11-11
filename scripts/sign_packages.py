@@ -235,7 +235,7 @@ def requirement(team, identifier):
 
 def verify_native(path, identifier, args, evidence, certificate_prefix):
     run([CODESIGN, '--verify', '--strict', '-R=' + requirement(args.team_id, identifier), path], evidence)
-    stdout, stderr = run([CODESIGN, '--display', '--verbose=4', '--extract-certificates', certificate_prefix, path], evidence)
+    stdout, stderr = run([CODESIGN, '--display', '--verbose=4', f'--extract-certificates={certificate_prefix}', path], evidence)
     display = stdout + stderr
     require(re.search(r'^CodeDirectory .*flags=.*\bruntime\b', display, re.M) is not None,
             f'Hardened runtime flag missing: {path}')
