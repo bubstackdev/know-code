@@ -93,6 +93,12 @@ pub(crate) fn index_published(
         };
     for (number, mut worker) in workers.into_iter().enumerate() {
         let requested_policy = protocol::prepare_analysis_policy(&mut worker.request)?;
+        let target_policy = worker.request.target_equivalence_policy;
+        if target_policy != 0 && target_policy != crate::grouping::POLICY_VERSION {
+            return Err(Error::UpdateRequired(
+                "unsupported target equivalence policy".into(),
+            ));
+        }
         let classification_policy = worker.request.test_classification_policy;
         if classification_policy != 0 && classification_policy != crate::testing::POLICY_VERSION {
             return Err(Error::UpdateRequired(
@@ -167,6 +173,12 @@ pub(crate) fn index_published(
                 match message.payload {
                     Some(Payload::Provider(info)) if !hello => {
                         protocol::check_analysis_policy(requested_policy, &info)?;
+                        if target_policy != 0
+                            && (info.target_equivalence_policy != target_policy
+                                || info.language != "csharp")
+                        {
+                            return Err(Error::UpdateRequired("worker must acknowledge target equivalence policy; update the runtime bundle".into()));
+                        }
                         if classification_policy != 0
                             && (info.test_classification_policy != classification_policy
                                 || !["typescript", "csharp"].contains(&info.language.as_str()))
@@ -203,6 +215,15 @@ pub(crate) fn index_published(
                         std::fs::rename(next, &preparation_path)?;
                     }
                     Some(payload) if hello => {
+                        if let Payload::Compilation(compilation) = &payload
+                            && target_policy != 0
+                            && compilation.target_equivalence_policy != target_policy
+                        {
+                            return Err(Error::Protocol(
+                                "requested target equivalence metadata missing or incompatible"
+                                    .into(),
+                            ));
+                        }
                         if classification_policy != 0 {
                             let classification = match &payload {
                                 Payload::Compilation(c) => Some(c.test_classification.as_ref()),

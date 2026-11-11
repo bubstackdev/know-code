@@ -630,6 +630,7 @@ pub fn refresh_controlled(
                 test_classification_policy: crate::testing::POLICY_VERSION,
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: cs,
+                target_equivalence_policy: crate::grouping::POLICY_VERSION,
                 configuration: configuration.into(),
                 preparation_fingerprint: preparation_fingerprint.into(),
                 retry_preparation,
