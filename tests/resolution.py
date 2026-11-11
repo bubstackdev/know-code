@@ -154,23 +154,39 @@ assert all(c['status'] == 'complete' for c in query({'op': 'symbols', 'name': 'R
 startup_target.unlink()
 ready = wait(lambda s: s['phase'] == 'idle' and s['generation'] > ready['generation'])
 
-# SDK target errors must retain diagnostic details and the prior graph.
+# Expected SDK target errors publish fresh unavailable coverage with diagnostic
+# details, rather than serving the failed projects' previous facts as current.
 failure_target = WORKSPACE / 'Directory.Build.targets'
 failure_target.write_text('<Project><Target Name="RejectIdentity" BeforeTargets="GetAssemblyVersion"><Error Code="KCSDK001" Text="SDK identity failure probe" /></Target></Project>')
-failed = wait(lambda s: s['phase'] == 'failed')
-assert failed['generation'] == ready['generation'], failed
-assert 'KCSDK001' in failed['error'] and 'SDK identity failure probe' in failed['error'], failed
-assert query({'op': 'symbols', 'name': 'Read'})['coverage'] == coverage
+failed = wait(lambda s: s['phase'] == 'idle' and s['generation'] > ready['generation'])
+unavailable = query({'op': 'symbols', 'name': 'Read'})
+assert unavailable['freshness'] == 'current' and not unavailable.get('symbols'), unavailable
+assert {c['project_path'] for c in unavailable['coverage']} == {'Library/Library.csproj', 'AConsumer/AConsumer.csproj', 'BConsumer/BConsumer.csproj'}, unavailable
+assert all(c['status'] == 'unavailable' and any(d['code'] == 'project_evaluation_failed'
+           and 'KCSDK001' in d['message'] and 'SDK identity failure probe' in d['message']
+           for d in c.get('diagnostics', [])) for c in unavailable['coverage']), unavailable
 failure_target.unlink()
-ready = wait(lambda s: s['phase'] == 'idle' and s['observed_epoch'] > failed['observed_epoch'] and s['published_epoch'] == s['observed_epoch'])
+ready = wait(lambda s: s['phase'] == 'idle' and s['generation'] > failed['generation'] and s['published_epoch'] == s['observed_epoch'])
+assert all(c['status'] == 'complete' for c in query({'op': 'symbols', 'name': 'Read'})['coverage'])
+assert query({'op': 'symbols', 'name': 'Read'})['symbols']
 
 # Amortizing SDK selection must still notice a nested, unavailable SDK pin.
 nested_pin = WORKSPACE / 'BConsumer/global.json'
 nested_pin.write_text(json.dumps({'sdk': {'version': '9999.0.100', 'rollForward': 'disable'}}))
-failed = wait(lambda s: s['phase'] == 'failed')
-assert failed['generation'] == ready['generation'] and '9999.0.100' in failed['error'], failed
+failed = wait(lambda s: s['phase'] == 'idle' and s['generation'] > ready['generation'])
+sdk_gap = query({'op': 'symbols', 'name': 'Read'})
+assert sdk_gap['freshness'] == 'current' and sdk_gap['symbols'], sdk_gap
+blocked = [c for c in sdk_gap['coverage'] if c['project_path'] == 'BConsumer/BConsumer.csproj']
+healthy = [c for c in sdk_gap['coverage'] if c['project_path'] != 'BConsumer/BConsumer.csproj']
+assert len(blocked) == 1 and blocked[0]['status'] == 'unavailable' and any(
+    d['code'] == 'sdk_unavailable' and '9999.0.100' in d['message'] for d in blocked[0].get('diagnostics', [])), sdk_gap
+assert len(healthy) == 3 and all(c['status'] == 'complete' for c in healthy), sdk_gap
+assert query({'op': 'symbols', 'name': 'AConsumer'})['symbols'] and query({'op': 'symbols', 'name': 'LibraryApi'})['symbols']
+assert not query({'op': 'symbols', 'name': 'BConsumer'}).get('symbols'), 'unavailable SDK retained old project facts'
 nested_pin.unlink()
-ready = wait(lambda s: s['phase'] == 'idle' and s['observed_epoch'] > failed['observed_epoch'] and s['published_epoch'] == s['observed_epoch'])
+ready = wait(lambda s: s['phase'] == 'idle' and s['generation'] > failed['generation'] and s['published_epoch'] == s['observed_epoch'])
+assert all(c['status'] == 'complete' for c in query({'op': 'symbols', 'name': 'Read'})['coverage'])
+assert query({'op': 'symbols', 'name': 'BConsumer'})['symbols']
 
 # SDK evaluations must not reuse metadata from before a saved project change.
 consumer = WORKSPACE / 'BConsumer/BConsumer.csproj'
@@ -213,7 +229,7 @@ assert len(coverage) == 5 and all(c['status'] == 'complete' for c in coverage), 
 summary = {'result': 'passed', 'database': DATABASE, 'coverage': coverage,
            'checks': ['nearest_compatible_framework', 'legacy_implementation_output', 'project_aliases',
                       'one_workspace_configuration', 'sdk_derived_assembly_identity', 'distinct_dependency_identity', 'all_declared_targets',
-                      'sdk_startup_directory_isolated', 'sdk_target_error_preserves_graph', 'nested_sdk_pin_checked', 'saved_identity_change',
+                      'sdk_startup_directory_isolated', 'sdk_target_error_unavailable_without_stale_merge', 'nested_sdk_pin_isolates_healthy_projects', 'saved_identity_change',
                       'target_specific_identity_isolated', 'no_dependency_assembly_build', 'dependency_comment_generator_refresh',
                       'loader_warning_scope']}
 (RUN / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')

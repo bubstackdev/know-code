@@ -120,13 +120,23 @@ assert 'Final' in source_text('greet')
 config = WORKSPACE / 'typescript/tsconfig.json'
 config_text = config.read_text()
 config.write_text('{ invalid JSON')
-failed = wait(lambda s: s['phase'] == 'failed', 'worker failure')
-assert failed['generation'] == final['generation']
-assert query({'op': 'symbols', 'name': 'greet'})['result']['freshness'] == 'stale'
+partial = wait(lambda s: s['phase'] == 'idle' and s['generation'] > final['generation'], 'invalid project configuration publishes unavailable coverage')
+invalid = query({'op': 'symbols', 'name': 'greet', 'coverage_detail': 'full'})['result']
+assert invalid['freshness'] == 'current' and not invalid.get('symbols'), invalid
+unavailable = [c for c in invalid['coverage'] if c['project_path'] == 'typescript/tsconfig.json']
+assert len(unavailable) == 1 and unavailable[0]['status'] == 'unavailable', invalid
+assert any(d['code'] == 'invalid_project_configuration' for d in unavailable[0].get('diagnostics', [])), unavailable
+assert all(c['status'] == 'complete' for c in invalid['coverage'] if c['project_path'] != 'typescript/tsconfig.json'), invalid
+assert query({'op': 'symbols', 'name': 'independent'})['result']['symbols']
+assert not any(c['inferred'] and (c.get('analysis_options') or {}).get('inferredRoot', '').startswith('typescript')
+               for c in invalid['coverage']), invalid
 time.sleep(.5)
-assert status()['phase'] == 'failed', 'unchanged failure retried without another save'
+unchanged_partial = status()
+assert unchanged_partial['phase'] == 'idle' and unchanged_partial['generation'] == partial['generation'], 'unchanged unavailable project retried without another save'
 config.write_text(config_text)
-healthy = wait(lambda s: s['phase'] == 'idle', 'repair configuration')
+healthy = wait(lambda s: s['phase'] == 'idle' and s['generation'] > partial['generation'], 'repair configuration')
+repaired = query({'op': 'symbols', 'name': 'greet', 'coverage_detail': 'full'})['result']
+assert repaired['freshness'] == 'current' and repaired['symbols'] and all(c['status'] == 'complete' for c in repaired['coverage']), repaired
 away = RUN / 'workspace-away'
 WORKSPACE.rename(away)
 missing = wait(lambda s: not s['available'], 'missing workspace', seconds=10)
@@ -173,17 +183,20 @@ assert node == dotnet and node['result']['freshness'] == 'current'
 plist = plistlib.loads(run([HOST, 'coordinator', 'login-plist']).stdout.encode())
 assert plist['RunAtLoad'] and plist['KeepAlive']
 assert plist['ProgramArguments'][0] == str(HOST)
-# A forced analyzer failure can leave saved inputs identical to the last good
-# manifest (for example a missing/broken compiler). A no-op rescan cannot repair
-# that failure or relabel the previous graph current.
+# An unexpected extraction failure can leave saved inputs identical to the last
+# good manifest. Expected compiler/setup errors instead publish unavailable
+# coverage; use a real compiler with an owned extraction fault for this case.
+# A no-op rescan cannot repair this failure or relabel the prior graph current.
 fake_compiler = WORKSPACE / 'node_modules/typescript'
 fake_compiler.mkdir(parents=True)
-(fake_compiler / 'package.json').write_text(json.dumps({'name': 'typescript', 'main': 'index.cjs'}))
-(fake_compiler / 'index.cjs').write_text('module.exports = {version: "99.0.0"};')
+(fake_compiler / 'package.json').write_text(json.dumps({'name': 'typescript', 'version': '5.9.3', 'main': 'index.cjs'}))
+actual_compiler = ROOT / 'node_modules/typescript/lib/typescript.js'
+assert actual_compiler.exists()
+(fake_compiler / 'index.cjs').write_text('const ts=require(' + json.dumps(str(actual_compiler)) + ');module.exports=new Proxy(ts,{get(target,key){if(key==="createProgram")return ()=>{throw new Error("owned unexpected coordinator extraction fault")};return Reflect.get(target,key)}});\n')
 prior = status()
 assert run([HOST, 'index', WORKSPACE], check=False).returncode != 0
 broken = wait(lambda s: s['phase'] == 'failed', 'compiler failure without saved input changes')
-assert broken['generation'] == prior['generation'] and 'unsupported TypeScript' in broken['error'], broken
+assert broken['generation'] == prior['generation'] and 'owned unexpected coordinator extraction fault' in broken['error'], broken
 os.utime(source, None)
 rescanned = wait(lambda s: s['observed_epoch'] > broken['observed_epoch'] and s['phase'] == 'failed', 'unchanged-input rescan preserves analyzer failure')
 assert rescanned['generation'] == prior['generation'] and rescanned['error'] == broken['error'], rescanned
@@ -197,7 +210,7 @@ wait(lambda s: s['available'] and s['phase'] == 'idle' and s['generation'] > pri
 stop(); daemon.wait(timeout=15)
 assert query({'op': 'symbols', 'name': 'greet'})['result']['freshness'] == 'stale'
 
-summary = {'result': 'passed', 'database': DATABASE, 'checks': ['save_without_consumers', 'atomic_save', 'unchanged_unit_reuse', 'C#_dependent_targets', 'bounded_stale_fallback', 'saves_during_analysis', 'failure_preserves_graph', 'unchanged_rescan_preserves_analyzer_failure', 'returning_workspace_reanalyzes_after_failure', 'missing_root', 'restart_reconciliation', 'no_op_restart', 'single_owner', 'native_equivalence', 'login_plist', 'incompatible_protocol', 'workspace_identity', 'external_config_delete_return']}
+summary = {'result': 'passed', 'database': DATABASE, 'checks': ['save_without_consumers', 'atomic_save', 'unchanged_unit_reuse', 'C#_dependent_targets', 'bounded_stale_fallback', 'saves_during_analysis', 'invalid_project_unavailable_without_stale_merge_or_inferred_fallback', 'unexpected_failure_preserves_graph', 'unchanged_rescan_preserves_analyzer_failure', 'returning_workspace_reanalyzes_after_failure', 'missing_root', 'restart_reconciliation', 'no_op_restart', 'single_owner', 'native_equivalence', 'login_plist', 'incompatible_protocol', 'workspace_identity', 'external_config_delete_return']}
 (RUN / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
 (ROOT / '.artifacts/cd/latest.json').write_text(json.dumps(summary, indent=2) + '\n')
 print(json.dumps(summary, indent=2))
