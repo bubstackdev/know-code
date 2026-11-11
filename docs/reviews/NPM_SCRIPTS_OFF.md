@@ -68,7 +68,7 @@ the original repository/user/environment precedence intact. Observed true is
 rejected without installation or configuration rewriting. Only after observing
 false does installation pin false in CLI/environment to close a saved-config
 race. Reported package-manager options identify the checked/pinned policy.
-Adapter fingerprint salt v3 invalidates older preparation checkpoints. An old
+Adapter fingerprint salt v4 invalidates older preparation checkpoints. An old
 legacy PATH invocation that cannot establish the guarded CLI fails actionably;
 current managed analysis uses the selected verified package-tool cache.
 
@@ -101,3 +101,32 @@ unchanged bytes alone are not treated as effective-config evidence. These are
 fixture changes only; no user configuration or adapter policy is rewritten.
 The ten-pin execution remains a separate root-owned gate, including pnpm 12's
 native implementation, whose behavior is not certified by this source review.
+
+## Linked-directory prepare bypass
+
+The setup-04 full run passed all ten main Git/selector/config rows and npm 10's
+hosted-Git and effective-packing refusal cases. Its first ordinary linked
+directory then created `dependency-prepare-ran`; `root-install-ran` was absent.
+The restoration reported success with the observed/pinned `installLinks=false`.
+That setting alone does not establish script safety.
+
+In exact npm 10.0.0 `@npmcli/arborist/lib/arborist/rebuild.js:184`, dependency
+preinstall is conditional on `!ignoreScripts`, but linked-package prepare at
+line 190 is unconditional. Default bin linking keeps this rebuild path active.
+The npm 10.9.10 implementation retains that linked-prepare behavior. Separately,
+Pacote 17 uses a local Symbol for directory prepare and Pacote 19 uses a private
+`#prepareDir` method, so one prototype-method override cannot cover both.
+
+Both routes call the selected npm distribution's `@npmcli/run-script` entry.
+The existing process-local scripts-off preload now finds every copy in its
+bounded package scan and caches an async no-op entry before consumers load it.
+It retains the package's pure `isServerPackage` helper and the runner's success
+result shape. An unexpected entry layout or preloaded entry is refused. Git
+constructor denial remains separate; no Pacote/fetch/link implementation or
+package file is rewritten. Script-granted invocations do not load the guard.
+
+The fixture retains the actual prepare markers, probes each guarded runner,
+and requires ordinary linked dependency and executable `.bin` links to exist.
+The fingerprint changes to v4 so earlier preparation checkpoints cannot hide
+this policy correction. This section records source inspection and static
+checks; the new matching full matrix and installed-runtime gate remain required.

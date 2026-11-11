@@ -44,11 +44,12 @@ function command(program,args,cwd=run) {
 }
 const quote=value=>`'${value.replaceAll("'", "'\\''")}'`;
 const git=path.join(run,'git-dependency');
-write(path.join(git,'package.json'),JSON.stringify({name:'know-code-safe-git-dependency',version:'1.0.0',types:'index.d.ts',
+write(path.join(git,'package.json'),JSON.stringify({name:'know-code-safe-git-dependency',version:'1.0.0',types:'index.d.ts',bin:{'know-code-owned-tool':'cli.cjs'},
   scripts:{prepare:`node -e ${quote(`require('fs').writeFileSync(${JSON.stringify(path.join(run,'dependency-prepare-ran'))},'bad')`)}`}}));
 write(path.join(git,'index.d.ts'),'export declare const value: number;\n');
+write(path.join(git,'cli.cjs'),'#!/usr/bin/env node\nconsole.log("owned fixture bin");\n');fs.chmodSync(path.join(git,'cli.cjs'),0o755);
 command('/usr/bin/git',['init','--quiet',git]);
-command('/usr/bin/git',['add','package.json','index.d.ts'],git);
+command('/usr/bin/git',['add','package.json','index.d.ts','cli.cjs'],git);
 command('/usr/bin/git',['-c','user.name=Know Code fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null','commit','--quiet','-m','owned dependency'],git);
 const revision=command('/usr/bin/git',['rev-parse','HEAD'],git);assert(/^[0-9a-f]{40,64}$/.test(revision));
 const registry='https://registry.example.invalid/';const proxy='http://127.0.0.1:9';
@@ -69,7 +70,7 @@ async function withEnvironment(values,action) {
 }
 const tarStage=path.join(run,'tar-stage/package'),tarball=path.join(run,'dependency.tgz');
 fs.mkdirSync(tarStage,{recursive:true});
-for(const name of ['package.json','index.d.ts'])fs.copyFileSync(path.join(git,name),path.join(tarStage,name));
+for(const name of ['package.json','index.d.ts','cli.cjs'])fs.copyFileSync(path.join(git,name),path.join(tarStage,name));
 command('/usr/bin/tar',['-czf',tarball,'-C',path.dirname(tarStage),'package']);
 const tarBytes=fs.readFileSync(tarball),httpRequests=[];
 const server=createServer((req,res)=>{
@@ -144,7 +145,11 @@ for(const invoke of [()=>pacote.manifest('github:know-code-fixture/never-fetch#$
 console.log(JSON.stringify(result));`;
       const factories=JSON.parse(command(safety.program,[...safety.prefix.slice(0,-1),'--input-type=commonjs','--eval',probe,tool.prefix[0]],directory));
       if(pin==='npm@10.9.10')assert(factories.length>=2,'nested Pacote copy escaped its process-local guard');
-      attempt.guarded_factories=factories;progress();
+      const scriptProbe=`const assert=require('node:assert/strict');
+(async()=>{const entries=Object.entries(require.cache).filter(([,value])=>value.exports?.name==='DisabledPackageScripts');assert(entries.length>0);const results=[];
+for(const [filename,value] of entries){assert.equal(typeof value.exports.isServerPackage,'function');const result=await value.exports({event:'prepare',path:${JSON.stringify(git)}});assert.deepEqual(result,{args:[],code:0,signal:null,stdout:'',stderr:''});results.push({filename,result});}console.log(JSON.stringify(results));})().catch(error=>{console.error(error);process.exitCode=1});`;
+      const scriptRunners=JSON.parse(command(safety.program,[...safety.prefix.slice(0,-1),'--input-type=commonjs','--eval',scriptProbe,tool.prefix[0]],directory));
+      attempt.guarded_factories=factories;attempt.guarded_script_runners=scriptRunners;progress();
     }
     const configured={};
     for(const key of ['registry','proxy',...(yamlProxy?['httpsProxy']:[])]) {
@@ -177,6 +182,7 @@ console.log(JSON.stringify(result));`;
     const linked=await npm10Case(pin,'safe-linked-directory',`file:${git}`,'install-links=true',installLinksEnvironment('false'));
     assert(linked.preparation.succeeded,linked.preparation.error);
     assert(fs.lstatSync(path.join(linked.directory,'node_modules/know-code-safe-git-dependency')).isSymbolicLink());
+    assert(fs.lstatSync(path.join(linked.directory,'node_modules/.bin/know-code-owned-tool')).isSymbolicLink(),'scripts-off linked directory lost its ordinary executable link');
     assert.equal(linked.attempt.metadata.packageManager.restorationSafety.installLinks,false);linked.done();
     const file=await npm10Case(pin,'safe-file-tarball',`file:${tarball}`,'install-links=false',installLinksEnvironment('false'));
     assert(file.preparation.succeeded,file.preparation.error);assert(fs.existsSync(path.join(file.directory,'node_modules/know-code-safe-git-dependency/package.json')));file.done();

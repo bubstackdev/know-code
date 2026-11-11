@@ -206,7 +206,7 @@ export async function preparePackages(root, directories, request, send) {
       const fingerprint = createHash('sha256').update(JSON.stringify({inputs: inputHash.digest('hex'),
         policy: policy ?? 'legacy-npm-scripts-disabled', manager: selected?.pin ?? group.manager, runtime: process.version,
         npmInstallLinksEnvironment: {lower: process.env.npm_config_install_links, upper: process.env.NPM_CONFIG_INSTALL_LINKS},
-        implementation: 'npm-pnpm-v3-npm10-scripts-boundary'})).digest('hex');
+        implementation: 'npm-pnpm-v4-npm10-script-runner-boundary'})).digest('hex');
       const previous = request.preparations.find(p => p.key === key);
       let missingOptional = false;
       function missingDependencies() {

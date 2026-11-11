@@ -21,7 +21,7 @@ const npm = manifest(path.join(npmRoot, 'package.json'));
 if (npm.name !== 'npm' || !/^10\./.test(npm.version)) reject('selected CLI identity does not match npm 10');
 const selectedRequire = createRequire(cli);
 const primary = path.dirname(selectedRequire.resolve('pacote/package.json'));
-const pending = [path.join(npmRoot, 'node_modules')], gitModules = [];
+const pending = [path.join(npmRoot, 'node_modules')], gitModules = [], scriptModules = [];
 let packages = 0;
 function packageDirectory(directory) {
   const stat = fs.lstatSync(directory);
@@ -35,6 +35,13 @@ function packageDirectory(directory) {
       if (!filename.startsWith(npmRoot + path.sep) || requireCache(filename)) reject('Pacote escaped the selected tool or was loaded before its guard');
     }
     gitModules.push(files[0]);
+  }
+  if (pkg.name === '@npmcli/run-script') {
+    if (pkg.type === 'module' || pkg.main !== 'lib/run-script.js') reject('unsupported npm script runner layout');
+    const filename = selectedRequire.resolve(directory);
+    const helper = selectedRequire.resolve(path.join(directory, 'lib', 'is-server-package.js'));
+    if (filename !== path.join(directory, 'lib', 'run-script.js') || requireCache(filename) || requireCache(helper)) reject('npm script runner was loaded before its guard');
+    scriptModules.push({filename, helper});
   }
   const nested = path.join(directory, 'node_modules');
   if (fs.lstatSync(nested, {throwIfNoEntry: false})) pending.push(nested);
@@ -58,6 +65,7 @@ while (pending.length) {
   }
 }
 if (!gitModules.includes(path.join(primary, 'lib', 'git.js'))) reject('primary Pacote was not covered by the tool-local scan');
+if (!scriptModules.length) reject('npm script runner was not covered by the tool-local scan');
 class DisabledGitFetcher {
   constructor() {
     const error = new Error('Know Code blocks npm 10 Git dependency fetching while package scripts are disabled. Select npm 11, restore the Git dependency separately, or explicitly grant package scripts for this workspace.');
@@ -72,5 +80,23 @@ for (const filename of gitModules) {
   guarded.filename = filename;
   guarded.loaded = true;
   guarded.exports = DisabledGitFetcher;
+  selectedRequire.cache[filename] = guarded;
+}
+// npm 10's Arborist runs linked-package prepare even with ignoreScripts=true;
+// old Pacote also invokes prepare while packing directories. Their shared
+// runner entry is the narrow boundary that covers both paths, including private
+// methods that cannot be replaced on DirFetcher.prototype. This preload is
+// selected ONLY for scripts-disabled restoration, before any consumer loads it.
+for (const {filename, helper} of scriptModules) {
+  const isServerPackage = selectedRequire(helper);
+  if (typeof isServerPackage !== 'function') reject('unsupported npm server-package helper');
+  async function DisabledPackageScripts() {
+    return {args: [], code: 0, signal: null, stdout: '', stderr: ''};
+  }
+  DisabledPackageScripts.isServerPackage = isServerPackage;
+  const guarded = new Module(filename);
+  guarded.filename = filename;
+  guarded.loaded = true;
+  guarded.exports = DisabledPackageScripts;
   selectedRequire.cache[filename] = guarded;
 }
