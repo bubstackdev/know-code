@@ -1,5 +1,5 @@
 use know_code_core::{
-    control, execution,
+    admission, control, execution,
     protocol::{ControlRequest, WorkspaceStatus},
     query,
 };
@@ -96,6 +96,17 @@ impl ServerHandler for Mcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let start = know_code_core::execution::QueryStart::default();
+        let context_cancelled = context.ct.clone();
+        let handoff = match self
+            .connection
+            .begin_response(context.id.clone(), move || context_cancelled.is_cancelled())
+        {
+            Ok(handoff) => handoff,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Ok(failure("busy", error));
+            }
+            Err(error) => return Err(ErrorData::internal_error(error.to_string(), None)),
+        };
         let name = request.name.as_ref();
         if self.get_tool(name).is_none() {
             return Err(ErrorData::invalid_params("unknown Know Code tool", None));
@@ -148,6 +159,24 @@ impl ServerHandler for Mcp {
             };
             arguments.insert("op".into(), json!(op));
         }
+        // One account-wide charge begins before serialization/dispatch and is
+        // shared with the blocking task and the eventual transport response.
+        let reservation = if status {
+            None
+        } else {
+            match admission::AdmissionScope::local().and_then(|scope| scope.try_reserve()) {
+                Ok(reservation) => {
+                    let reservation = Arc::new(reservation);
+                    handoff.retain(reservation.clone());
+                    Some(reservation)
+                }
+                Err(error) => return Ok(failure(error.code(), error)),
+            }
+        };
+        let encoded = Value::Object(arguments).to_string();
+        if !status && let Err(error) = admission::check_request_bytes(encoded.len()) {
+            return Ok(failure(error.code(), error));
+        }
         let database = self.database.clone();
         let data = self.data.clone();
         let worker_cancellation = cancellation.clone();
@@ -171,11 +200,12 @@ impl ServerHandler for Mcp {
                     Err(error) => failure(error.code(), &error),
                 }
             } else {
-                let result: Value = serde_json::from_str(&know_code_core::query_json_cancellable(
+                let result: Value = serde_json::from_str(&know_code_core::query_json_reserved(
                     &database,
-                    &Value::Object(arguments).to_string(),
+                    &encoded,
                     start,
                     Some(worker_cancellation),
+                    reservation.as_ref().expect("query reservation"),
                 ))
                 .expect("core query emits JSON");
                 if result.get("error").is_some() {
@@ -185,13 +215,17 @@ impl ServerHandler for Mcp {
                 }
             }
         });
-        tokio::select! {
+        let response = tokio::select! {
             _=context.ct.cancelled()=>{
                 cancellation.cancel();
                 Ok(failure("cancelled","request cancelled; its slot is released when core cleanup finishes"))
             },
             value=task=>value.map_err(|error|ErrorData::internal_error(error.to_string(),None)),
+        };
+        if !context.ct.is_cancelled() {
+            handoff.complete();
         }
+        response
     }
 }
 
