@@ -1227,6 +1227,73 @@ fn serving_families(logical: &Path, cutover: bool) -> Result<WorkspaceFamilies> 
     active.sort();
     Ok(WorkspaceFamilies { families, active })
 }
+/// An unreadable sibling receipt cannot prove which family is serving. Keep
+/// that metadata failure local by charging every recognized owned family in
+/// full. Never use this fallback to repair/delete files or follow unknown paths.
+fn quarantined_families(logical: &Path) -> Result<BTreeMap<PathBuf, bool>> {
+    let mut families = BTreeMap::new();
+    if family_bytes(logical)? != 0 {
+        insert_family(&mut families, logical.to_owned(), true);
+    }
+    let indexes = parent(logical)?.join("indexes");
+    match directory(&indexes, false) {
+        Ok(()) => {}
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(families);
+        }
+        Err(error) => return Err(error),
+    }
+    for entry in fs::read_dir(&indexes)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if !name.to_str().is_some_and(valid_id) {
+            return Err(invalid(
+                "unknown index directory prevents conservative disk accounting",
+            ));
+        }
+        let path = entry.path();
+        match directory(&path, false) {
+            Ok(()) => {}
+            Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
+        for file in fs::read_dir(&path)? {
+            let file = file?;
+            let name = file.file_name();
+            if ![
+                "index.db",
+                "index.db-wal",
+                "index.db-shm",
+                "index.db-journal",
+                "health",
+                "readers.lock",
+            ]
+            .iter()
+            .any(|allowed| name == *allowed)
+            {
+                return Err(invalid(
+                    "unknown index file prevents conservative disk accounting",
+                ));
+            }
+            match fs::symlink_metadata(file.path()) {
+                Ok(metadata) => {
+                    check_regular(&file.path(), &metadata)?;
+                    if (name == "health" && metadata.len() > PAGE as u64)
+                        || (name == "readers.lock" && metadata.len() != 0)
+                    {
+                        return Err(invalid(
+                            "unknown index metadata size prevents conservative disk accounting",
+                        ));
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        insert_family(&mut families, path.join("index.db"), true);
+    }
+    Ok(families)
+}
 fn active_families(logical: &Path) -> Result<Vec<(PathBuf, bool)>> {
     let Some(state) = load(logical)? else {
         return Ok(vec![(logical.to_owned(), false)]);
@@ -1302,7 +1369,18 @@ impl DiskBudget {
         }
         let mut active = Vec::new();
         for logical in logicals {
-            let workspace = serving_families(&logical, cutover && logical == self.logical)?;
+            let workspace = match serving_families(&logical, cutover && logical == self.logical) {
+                Ok(workspace) => workspace,
+                Err(Error::Json(_) | Error::InvalidRequest(_) | Error::UpdateRequired(_))
+                    if logical != self.logical =>
+                {
+                    WorkspaceFamilies {
+                        families: quarantined_families(&logical)?,
+                        active: Vec::new(),
+                    }
+                }
+                Err(error) => return Err(error),
+            };
             if logical == self.logical {
                 active = workspace.active;
             }
@@ -1999,6 +2077,71 @@ mod tests {
             budget.check(&Limits::default(), false),
             Err(Error::UpdateRequired(_))
         ));
+        drop(guard);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn malformed_sibling_metadata_stays_local_without_omitting_its_disk_charge() {
+        let (root, logical) = fixture();
+        adopt(&logical, 0).unwrap();
+        let guard = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        fs::write(guard.physical_path(), [0; 1024]).unwrap();
+        fs::write(family_path(guard.physical_path(), "-wal"), [0; 200]).unwrap();
+        let sibling = root
+            .join("workspaces")
+            .join("b".repeat(24))
+            .join("index.db");
+        fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        adopt(&sibling, 0).unwrap();
+        let budget = DiskBudget::new(&sibling, &root).unwrap();
+        let active = DiskBudget::new(&logical, &root).unwrap();
+        let receipt = state_path(&logical);
+        let valid = fs::read(&receipt).unwrap();
+        for future in [false, true] {
+            let damaged = if future {
+                let mut payload: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+                payload["version"] = 999.into();
+                serde_json::to_vec(&payload).unwrap()
+            } else {
+                b"{broken lifecycle".to_vec()
+            };
+            fs::write(&receipt, &damaged).unwrap();
+            let active_error = active.check(&Limits::default(), false).unwrap_err();
+            assert!(if future {
+                matches!(active_error, Error::UpdateRequired(_))
+            } else {
+                matches!(active_error, Error::Json(_))
+            });
+            budget.check(&Limits::default(), false).unwrap();
+            assert_eq!(
+                budget.usage(false).unwrap().used_bytes,
+                1024 + 200 + PAGE as u64,
+                "unknown serving role requires a full family charge, not omission"
+            );
+            budget.check_sampled(&Limits::default()).unwrap();
+            assert_eq!(
+                fs::read(&receipt).unwrap(),
+                damaged,
+                "accounting cannot repair or reinterpret a quarantined sibling"
+            );
+        }
+        let foreign = root.join("foreign-dir");
+        fs::create_dir(&foreign).unwrap();
+        let unsafe_path = guard
+            .physical_path()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("f".repeat(32));
+        std::os::unix::fs::symlink(&foreign, &unsafe_path).unwrap();
+        assert!(
+            matches!(
+                budget.check(&Limits::default(), false),
+                Err(Error::InvalidRequest(_))
+            ),
+            "quarantine never swallows unsafe fallback paths"
+        );
         drop(guard);
         fs::remove_dir_all(root).unwrap();
     }
