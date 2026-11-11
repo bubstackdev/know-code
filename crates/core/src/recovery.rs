@@ -27,7 +27,7 @@ use std::{
     },
 };
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 const PAGE: usize = 4096;
 const MAGIC: &[u8; 8] = b"KCIDX001";
 const MAX_STATE: u64 = 256 * 1024;
@@ -44,10 +44,24 @@ struct Incarnation {
     legacy: bool,
     file_identity: Option<(u64, u64)>,
 }
+/// A replacement cause is durable evidence, not permission to reinterpret an
+/// arbitrary version mismatch as corruption or a supported upgrade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum RebuildReason {
+    #[default]
+    Corruption,
+    Upgrade {
+        source_format: i32,
+        target_format: i32,
+    },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Pending {
     index: Incarnation,
+    reason: RebuildReason,
     minimum_generation: u64,
     ready_generation: Option<u64>,
 }
@@ -63,12 +77,14 @@ struct State {
     pending: Option<Pending>,
     retired: Vec<Incarnation>,
     failed: Option<String>,
+    failed_reason: Option<RebuildReason>,
 }
 #[derive(Clone, Debug)]
 pub struct Candidate {
     pub database: PathBuf,
     pub incarnation: String,
     pub minimum_generation: u64,
+    pub reason: RebuildReason,
     logical: PathBuf,
 }
 
@@ -178,11 +194,57 @@ fn load(logical: &Path) -> Result<Option<State>> {
     if bytes.len() as u64 > MAX_STATE {
         return Err(invalid("index lifecycle state exceeds bound"));
     }
-    let state: State = serde_json::from_slice(&bytes)?;
-    if state.version != VERSION {
+    // Inspect the envelope before strict payload decoding. A future receipt
+    // may introduce unknown fields; it must remain an update-required outcome.
+    let mut payload: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let version = payload
+        .get("version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| invalid("missing or invalid index lifecycle version"))?;
+    if version != 1 && version != u64::from(VERSION) {
         return Err(Error::UpdateRequired(
             "unsupported index lifecycle state".into(),
         ));
+    }
+    if version == 1 {
+        if payload.get("failed_reason").is_some()
+            || payload
+                .get("pending")
+                .is_some_and(|p| p.get("reason").is_some())
+        {
+            return Err(invalid(
+                "version1 lifecycle state cannot contain version2 replacement evidence",
+            ));
+        }
+        if let Some(pending) = payload
+            .get_mut("pending")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            pending.insert(
+                "reason".into(),
+                serde_json::to_value(RebuildReason::Corruption)?,
+            );
+        }
+        if payload.get("failed").is_some_and(|value| !value.is_null()) {
+            payload
+                .as_object_mut()
+                .unwrap()
+                .entry("failed_reason")
+                .or_insert(serde_json::to_value(RebuildReason::Corruption)?);
+        }
+    }
+    let mut state: State = serde_json::from_value(payload)?;
+    state.version = VERSION;
+    if state.failed.is_some() != state.failed_reason.is_some() {
+        return Err(invalid("index failure receipt is missing its cause"));
+    }
+    for reason in state
+        .pending
+        .iter()
+        .map(|p| p.reason)
+        .chain(state.failed_reason)
+    {
+        validate_reason(reason)?;
     }
     let mut ids = BTreeSet::new();
     let mut legacy = 0;
@@ -489,6 +551,7 @@ pub fn adopt(logical: &Path, trusted_generation: u64) -> Result<()> {
                 pending: None,
                 retired: vec![],
                 failed: None,
+                failed_reason: None,
             };
             // Reference the nonce before creating anything. Restart can finish
             // this exact owned setup; it must never allocate another orphan.
@@ -572,6 +635,72 @@ pub fn generation_floor(logical: &Path, registry_generation: u64) -> Result<u64>
 pub fn failure(logical: &Path) -> Result<Option<String>> {
     Ok(load(logical)?.and_then(|s| s.failed))
 }
+pub fn replacement_reason(logical: &Path) -> Result<Option<RebuildReason>> {
+    Ok(load(logical)?.and_then(|s| s.pending.map(|p| p.reason).or(s.failed_reason)))
+}
+pub fn failure_reason(logical: &Path) -> Result<Option<RebuildReason>> {
+    Ok(load(logical)?.and_then(|s| s.failed_reason))
+}
+/// Probe an adopted selection without migrating it or reading an unknown
+/// layout. Unknown versions are returned with generation zero for the closed
+/// store catalog to reject. No published generation means not ready.
+pub fn selected_format(logical: &Path) -> Result<Option<(i32, u64)>> {
+    let Some(state) = load(logical)? else {
+        return Err(invalid(
+            "index format probing requires an adopted workspace",
+        ));
+    };
+    if state.initializing {
+        return Err(Error::IndexRecovering(
+            "index adoption is not initialized".into(),
+        ));
+    }
+    probe_format(&IndexReadGuard::from_index(logical, &state.selected)?)
+}
+fn probe_format(guard: &IndexReadGuard) -> Result<Option<(i32, u64)>> {
+    match fs::symlink_metadata(guard.physical_path()) {
+        Ok(meta) if meta.len() == 0 => return Ok(None),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let result = (|| -> Result<Option<(i32, u64)>> {
+        guard.check()?;
+        let connection = rusqlite::Connection::open_with_flags(
+            guard.physical_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(std::time::Duration::from_millis(100))?;
+        connection.execute_batch("BEGIN DEFERRED;")?;
+        let format: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if !(1..=crate::store::SCHEMA_VERSION).contains(&format) {
+            guard.check()?;
+            return Ok(Some((format, 0)));
+        }
+        let generation: Option<u64> =
+            connection.query_row("SELECT current_generation FROM state", [], |r| r.get(0))?;
+        guard.check()?;
+        Ok(generation.map(|generation| (format, generation)))
+    })();
+    crate::index_result(guard, result)
+}
+fn validate_reason(reason: RebuildReason) -> Result<()> {
+    if let RebuildReason::Upgrade {
+        source_format,
+        target_format,
+    } = reason
+        && (target_format != crate::store::SCHEMA_VERSION
+            || !matches!(
+                crate::store::upgrade_action(source_format),
+                crate::store::UpgradeAction::Rebuild { .. }
+            ))
+    {
+        return Err(Error::UpdateRequired(format!(
+            "index upgrade {source_format} to {target_format} is unsupported by this runtime"
+        )));
+    }
+    Ok(())
+}
 pub fn blocked(logical: &Path) -> Result<bool> {
     Ok(load(logical)?.is_some_and(|s| s.failed.is_some() || s.pending.is_some()))
 }
@@ -610,6 +739,36 @@ pub fn report_corruption(logical: &Path, id: &str) -> Result<bool> {
     Ok(true)
 }
 pub fn begin_rebuild(logical: &Path, explicit: bool, trusted_generation: u64) -> Result<Candidate> {
+    begin_replacement(
+        logical,
+        explicit,
+        trusted_generation,
+        RebuildReason::Corruption,
+    )
+}
+pub fn begin_upgrade(
+    logical: &Path,
+    explicit: bool,
+    trusted_generation: u64,
+    source_format: i32,
+) -> Result<Candidate> {
+    let reason = RebuildReason::Upgrade {
+        source_format,
+        target_format: crate::store::SCHEMA_VERSION,
+    };
+    validate_reason(reason)?;
+    // Do not create lifecycle artifacts for an unmanaged caller path.
+    if load(logical)?.is_none() {
+        return Err(invalid("index upgrades require an adopted workspace"));
+    }
+    begin_replacement(logical, explicit, trusted_generation, reason)
+}
+fn begin_replacement(
+    logical: &Path,
+    explicit: bool,
+    trusted_generation: u64,
+    reason: RebuildReason,
+) -> Result<Candidate> {
     let _lock = lock(logical)?;
     let mut state = load(logical)?.ok_or_else(|| invalid("workspace index is not adopted"))?;
     if state.pending.is_some() || (state.failed.is_some() && !explicit) {
@@ -617,23 +776,46 @@ pub fn begin_rebuild(logical: &Path, explicit: bool, trusted_generation: u64) ->
             "automatic recovery already attempted; explicit refresh is required".into(),
         ));
     }
-    if state.retired.len() >= MAX_INCARNATIONS {
-        return Err(Error::ResourceLimited(
-            "retained index incarnation count reached limit; cleanup is required".into(),
+    if state.initializing {
+        return Err(Error::IndexRecovering(
+            "index adoption is not initialized".into(),
         ));
+    }
+    let actual_generation = match reason {
+        RebuildReason::Corruption => {
+            if lease(logical, &state.selected)?
+                .bad()
+                .load(Ordering::Acquire)
+                == 0
+            {
+                return Err(invalid("recovery requires a fenced index"));
+            }
+            0
+        }
+        RebuildReason::Upgrade { source_format, .. } => {
+            let guard = IndexReadGuard::from_index(logical, &state.selected)?;
+            let (actual_format, generation) = probe_format(&guard)?.ok_or(Error::NotReady)?;
+            if actual_format != source_format {
+                return Err(Error::UpdateRequired(format!(
+                    "selected index format {actual_format} does not match requested upgrade source {source_format}"
+                )));
+            }
+            generation
+        }
+    };
+    if state.retired.len() >= MAX_INCARNATIONS {
+        let message = "retained index incarnation count reached limit; cleanup is required";
+        state.failed = Some(message.into());
+        state.failed_reason = Some(reason);
+        save(logical, &state)?;
+        return Err(Error::ResourceLimited(message.into()));
     }
     let minimum_generation = state
         .high_water
         .max(trusted_generation)
+        .max(actual_generation)
         .checked_add(1)
         .ok_or_else(|| invalid("index generation exhausted"))?;
-    if lease(logical, &state.selected)?
-        .bad()
-        .load(Ordering::Acquire)
-        == 0
-    {
-        return Err(invalid("recovery requires a fenced index"));
-    }
     let index = Incarnation {
         id: nonce()?,
         legacy: false,
@@ -643,14 +825,17 @@ pub fn begin_rebuild(logical: &Path, explicit: bool, trusted_generation: u64) ->
         database: physical(logical, &index)?,
         incarnation: index.id.clone(),
         minimum_generation,
+        reason,
         logical: logical.into(),
     };
     state.pending = Some(Pending {
         index: index.clone(),
+        reason,
         minimum_generation,
         ready_generation: None,
     });
     state.failed = None;
+    state.failed_reason = None;
     save(logical, &state)?;
     create_incarnation(logical, &index)?;
     Ok(candidate)
@@ -659,7 +844,19 @@ pub fn fail_rebuild(logical: &Path, message: &str) -> Result<()> {
     let _lock = lock(logical)?;
     let mut state = load(logical)?.ok_or_else(|| invalid("missing lifecycle state"))?;
     if let Some(p) = state.pending.take() {
+        state.failed_reason = Some(p.reason);
         state.retired.push(p.index);
+    } else if state.failed_reason.is_none() {
+        // Preserve the corruption wrapper's pre-candidate failure path only
+        // when the selected durable latch proves its cause.
+        if lease(logical, &state.selected)?
+            .bad()
+            .load(Ordering::Acquire)
+            == 0
+        {
+            return Err(invalid("no replacement attempt exists to fail"));
+        }
+        state.failed_reason = Some(RebuildReason::Corruption);
     }
     state.failed = Some(message.chars().take(4096).collect());
     save(logical, &state)
@@ -686,6 +883,13 @@ fn validate_candidate(candidate: &Candidate, control: &Control) -> Result<u64> {
     connection.progress_handler(4096, Some(move || std::time::Instant::now() >= deadline))?;
     control
         .interruptible(connection.get_interrupt_handle(), || {
+            let format: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            if format != crate::store::SCHEMA_VERSION {
+                return Err(Error::UpdateRequired(format!(
+                    "replacement format {format} does not match target {}",
+                    crate::store::SCHEMA_VERSION
+                )));
+            }
             let result: String =
                 connection.query_row("PRAGMA integrity_check(1)", [], |r| r.get(0))?;
             if result != "ok" {
@@ -731,6 +935,11 @@ pub fn finish_rebuild(
         .as_mut()
         .filter(|p| p.index.id == candidate.incarnation)
         .ok_or_else(|| invalid("replacement is no longer pending"))?;
+    if pending.reason != candidate.reason {
+        return Err(invalid(
+            "replacement cause does not match its durable receipt",
+        ));
+    }
     validate_identity(&candidate.database, &pending.index)?;
     pending.index.file_identity = file_identity(&candidate.database)?;
     pending.ready_generation = Some(generation);
@@ -743,6 +952,7 @@ pub fn finish_rebuild(
     state.retired.push(old);
     state.selected_generation = Some(generation);
     state.failed = None;
+    state.failed_reason = None;
     control.publish(|| save(&candidate.logical, &state))?;
     Ok(generation)
 }
@@ -970,7 +1180,7 @@ mod tests {
     }
     fn indexed(path: &Path, generation: u64) {
         let db = Connection::open(path).unwrap();
-        db.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE state(current_generation INTEGER); CREATE TABLE facts(value TEXT); INSERT INTO facts VALUES('saved source');").unwrap();
+        db.execute_batch("PRAGMA user_version=8; PRAGMA journal_mode=WAL; CREATE TABLE state(current_generation INTEGER); CREATE TABLE facts(value TEXT); INSERT INTO facts VALUES('saved source');").unwrap();
         db.execute("INSERT INTO state VALUES(?)", [generation])
             .unwrap();
     }
@@ -1074,6 +1284,7 @@ mod tests {
                 pending: None,
                 retired: vec![],
                 failed: None,
+                failed_reason: None,
             };
             save(&logical, &state).unwrap();
             if partial_health {
@@ -1297,3 +1508,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "recovery_upgrade_tests.rs"]
+mod upgrade_tests;
