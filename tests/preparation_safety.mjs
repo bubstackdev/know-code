@@ -14,17 +14,25 @@ const root=fileURLToPath(new URL('..',import.meta.url));
 const run=path.join(root,'.artifacts/preparation-safety',Date.now().toString(16));
 fs.mkdirSync(run,{recursive:true});
 const cache=path.resolve(process.env.KNOW_CODE_TEST_TOOL_CACHE??path.join(run,'tools'));
+const project=root.split(`${path.sep}.artifacts${path.sep}`)[0];
+assert(cache.startsWith(path.join(project,'.artifacts')+path.sep),'package-tool cache must be a durable fixture-owned project artifact');
+const actualHome=process.env.HOME;
 const pins=process.env.KNOW_CODE_TEST_PACKAGE_PINS?.split(',')??[
   'npm@10.0.0','npm@10.9.10','npm@11.0.0','npm@11.21.2',
   'pnpm@10.0.0','pnpm@10.34.9','pnpm@11.0.0','pnpm@11.28.11','pnpm@12.0.0','pnpm@12.18.0'
 ];
 const write=(filename,value)=>{fs.mkdirSync(path.dirname(filename),{recursive:true});fs.writeFileSync(filename,value);};
 const hash=filename=>createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
-for(const [key,value] of Object.entries({HOME:path.join(run,'home'),XDG_CONFIG_HOME:path.join(run,'config'),XDG_CACHE_HOME:path.join(run,'cache'),XDG_DATA_HOME:path.join(run,'data'),
+for(const [key,value] of Object.entries({XDG_CONFIG_HOME:path.join(run,'config'),XDG_CACHE_HOME:path.join(run,'cache'),XDG_DATA_HOME:path.join(run,'data'),
   npm_config_cache:path.join(run,'npm-cache'),npm_config_store_dir:path.join(run,'pnpm-store'),pnpm_config_store_dir:path.join(run,'pnpm-store'),
   npm_config_userconfig:path.join(run,'empty-userconfig'),NPM_CONFIG_USERCONFIG:path.join(run,'empty-userconfig'),
+  pnpm_config_userconfig:path.join(run,'empty-userconfig'),PNPM_CONFIG_USERCONFIG:path.join(run,'empty-userconfig'),
+  npm_config_globalconfig:path.join(run,'empty-globalconfig'),NPM_CONFIG_GLOBALCONFIG:path.join(run,'empty-globalconfig'),
+  PNPM_HOME:path.join(run,'pnpm-home'),COREPACK_HOME:path.join(run,'corepack-cache'),GIT_CONFIG_GLOBAL:path.join(run,'empty-gitconfig'),
   PATH:`${path.dirname(process.execPath)}:/usr/bin:/bin`,GIT_CONFIG_NOSYSTEM:'1'})) process.env[key]=value;
 write(process.env.npm_config_userconfig,'');
+write(process.env.npm_config_globalconfig,'');write(process.env.GIT_CONFIG_GLOBAL,'');
+assert.equal(process.env.HOME,actualHome,'fixture must preserve the actual account HOME');
 const commands=[];
 function command(program,args,cwd=run) {
   const result=spawnSync(program,args,{cwd,env:process.env,encoding:'utf8',timeout:30000,maxBuffer:1024*1024});
@@ -130,7 +138,8 @@ try {
   const broken=typescriptInstallation(boundary,boundary);
   assert.equal(broken.entry,linked.entry);assert(broken.error instanceof ProjectSetupError);assert.equal(broken.filename,undefined);
   checks.push('one_lexical_compiler_origin_resolver_rejects_ambient_ancestors_accepts_external_store_links_and_reports_broken_origins');
-  const result={status:'passed',checks,matrix,commands,run,cache,test_sha256:hash(fileURLToPath(import.meta.url)),
+  assert.equal(process.env.HOME,actualHome,'fixture changed the account HOME');
+  const result={status:'passed',checks,matrix,commands,run,cache,home_unchanged:true,test_sha256:hash(fileURLToPath(import.meta.url)),
     source_sha256:Object.fromEntries(['providers/typescript/preparation.mjs','providers/typescript/package-tools.mjs','providers/typescript/project-errors.mjs'].map(name=>[name,hash(path.join(root,name))])),
     limits:['finite owned setup fixture; no compiler/index or end-to-end freshness certification','authentication config retained byte-for-byte; no real credential/network-auth exchange tested','all accepted majors covered by named floor/latest pins, not every intermediate patch']};
   fs.writeFileSync(path.join(run,'validation.json'),JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));
