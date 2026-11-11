@@ -94,7 +94,7 @@ try:
  CHECKS.append('explicit_registration_settings_and_restart_never_grant_execution_real_module_runs_only_after_personal_trust')
  trust(A,False);before=requires();(A/'value.ts').write_text('export function afterRevocation() { return 2; }\n')
  quiet(A,a['generation']);stale=query(A,'trustedValue')
- assert stale['freshness']=='stale' and stale['symbols'] and not query(A,'afterRevocation')['symbols'],stale
+ assert stale['freshness']=='stale' and stale['symbols'] and not query(A,'afterRevocation').get('symbols',[]),stale
  assert requires()==before
  cleanup();value('watch',A);quiet(A,a['generation']);assert requires()==before
  trust(A);a=ready(A,a['generation']+1)

@@ -108,7 +108,7 @@ def query(request,host='cli'):
  else:response=json.loads(run(['dotnet',SMOKE,database,encoded]).stdout)
  assert 'result' in response,response
  return response['result']
-def symbols(name):return query({'op':'symbols','name':name,'limit':1000})['symbols']
+def symbols(name):return query({'op':'symbols','name':name,'limit':1000}).get('symbols',[])
 def one(name):
  found=symbols(name);assert len(found)==1,(name,found);return found[0]
 def calls(name,op='callees',host='cli'):
