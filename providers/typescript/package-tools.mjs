@@ -3,19 +3,77 @@ import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
+import {ProjectSetupError} from './project-errors.mjs';
 
 export const DEFAULT_TOOLS = {npm: '11.21.2', pnpm: '12.18.0'};
+export const MAX_SETUP_INPUT_BYTES = 64 * 1024 * 1024;
+
+function inputFailure(filename, message) {
+  const error = new ProjectSetupError('invalid_package_input', `${filename}: ${message}`);
+  error.path = filename;
+  return error;
+}
+function inputChunks(filename, visit, maximum = MAX_SETUP_INPUT_BYTES) {
+  let fd;
+  try {
+    // Follow legitimate config/hook symlinks, but do not block opening a FIFO.
+    // Validate the opened target, not a racy path stat, before reading any byte.
+    fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw inputFailure(filename, `cannot read package setup input (${error.code ?? 'I/O failure'})`);
+  }
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) throw inputFailure(filename, 'package setup inputs must be regular files');
+    if (stat.size > maximum) throw inputFailure(filename, `package setup input exceeds ${maximum} bytes`);
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let total = 0;
+    for (;;) {
+      // One extra byte detects a file that grows after fstat, without ever
+      // allowing readFileSync to allocate/read an unbounded selected target.
+      const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, maximum + 1 - total));
+      if (!count) return true;
+      total += count;
+      if (total > maximum) throw inputFailure(filename, `package setup input exceeds ${maximum} bytes`);
+      visit(buffer.subarray(0, count));
+    }
+  } catch (error) {
+    if (error instanceof ProjectSetupError) throw error;
+    if (typeof error.code === 'string') throw inputFailure(filename, `cannot read package setup input (${error.code})`);
+    throw error;
+  } finally { fs.closeSync(fd); }
+}
+export function readSetupInput(filename, maximum = MAX_SETUP_INPUT_BYTES) {
+  const chunks = [];
+  return inputChunks(filename, bytes => chunks.push(Buffer.from(bytes)), maximum) ? Buffer.concat(chunks) : undefined;
+}
+export function hashSetupInput(filename, hash) {
+  // Probe existence through the same opened regular-file check. A missing
+  // target remains a tracked missing input and never becomes an empty file.
+  const content = createHash('sha256');
+  const present = inputChunks(filename, bytes => content.update(bytes));
+  if (present) hash.update('present\0').update(content.digest());
+  else hash.update('missing');
+}
+
+export function restorationSafety(tool, allowScripts) {
+  if (allowScripts) return {args: [], env: {}};
+  const config = {'git': '/usr/bin/git', 'script-shell': '/bin/sh'};
+  const args = Object.entries(config).map(([key, value]) => `${tool.name === 'npm' ? '--' : '--config.'}${key}=${value}`);
+  const env = {};
+  for (const [key, value] of Object.entries(config)) for (const manager of ['npm', 'pnpm']) {
+    env[`${manager}_config_${key.replaceAll('-', '_')}`] = value;
+    env[`${manager.toUpperCase()}_CONFIG_${key.replaceAll('-', '_').toUpperCase()}`] = value;
+  }
+  return {args, env};
+}
 
 function fileHash(filename) {
-  const hash = createHash('sha256'), buffer = Buffer.allocUnsafe(64 * 1024);
-  const fd = fs.openSync(filename, 'r');
-  try {
-    for (;;) {
-      const count = fs.readSync(fd, buffer);
-      if (!count) return hash.digest('hex');
-      hash.update(buffer.subarray(0, count));
-    }
-  } finally { fs.closeSync(fd); }
+  const hash = createHash('sha256');
+  if (!inputChunks(filename, bytes => hash.update(bytes), 256 * 1024 * 1024))
+    throw inputFailure(filename, 'package-tool entry is missing');
+  return hash.digest('hex');
 }
 
 export function selection(value, fallback = 'npm') {
@@ -96,7 +154,7 @@ async function archive(metadata, filename, selected) {
 
 function cached(directory, selected) {
   try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'tool.json'), 'utf8'));
+    const manifest = JSON.parse(readSetupInput(path.join(directory, 'tool.json'), 1024 * 1024));
     if (manifest.format !== 1 || manifest.name !== selected.name || manifest.version !== selected.version ||
         manifest.pinHash !== (selected.hash ?? '') || manifest.platform !== `${process.platform}-${process.arch}` ||
         !manifest.archiveIntegrity?.startsWith('sha512-') || typeof manifest.entry !== 'string' ||
@@ -135,7 +193,7 @@ export async function packageTool(selected, cacheDirectory, send) {
         const entries = fs.readdirSync(lock);
         if (entries.length === 1 && entries[0].startsWith('owner-')) {
           const stalePath = path.join(lock, entries[0]);
-          const owner = JSON.parse(fs.readFileSync(stalePath, 'utf8'));
+          const owner = JSON.parse(readSetupInput(stalePath, 1024 * 1024));
           try { process.kill(owner.pid, 0); } catch (error) {
             if (error.code === 'ESRCH') {
               // Unique owner filenames prevent a second reclaimer from unlinking
@@ -175,7 +233,7 @@ export async function packageTool(selected, cacheDirectory, send) {
     const content = path.join(stage, 'content');
     fs.mkdirSync(content);
     await runCommand('/usr/bin/tar', ['-xzf', filename, '--strip-components=1', '--no-same-owner', '-C', content], stage);
-    const pkg = JSON.parse(fs.readFileSync(path.join(content, 'package.json'), 'utf8'));
+    const pkg = JSON.parse(readSetupInput(path.join(content, 'package.json')));
     if (pkg.version !== selected.version || pkg.name !== metadata.name) throw new Error('Extracted package-tool identity mismatch');
     const bin = native ? ['pnpm', 'bin/pnpm'].find(p => fs.existsSync(path.join(content, p))) : pkg.bin?.[selected.name];
     if (!bin || path.isAbsolute(bin) || bin.split('/').includes('..')) throw new Error('Invalid package-tool executable');
