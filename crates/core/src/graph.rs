@@ -2,7 +2,10 @@
 mod dispatch;
 use crate::{
     Error, Result,
-    query::{Coverage, Location, QueryRequest, ReadView, SymbolResult, SymbolSupport},
+    query::{
+        Coverage, DeclarationOptions, DeclarationProjection, Location, ProjectionBudget,
+        QueryRequest, ReadView, SymbolResult, SymbolSupport,
+    },
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -107,6 +110,8 @@ pub struct ContextConflict {
 pub struct Finding {
     pub symbol: SymbolResult,
     pub paths: Vec<Vec<Edge>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<DeclarationProjection>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub supporting_targets: Vec<GraphSupport>,
 }
@@ -115,6 +120,8 @@ pub struct GraphSupport {
     #[serde(flatten)]
     pub symbol: SymbolSupport,
     pub paths: Vec<Vec<Edge>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<DeclarationProjection>,
 }
 #[derive(Debug, Serialize)]
 pub struct Boundary {
@@ -702,6 +709,7 @@ pub(crate) fn query(
                     let finding = Finding {
                         symbol: symbol(&view.connection, node)?,
                         paths: vec![p],
+                        context: None,
                         supporting_targets: vec![],
                     };
                     let boundaries = [
@@ -974,6 +982,13 @@ pub(crate) fn query(
     {
         projected[position].push(finding);
     }
+    let include_source = request.include_source == Some(true);
+    let mut source_budget = request
+        .source_max_bytes
+        .unwrap_or(crate::query::DEFAULT_SOURCE_BYTES);
+    let mut projection = include_source
+        .then(|| ProjectionBudget::new(view, request))
+        .transpose()?;
     let mut projection_bytes = 256usize;
     for boundary in &result.boundaries {
         projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(boundary)?.len());
@@ -990,12 +1005,38 @@ pub(crate) fn query(
                 &b.symbol.id,
             ))
         });
+        if let Some(projection) = &projection {
+            let multiple = members.len() > 1;
+            let mut metadata = projection.fork();
+            for (index, member) in members.iter_mut().enumerate() {
+                let (context, limits) = view.project_declarations(
+                    &member.symbol,
+                    DeclarationOptions {
+                        allowance: 16,
+                        include_source: true,
+                        duplicate: multiple && index == 0,
+                    },
+                    &mut source_budget,
+                    &mut metadata,
+                )?;
+                if limits.declarations {
+                    result.limits.push("declaration_limit".into());
+                }
+                if limits.source {
+                    result.limits.push("source_budget".into());
+                }
+                member.context = Some(context);
+            }
+        }
         if members.len() == 1 {
             let finding = members.pop().expect("one member");
             projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(&finding)?.len());
             if projection_bytes > bytes {
                 result.limits.push("response_bytes".into());
                 break;
+            }
+            if let Some(projection) = &mut projection {
+                projection.charge(&finding)?;
             }
             result.findings.push(finding);
             continue;
@@ -1004,11 +1045,13 @@ pub(crate) fn query(
         let finding = Finding {
             symbol: first.symbol.clone(),
             paths: first.paths.clone(),
+            context: first.context.clone(),
             supporting_targets: members
                 .into_iter()
                 .map(|m| GraphSupport {
                     symbol: SymbolSupport::from(&m.symbol),
                     paths: m.paths,
+                    context: m.context,
                 })
                 .collect(),
         };
@@ -1016,6 +1059,9 @@ pub(crate) fn query(
         if projection_bytes > bytes {
             result.limits.push("response_bytes".into());
             break;
+        }
+        if let Some(projection) = &mut projection {
+            projection.charge(&finding)?;
         }
         result.findings.push(finding);
     }
@@ -1093,5 +1139,361 @@ mod tests {
                 }
             }
         }
+    }
+    fn declaration_graph(count: usize, extents: u8) -> std::path::PathBuf {
+        use crate::protocol::{
+            AnalysisReport, Compilation, FactBatch, Occurrence, Relationship, SourceArtifact,
+            Symbol, envelope::Payload,
+        };
+        use sha2::{Digest, Sha256};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/graph-source-tests")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("index.db");
+        let mut text = String::from("// π\0\r\nroot\n");
+        let root = text.find("root").unwrap() as u64;
+        let mut anchors = vec![];
+        for _ in 0..count {
+            let start = text.len() as u64;
+            text.push_str("😀fπ\n");
+            anchors.push((start + 4, start, start + 7));
+        }
+        let g = text.len() as u64;
+        text.push_str("g\n");
+        let mut writer = crate::store::Writer::open(&path).unwrap();
+        for (comp, target) in [("a", "target2"), ("b", "target1"), ("c", "target0")] {
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: comp.into(),
+                    language: "csharp".into(),
+                    target: target.into(),
+                    target_family: "family".into(),
+                    target_equivalence_policy: 1,
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Source(SourceArtifact {
+                    id: "body".into(),
+                    path: "body.cs".into(),
+                    compilation_id: comp.into(),
+                    utf8: text.as_bytes().into(),
+                    sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                    ..Default::default()
+                }))
+                .unwrap();
+            let symbols = ["root", "f", "g"]
+                .into_iter()
+                .map(|name| Symbol {
+                    id: format!("{comp}:{name}"),
+                    name: name.into(),
+                    kind: "method".into(),
+                    signature: format!("void {name}()"),
+                    declaration_key: if comp == "c" && name == "root" {
+                        "untraversed-root".into()
+                    } else {
+                        format!("decl:{name}")
+                    },
+                    ..Default::default()
+                })
+                .collect();
+            let mut occurrences = vec![];
+            for (name, start, end) in [("root", root, root + 4), ("g", g, g + 1)] {
+                for role in ["declaration", "definition"] {
+                    occurrences.push(Occurrence {
+                        symbol_id: format!("{comp}:{name}"),
+                        artifact_id: "body".into(),
+                        start_byte: start,
+                        end_byte: end,
+                        role: role.into(),
+                        ..Default::default()
+                    });
+                }
+            }
+            for (anchor, start, end) in &anchors {
+                occurrences.push(Occurrence {
+                    symbol_id: format!("{comp}:f"),
+                    artifact_id: "body".into(),
+                    start_byte: *anchor,
+                    end_byte: anchor + 1,
+                    role: "declaration".into(),
+                    ..Default::default()
+                });
+                for branch in 0..extents {
+                    occurrences.push(Occurrence {
+                        symbol_id: format!("{comp}:f"),
+                        artifact_id: "body".into(),
+                        start_byte: *start,
+                        end_byte: end + u64::from(branch),
+                        role: "definition".into(),
+                        ..Default::default()
+                    });
+                }
+            }
+            let relationships = ["f", "g"]
+                .into_iter()
+                .map(|to| Relationship {
+                    source_id: format!("{comp}:root"),
+                    target_id: format!("{comp}:{to}"),
+                    kind: "call".into(),
+                    resolution: "compiler_bound".into(),
+                    artifact_id: "body".into(),
+                    start_byte: root,
+                    end_byte: root + 1,
+                    dispatch: "direct".into(),
+                    ..Default::default()
+                })
+                .collect();
+            writer
+                .stage(Payload::Facts(FactBatch {
+                    compilation_id: comp.into(),
+                    symbols,
+                    occurrences,
+                    relationships,
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: comp.into(),
+                    status: "complete".into(),
+                    capabilities: [
+                        ("calls".into(), "complete".into()),
+                        ("dependencies".into(), "complete".into()),
+                        ("target_equivalence".into(), "complete".into()),
+                    ]
+                    .into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        writer.publish().unwrap();
+        path
+    }
+    fn projected(view: &ReadView, extra: serde_json::Value) -> crate::query::QueryResult {
+        let mut request = serde_json::json!({"op":"callees","symbol_id":"a:root"});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        view.query(serde_json::from_value(request).unwrap())
+            .unwrap()
+    }
+    fn compact(mut graph: serde_json::Value) -> serde_json::Value {
+        graph.as_object_mut().unwrap().remove("limits");
+        for finding in graph["findings"].as_array_mut().unwrap() {
+            finding.as_object_mut().unwrap().remove("context");
+            if let Some(supports) = finding
+                .get_mut("supporting_targets")
+                .and_then(|v| v.as_array_mut())
+            {
+                for support in supports {
+                    support.as_object_mut().unwrap().remove("context");
+                }
+            }
+        }
+        graph
+    }
+    #[test]
+    fn graph_source_is_opt_in_and_default_executes_no_source_sql() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let path = declaration_graph(1, 1);
+        let mut view = ReadView::open(path).unwrap();
+        view.connection
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "contents",
+                        ..
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+        let omitted = projected(&view, serde_json::json!({}));
+        let explicit = projected(&view, serde_json::json!({"include_source":false}));
+        let omitted = serde_json::to_value(omitted.graph.unwrap()).unwrap();
+        assert_eq!(
+            omitted,
+            serde_json::to_value(explicit.graph.unwrap()).unwrap()
+        );
+        assert!(
+            omitted["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|f| f.get("context").is_none())
+        );
+        let request = serde_json::from_value(
+            serde_json::json!({"op":"callees","symbol_id":"a:root","include_source":true}),
+        )
+        .unwrap();
+        assert!(
+            matches!(view.query(request), Err(Error::Sqlite(_))),
+            "storage failures must not become body-unavailable labels"
+        );
+    }
+    #[test]
+    fn graph_source_budget_counts_all_wire_copies_and_preserves_findings_paths_and_targets() {
+        let path = declaration_graph(1, 1);
+        let view = ReadView::open(path).unwrap();
+        let baseline =
+            serde_json::to_value(projected(&view, serde_json::json!({})).graph.unwrap()).unwrap();
+        for budget in 1..=24 {
+            let result = projected(
+                &view,
+                serde_json::json!({"include_source":true,"source_max_bytes":budget}),
+            );
+            let graph = serde_json::to_value(result.graph.as_ref().unwrap()).unwrap();
+            assert_eq!(compact(graph.clone()), compact(baseline.clone()));
+            assert_eq!(result.truncated, budget < 24);
+            let limited = graph["limits"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s == "source_budget");
+            assert_eq!(limited, budget < 24);
+            let mut bytes = 0;
+            for finding in graph["findings"].as_array().unwrap() {
+                let supports = finding["supporting_targets"].as_array().unwrap();
+                assert_eq!(supports.len(), 2);
+                assert_eq!(
+                    supports
+                        .iter()
+                        .map(|s| s["compilation_id"].as_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    ["b", "a"]
+                );
+                assert!(
+                    !finding["symbol"]["locations"]
+                        .as_array()
+                        .unwrap()
+                        .is_empty()
+                );
+                for member in std::iter::once(finding).chain(supports) {
+                    let context = &member["context"];
+                    assert_eq!(context["declarations"].as_array().unwrap().len(), 1);
+                    for declaration in context["declarations"].as_array().unwrap() {
+                        if let Some(source) = declaration.get("source") {
+                            let text = source["text"].as_str().unwrap();
+                            bytes += text.len();
+                            let body = if finding["symbol"]["name"] == "f" {
+                                "😀fπ"
+                            } else {
+                                "g"
+                            };
+                            assert!(body.starts_with(text));
+                            assert!(body.is_char_boundary(text.len()));
+                            assert_eq!(declaration["line"], if body == "g" { 4 } else { 3 });
+                        }
+                    }
+                }
+            }
+            assert!(bytes <= budget, "budget={budget},wire={bytes}");
+        }
+        let full = projected(&view, serde_json::json!({"include_source":true}))
+            .graph
+            .unwrap();
+        assert!(full.root_definitions.is_empty());
+        assert!(
+            full.findings
+                .iter()
+                .flat_map(|f| &f.paths)
+                .flatten()
+                .all(|edge| serde_json::to_value(edge).unwrap().get("context").is_none())
+        );
+    }
+    #[test]
+    fn graph_declaration_limit_is_independent_of_finding_and_source_budgets() {
+        let path = declaration_graph(17, 1);
+        let view = ReadView::open(path).unwrap();
+        let result = projected(&view, serde_json::json!({"include_source":true,"limit":1}));
+        let graph = result.graph.unwrap();
+        assert_eq!(graph.findings.len(), 1);
+        assert_eq!(graph.findings[0].symbol.name, "f");
+        assert!(graph.limits.iter().any(|s| s == "declaration_limit"));
+        assert!(!graph.limits.iter().any(|s| s == "source_budget"));
+        assert_eq!(
+            graph.findings[0]
+                .context
+                .as_ref()
+                .unwrap()
+                .declarations
+                .len(),
+            16
+        );
+        assert!(
+            graph.findings[0].supporting_targets.iter().all(|s| s
+                .context
+                .as_ref()
+                .unwrap()
+                .declarations
+                .len()
+                == 16)
+        );
+    }
+    #[test]
+    fn graph_extent_labels_and_graph_and_complete_response_caps_remain_explicit() {
+        for (extents, label) in [(0, "extent_unavailable"), (2, "extent_ambiguous")] {
+            let path = declaration_graph(1, extents);
+            let view = ReadView::open(path).unwrap();
+            let result = projected(&view, serde_json::json!({"include_source":true}));
+            let graph = result.graph.unwrap();
+            let f = graph
+                .findings
+                .iter()
+                .find(|f| f.symbol.name == "f")
+                .unwrap();
+            assert_eq!(
+                f.context.as_ref().unwrap().declarations[0].source_status,
+                label
+            );
+            assert!(f.context.as_ref().unwrap().declarations[0].source.is_none());
+            assert!(!graph.limits.iter().any(|s| s == "source_budget"));
+        }
+        let path = declaration_graph(1, 1);
+        let view = ReadView::open(path).unwrap();
+        let baseline = projected(&view, serde_json::json!({}));
+        let total = serde_json::to_vec(&baseline).unwrap().len();
+        let graph_cap = serde_json::to_vec(baseline.graph.as_ref().unwrap())
+            .unwrap()
+            .len()
+            + 512;
+        let compact = projected(&view, serde_json::json!({"max_bytes":graph_cap}));
+        assert!(
+            !compact
+                .graph
+                .unwrap()
+                .limits
+                .iter()
+                .any(|s| s == "response_bytes")
+        );
+        let enriched = projected(
+            &view,
+            serde_json::json!({"max_bytes":graph_cap,"include_source":true}),
+        );
+        assert!(
+            enriched
+                .graph
+                .unwrap()
+                .limits
+                .iter()
+                .any(|s| s == "response_bytes")
+        );
+        let request=serde_json::from_value(serde_json::json!({"op":"callees","symbol_id":"a:root","include_source":true,"response_max_bytes":total+64})).unwrap();
+        assert!(matches!(
+            view.query(request),
+            Err(Error::ResponseLimitExceeded)
+        ));
     }
 }

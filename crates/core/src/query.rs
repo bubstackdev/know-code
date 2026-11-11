@@ -53,8 +53,8 @@ pub struct QueryRequest {
     #[serde(default)]
     pub coverage_detail: CoverageDetail,
     pub detail_max_bytes: Option<u32>,
-    #[serde(default = "default_true")]
-    pub include_source: bool,
+    pub include_source: Option<bool>,
+    pub source_max_bytes: Option<u32>,
 }
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -187,6 +187,21 @@ pub struct DeclarationContext {
     pub source: Option<SourceResult>,
     pub source_status: &'static str,
 }
+#[derive(Clone, Debug, Serialize)]
+pub struct DeclarationProjection {
+    pub declarations: Vec<DeclarationContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<&'static str>,
+}
+pub(crate) struct DeclarationOptions {
+    pub allowance: usize,
+    pub include_source: bool,
+    pub duplicate: bool,
+}
+pub(crate) struct DeclarationLimits {
+    pub declarations: bool,
+    pub source: bool,
+}
 #[derive(Debug, Serialize)]
 pub struct SymbolContext {
     pub symbol: SymbolResult,
@@ -228,12 +243,20 @@ pub struct QueryResult {
     pub contexts: Vec<SymbolContext>,
 }
 
-struct ProjectionBudget {
+struct SourceRead<'a> {
+    artifact_id: &'a str,
+    content_hash: Option<&'a str>,
+    start_byte: Option<u64>,
+    end_byte: Option<u64>,
+    budget: u32,
+    owner: Option<(u64, &'a str)>,
+}
+pub(crate) struct ProjectionBudget {
     remaining: usize,
     execution: Option<crate::execution::Execution>,
 }
 impl ProjectionBudget {
-    fn new(view: &ReadView, request: &QueryRequest) -> Result<Self> {
+    pub(crate) fn new(view: &ReadView, request: &QueryRequest) -> Result<Self> {
         let remaining = view
             .projection_maximum
             .get()
@@ -245,7 +268,13 @@ impl ProjectionBudget {
             execution: view.execution.lock().unwrap().clone(),
         })
     }
-    fn charge(&mut self, value: &impl Serialize) -> Result<()> {
+    pub(crate) fn fork(&self) -> Self {
+        Self {
+            remaining: self.remaining,
+            execution: self.execution.clone(),
+        }
+    }
+    pub(crate) fn charge(&mut self, value: &impl Serialize) -> Result<()> {
         struct Count(usize);
         impl Write for Count {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -583,6 +612,15 @@ impl ReadView {
             return Err(Error::InvalidRequest(
                 "coverage requires generation from the result being expanded".into(),
             ));
+        }
+        let graph = matches!(request.op.as_str(), "callers" | "callees" | "impact");
+        if request.source_max_bytes.is_some() && !graph {
+            return Err(Error::InvalidRequest(
+                "source_max_bytes applies only to graph queries".into(),
+            ));
+        }
+        if graph {
+            source_budget_named(request.source_max_bytes, "source_max_bytes")?;
         }
         let coverage = self.coverage(
             request.op == "coverage" || request.coverage_detail == CoverageDetail::Full,
@@ -967,86 +1005,25 @@ impl ReadView {
                 // Equivalent targets share declaration slots, but each retains
                 // its own exact evidence and consumes the shared source budget.
                 used_slots = used_slots.max(symbol.locations.len().min(declaration_slots));
-                let source_copies = if multiple && representative.is_none() {
-                    2
-                } else {
-                    1
-                };
-                let mut declarations = vec![];
-                for location in std::mem::take(&mut symbol.locations)
-                    .into_iter()
-                    .take(declaration_slots)
-                {
-                    self.check()?;
-                    let line = self.source_line(&location.content_hash, location.start_byte)?;
-                    let mut extents = self.connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='definition' AND artifact_id=? AND start_byte<=? AND end_byte>=? ORDER BY start_byte,end_byte LIMIT 2")?;
-                    let ranges = extents
-                        .query_map(
-                            params![
-                                symbol.owner_generation,
-                                symbol.compilation_id,
-                                symbol.id,
-                                location.artifact_id,
-                                location.start_byte,
-                                location.end_byte
-                            ],
-                            read_location,
-                        )?
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                    // A unique compiler declaration is required. Never select an
-                    // arbitrary branch of a synthetic/multiple-root symbol view.
-                    let (extent, mut status) = match ranges.len() {
-                        1 => (ranges.into_iter().next(), "omitted"),
-                        0 => (None, "extent_unavailable"),
-                        _ => (None, "extent_ambiguous"),
-                    };
-                    let mut source = None;
-                    if request.include_source
-                        && let Some(extent) = &extent
-                    {
-                        // The representative is repeated as exact support[0].
-                        // Charge both wire copies without dropping provenance.
-                        let available = budget / source_copies;
-                        if available == 0 {
-                            status = "budget_exhausted";
-                            truncated = true;
-                        } else {
-                            let mut read = request.clone();
-                            read.artifact_id = Some(extent.artifact_id.clone());
-                            read.content_hash = Some(extent.content_hash.clone());
-                            read.start_byte = Some(extent.start_byte);
-                            read.end_byte = Some(extent.end_byte);
-                            read.max_bytes = Some(available);
-                            let (body, clipped) = self.source_excerpt(&read, true)?;
-                            budget -= (body.end_byte - body.start_byte) as u32 * source_copies;
-                            status = if body.text.is_empty() && clipped {
-                                "budget_exhausted"
-                            } else if clipped {
-                                "truncated"
-                            } else {
-                                "included"
-                            };
-                            truncated |= clipped;
-                            source = Some(body);
-                        }
-                    }
-                    declarations.push(DeclarationContext {
-                        location,
-                        line,
-                        extent,
-                        source,
-                        source_status: status,
-                    });
-                }
-                let boundary = if declarations.is_empty() {
-                    Some(if symbol.external {
-                        "external_or_other_compilation_body"
-                    } else {
-                        "declaration_unavailable"
-                    })
-                } else {
-                    None
-                };
+                let mut metadata = projection.fork();
+                let (context, limits) = self.project_declarations(
+                    &symbol,
+                    DeclarationOptions {
+                        allowance: declaration_slots,
+                        include_source: request.include_source.unwrap_or(true),
+                        duplicate: multiple && representative.is_none(),
+                    },
+                    &mut budget,
+                    &mut metadata,
+                )?;
+                truncated |= limits.declarations || limits.source;
+                let DeclarationProjection {
+                    declarations,
+                    boundary,
+                } = context;
+                // Context stores anchors once in declarations; graph callers
+                // retain their compact symbol locations when using the helper.
+                symbol.locations.clear();
                 if multiple {
                     let mut metadata = SymbolSupport::from(&symbol);
                     metadata.locations = declarations.iter().map(|d| d.location.clone()).collect();
@@ -1076,6 +1053,105 @@ impl ReadView {
             }
         }
         Ok((contexts, truncated))
+    }
+
+    pub(crate) fn project_declarations(
+        &self,
+        symbol: &SymbolResult,
+        options: DeclarationOptions,
+        budget: &mut u32,
+        metadata: &mut ProjectionBudget,
+    ) -> Result<(DeclarationProjection, DeclarationLimits)> {
+        self.check()?;
+        let DeclarationOptions {
+            allowance,
+            include_source,
+            duplicate,
+        } = options;
+        let mut limits = DeclarationLimits {
+            declarations: symbol.locations_limited || symbol.locations.len() > allowance,
+            source: false,
+        };
+        let copies = if duplicate { 2 } else { 1 };
+        let mut declarations = vec![];
+        for location in symbol.locations.iter().take(allowance) {
+            self.check()?;
+            let line = self.source_line(&location.content_hash, location.start_byte)?;
+            let mut extents = self.connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='definition' AND artifact_id=? AND content_hash=? AND start_byte<=? AND end_byte>=? ORDER BY start_byte,end_byte LIMIT 2")?;
+            let ranges = extents
+                .query_map(
+                    params![
+                        symbol.owner_generation,
+                        symbol.compilation_id,
+                        symbol.id,
+                        location.artifact_id,
+                        location.content_hash,
+                        location.start_byte,
+                        location.end_byte
+                    ],
+                    read_location,
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let (extent, mut status) = match ranges.len() {
+                1 => (ranges.into_iter().next(), "omitted"),
+                0 => (None, "extent_unavailable"),
+                _ => (None, "extent_ambiguous"),
+            };
+            let mut source = None;
+            if include_source && let Some(extent) = &extent {
+                let available = *budget / copies;
+                if available == 0 {
+                    status = "budget_exhausted";
+                    limits.source = true;
+                } else {
+                    let (body, clipped) = self.source_excerpt_scoped(
+                        SourceRead {
+                            artifact_id: &extent.artifact_id,
+                            content_hash: Some(&extent.content_hash),
+                            start_byte: Some(extent.start_byte),
+                            end_byte: Some(extent.end_byte),
+                            budget: available,
+                            owner: Some((symbol.owner_generation, &symbol.compilation_id)),
+                        },
+                        true,
+                    )?;
+                    *budget -= (body.end_byte - body.start_byte) as u32 * copies;
+                    status = if body.text.is_empty() && clipped {
+                        "budget_exhausted"
+                    } else if clipped {
+                        "truncated"
+                    } else {
+                        "included"
+                    };
+                    limits.source |= clipped;
+                    source = Some(body);
+                }
+            }
+            let declaration = DeclarationContext {
+                location: location.clone(),
+                line,
+                extent,
+                source,
+                source_status: status,
+            };
+            metadata.charge(&declaration)?;
+            if duplicate {
+                metadata.charge(&declaration)?;
+            }
+            declarations.push(declaration);
+        }
+        let boundary = symbol.locations.is_empty().then_some(if symbol.external {
+            "external_or_other_compilation_body"
+        } else {
+            "declaration_unavailable"
+        });
+        Ok((
+            DeclarationProjection {
+                declarations,
+                boundary,
+            },
+            limits,
+        ))
     }
 
     // Streaming the indexed blob avoids loading an entire file or relying on
@@ -1113,44 +1189,59 @@ impl ReadView {
         request: &QueryRequest,
         allow_empty: bool,
     ) -> Result<(SourceResult, bool)> {
-        use rusqlite::OptionalExtension;
         let id = request
             .artifact_id
-            .as_ref()
+            .as_deref()
             .ok_or_else(|| Error::InvalidRequest("source requires artifact_id".into()))?;
-        let budget = source_budget(request.max_bytes)?;
-        if (request.start_byte.is_some() || request.end_byte.is_some())
-            && request.content_hash.is_none()
-        {
+        self.source_excerpt_scoped(
+            SourceRead {
+                artifact_id: id,
+                content_hash: request.content_hash.as_deref(),
+                start_byte: request.start_byte,
+                end_byte: request.end_byte,
+                budget: source_budget(request.max_bytes)?,
+                owner: None,
+            },
+            allow_empty,
+        )
+    }
+    fn source_excerpt_scoped(
+        &self,
+        read: SourceRead<'_>,
+        allow_empty: bool,
+    ) -> Result<(SourceResult, bool)> {
+        self.check()?;
+        let id = read.artifact_id;
+        let budget = read.budget;
+        if (read.start_byte.is_some() || read.end_byte.is_some()) && read.content_hash.is_none() {
             return Err(Error::InvalidRequest(
                 "source ranges require content_hash from the indexed location".into(),
             ));
         }
-        let start = request.start_byte.unwrap_or(0);
+        let start = read.start_byte.unwrap_or(0);
         let sql_start = i64::try_from(start)
             .map_err(|_| Error::InvalidRequest("source start_byte is out of range".into()))?;
-        let sql_end = request
+        let sql_end = read
             .end_byte
             .map(i64::try_from)
             .transpose()
             .map_err(|_| Error::InvalidRequest("source end_byte is out of range".into()))?;
         let row = self.connection.query_row(
-            "SELECT a.path,a.content_hash,length(c.utf8),substr(c.utf8,?3+1,?4),CASE WHEN ?5 IS NULL THEN X'' ELSE substr(c.utf8,?5+1,1) END FROM generation_units u JOIN unit_artifacts ua ON ua.owner_generation=u.owner_generation AND ua.compilation_id=u.compilation_id JOIN artifacts a ON a.generation=ua.owner_generation AND a.id=ua.artifact_id JOIN contents c ON c.hash=a.content_hash WHERE u.generation=?1 AND a.id=?2 LIMIT 1",
-            params![self.generation,id,sql_start,budget+3,sql_end],
+            "SELECT a.path,a.content_hash,length(c.utf8),substr(c.utf8,?3+1,?4),CASE WHEN ?5 IS NULL THEN X'' ELSE substr(c.utf8,?5+1,1) END FROM generation_units u JOIN unit_artifacts ua ON ua.owner_generation=u.owner_generation AND ua.compilation_id=u.compilation_id JOIN artifacts a ON a.generation=ua.owner_generation AND a.id=ua.artifact_id JOIN contents c ON c.hash=a.content_hash WHERE u.generation=?1 AND a.id=?2 AND (?6 IS NULL OR (u.owner_generation=?6 AND u.compilation_id=?7 AND a.content_hash=?8)) LIMIT 1",
+            params![self.generation,id,sql_start,budget+3,sql_end,read.owner.map(|o|o.0),read.owner.map(|o|o.1),read.owner.and(read.content_hash)],
             |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,Vec<u8>>(3)?,r.get::<_,Vec<u8>>(4)?)),
         ).optional()?.ok_or_else(|| Error::InvalidRequest("source artifact is absent from the served generation; restart lookup".into()))?;
         let (path, hash, total, mut bytes, end_byte) = row;
-        if request
+        if read
             .content_hash
-            .as_ref()
-            .is_some_and(|expected| expected != &hash)
+            .is_some_and(|expected| expected != hash.as_str())
         {
             return Err(Error::InvalidRequest(
                 "indexed source content changed; restart lookup before reusing its byte range"
                     .into(),
             ));
         }
-        let end = request.end_byte.unwrap_or(total);
+        let end = read.end_byte.unwrap_or(total);
         let continuation = |byte: &u8| byte & 0xc0 == 0x80;
         if start > end
             || end > total
@@ -1181,7 +1272,7 @@ impl ReadView {
         let actual_end = start + count as u64;
         Ok((
             SourceResult {
-                artifact_id: id.clone(),
+                artifact_id: id.into(),
                 path,
                 content_hash: hash.clone(),
                 text,
@@ -1297,10 +1388,13 @@ impl ReadView {
     }
 }
 fn source_budget(value: Option<u32>) -> Result<u32> {
+    source_budget_named(value, "source/detail max_bytes")
+}
+fn source_budget_named(value: Option<u32>, field: &str) -> Result<u32> {
     let budget = value.unwrap_or(DEFAULT_SOURCE_BYTES);
     if !(1..=MAX_SOURCE_BYTES).contains(&budget) {
         return Err(Error::InvalidRequest(format!(
-            "source/detail max_bytes must be between 1 and {MAX_SOURCE_BYTES}"
+            "{field} must be between 1 and {MAX_SOURCE_BYTES}"
         )));
     }
     Ok(budget)
@@ -1541,5 +1635,236 @@ mod tests {
             serde_json::to_vec_pretty(&evidence).unwrap(),
         )
         .unwrap();
+    }
+    fn declaration_fixture() -> (std::path::PathBuf, [u64; 3]) {
+        use crate::protocol::{FactBatch, Occurrence, SourceArtifact, Symbol};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/declaration-projection")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("index.db");
+        let mut generations = [0; 3];
+        for (index, (comp, text)) in [
+            ("left", "l left"),
+            ("right", "r π\0😀"),
+            ("third", "r π\0😀"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut writer = if index == 0 {
+                Writer::open(&path).unwrap()
+            } else {
+                Writer::open_incremental(&path, &[comp.into()]).unwrap()
+            };
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: comp.into(),
+                    language: "typescript".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Source(SourceArtifact {
+                    id: "collision".into(),
+                    path: format!("{comp}.ts"),
+                    compilation_id: comp.into(),
+                    utf8: text.as_bytes().into(),
+                    sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Facts(FactBatch {
+                    compilation_id: comp.into(),
+                    symbols: vec![Symbol {
+                        id: "opaque".into(),
+                        name: "r".into(),
+                        ..Default::default()
+                    }],
+                    occurrences: vec![
+                        Occurrence {
+                            symbol_id: "opaque".into(),
+                            artifact_id: "collision".into(),
+                            role: "declaration".into(),
+                            end_byte: 1,
+                            ..Default::default()
+                        },
+                        Occurrence {
+                            symbol_id: "opaque".into(),
+                            artifact_id: "collision".into(),
+                            role: "definition".into(),
+                            end_byte: text.len() as u64,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: comp.into(),
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            generations[index] = writer.publish().unwrap();
+        }
+        (path, generations)
+    }
+    #[test]
+    fn declaration_source_selects_exact_owner_origin_and_hash_before_limit() {
+        let (path, generations) = declaration_fixture();
+        let view = ReadView::open(&path).unwrap();
+        let text = "r π\0😀";
+        let hash = format!("{:x}", Sha256::digest(text.as_bytes()));
+        for (comp, generation) in [("right", generations[1]), ("third", generations[2])] {
+            let result = view
+                .source_excerpt_scoped(
+                    SourceRead {
+                        artifact_id: "collision",
+                        content_hash: Some(&hash),
+                        start_byte: Some(0),
+                        end_byte: Some(text.len() as u64),
+                        budget: 100,
+                        owner: Some((generation, comp)),
+                    },
+                    true,
+                )
+                .unwrap()
+                .0;
+            assert_eq!(result.path, format!("{comp}.ts"));
+            assert_eq!(result.text, text);
+            let context=view.query(serde_json::from_value(serde_json::json!({"op":"symbol_context","symbol_id":"opaque","compilation_id":comp})).unwrap()).unwrap();
+            assert_eq!(
+                context.contexts[0].declarations[0]
+                    .source
+                    .as_ref()
+                    .unwrap()
+                    .path,
+                format!("{comp}.ts")
+            );
+            assert_eq!(
+                context.contexts[0].declarations[0]
+                    .source
+                    .as_ref()
+                    .unwrap()
+                    .text,
+                text
+            );
+        }
+        // Neither another owner with equal bytes nor another hash at the same
+        // artifact id may satisfy this concrete compiler origin.
+        for (generation, comp) in [
+            (generations[0], "left"),
+            (generations[0], "right"),
+            (generations[2], "right"),
+        ] {
+            assert!(matches!(
+                view.source_excerpt_scoped(
+                    SourceRead {
+                        artifact_id: "collision",
+                        content_hash: Some(&hash),
+                        start_byte: Some(0),
+                        end_byte: Some(1),
+                        budget: 10,
+                        owner: Some((generation, comp))
+                    },
+                    true
+                ),
+                Err(Error::InvalidRequest(_))
+            ));
+        }
+    }
+    #[test]
+    fn source_budget_is_graph_only_and_declaration_projection_uses_overall_guards() {
+        let (path, _) = declaration_fixture();
+        let view = ReadView::open(&path).unwrap();
+        for op in [
+            "symbols",
+            "source",
+            "symbol_context",
+            "references",
+            "coverage",
+        ] {
+            let result = view.query(
+                serde_json::from_value(
+                    serde_json::json!({"op":op,"generation":view.generation,"source_max_bytes":1}),
+                )
+                .unwrap(),
+            );
+            assert!(
+                matches!(result,Err(Error::InvalidRequest(message)) if message.contains("source_max_bytes"))
+            );
+        }
+        for cap in [0, MAX_SOURCE_BYTES + 1] {
+            assert!(matches!(view.query(serde_json::from_value(serde_json::json!({"op":"callees","symbol_id":"opaque","source_max_bytes":cap,"include_source":false})).unwrap()),Err(Error::InvalidRequest(_))));
+        }
+        let key = view
+            .connection
+            .query_row(
+                "SELECT rowid FROM symbols WHERE compilation_id='third'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let symbol = crate::graph::symbol(&view.connection, key).unwrap();
+        let request: QueryRequest = serde_json::from_str(r#"{"op":"symbol_context"}"#).unwrap();
+        for cancelled in [false, true] {
+            let cancellation = crate::execution::QueryCancellation::default();
+            let execution = crate::execution::Execution::new(
+                Default::default(),
+                Some(if cancelled { 5000 } else { 0 }),
+            )
+            .unwrap()
+            .with_cancellation(Some(cancellation.clone()));
+            if cancelled {
+                cancellation.cancel();
+            }
+            *view.execution.lock().unwrap() = Some(execution);
+            let mut metadata = ProjectionBudget::new(&view, &request).unwrap();
+            let mut source = 100;
+            let result = view.project_declarations(
+                &symbol,
+                DeclarationOptions {
+                    allowance: 16,
+                    include_source: true,
+                    duplicate: false,
+                },
+                &mut source,
+                &mut metadata,
+            );
+            assert!(if cancelled {
+                matches!(result, Err(Error::QueryCancelled))
+            } else {
+                matches!(result, Err(Error::DeadlineExceeded))
+            });
+            assert_eq!(source, 100);
+        }
+        *view.execution.lock().unwrap() = None;
+        let mut metadata = ProjectionBudget {
+            remaining: 1,
+            execution: None,
+        };
+        let mut source = 100;
+        assert!(matches!(
+            view.project_declarations(
+                &symbol,
+                DeclarationOptions {
+                    allowance: 16,
+                    include_source: true,
+                    duplicate: false
+                },
+                &mut source,
+                &mut metadata
+            ),
+            Err(Error::ResponseLimitExceeded)
+        ));
     }
 }
