@@ -1,6 +1,6 @@
 """Exercise runtime lifecycle using isolated durable state and a unique launchd label."""
 from pathlib import Path
-import argparse, atexit, hashlib, json, os, plistlib, shutil, sqlite3, subprocess, tarfile, time
+import argparse, atexit, fcntl, hashlib, json, os, plistlib, shutil, sqlite3, subprocess, tarfile, threading, time
 
 from index_paths import physical_database
 
@@ -32,12 +32,23 @@ EVIDENCE = {
     'commands': str(RUN/'commands.jsonl'),
 }
 
-def command(*argv, check=True, timeout=65, env=ENV):
+def command(*argv, check=True, timeout=65, env=ENV, gate_trace=None):
     argv = list(map(str, argv))
     started = time.time_ns()
+    process = None
     try:
-        result = subprocess.run(argv, cwd=RUN, env=env, text=True, capture_output=True, timeout=timeout)
+        if gate_trace is None:
+            result = subprocess.run(argv, cwd=RUN, env=env, text=True, capture_output=True, timeout=timeout)
+        else:
+            process = subprocess.Popen(argv, cwd=RUN, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            gate_trace['command_pid'] = process.pid
+            gate_trace['command_started_monotonic'] = time.monotonic()
+            stdout, stderr = process.communicate(timeout=timeout)
+            result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     except subprocess.TimeoutExpired as error:
+        if process is not None:
+            process.kill()
+            process.communicate(timeout=5)
         output = {key: value.decode(errors='replace') if isinstance(value, bytes) else value
                   for key, value in [('stdout', error.stdout), ('stderr', error.stderr)]}
         with (RUN/'commands.jsonl').open('a') as log:
@@ -46,7 +57,8 @@ def command(*argv, check=True, timeout=65, env=ENV):
     with (RUN/'commands.jsonl').open('a') as log:
         log.write(json.dumps({'argv': argv, 'started_ns': started, 'finished_ns': time.time_ns(),
                              'home': env['HOME'], 'data': env['KNOW_CODE_DATA_DIR'],
-                             'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})+'\n')
+                             'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr,
+                             'command_pid': process.pid if process is not None else None})+'\n')
     assert not check or result.returncode == 0, (argv, result.returncode, result.stdout, result.stderr)
     return result
 
@@ -80,8 +92,8 @@ PLIST = HOME/'Library/LaunchAgents'/f'{LABEL}.plist'
 UID = os.getuid()
 SERVICE = f'gui/{UID}/{LABEL}'
 
-def lifecycle(*args, check=True):
-    return command(HOST, *args, '--prefix', PREFIX, check=check)
+def lifecycle(*args, check=True, gate_trace=None):
+    return command(HOST, *args, '--prefix', PREFIX, check=check, gate_trace=gate_trace)
 
 def info():
     return json.loads(lifecycle('install-info').stdout)
@@ -295,11 +307,61 @@ shutil.copytree(B, C)
 BLOCK.touch()
 (WORK/'value.ts').write_text('export function answer() { return 43; }\n')
 wait(lambda rows: rows[0]['phase']=='analyzing', 'held worker')
+# Runtime copying/hashing precedes the maintenance wait. Observe the actual
+# exclusive lifecycle gate without retaining any probe lock across a sample.
+gate_trace = {'probe_interval_seconds': .05, 'gate_path': str(DATA/'lifecycle.lock')}
+monitor_ready = threading.Event()
+monitor_stop = threading.Event()
+
+def observe_maintenance_gate():
+    try:
+        with (DATA/'lifecycle.lock').open('rb') as gate:
+            fcntl.flock(gate, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            fcntl.flock(gate, fcntl.LOCK_UN)
+            gate_trace['last_free_before'] = time.monotonic()
+            monitor_ready.set()
+            while not monitor_stop.wait(gate_trace['probe_interval_seconds']):
+                now = time.monotonic()
+                try:
+                    fcntl.flock(gate, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    gate_trace.setdefault('first_held', now)
+                    gate_trace['last_held'] = now
+                else:
+                    fcntl.flock(gate, fcntl.LOCK_UN)
+                    if 'first_held' in gate_trace:
+                        gate_trace['first_free_after'] = now
+                        return
+                    gate_trace['last_free_before'] = now
+    except Exception as error:
+        gate_trace['monitor_error'] = repr(error)
+    finally:
+        monitor_ready.set()
+
+monitor = threading.Thread(target=observe_maintenance_gate, daemon=True)
+monitor.start()
+assert monitor_ready.wait(2) and 'monitor_error' not in gate_trace, gate_trace
 started = time.monotonic()
-failed = lifecycle('update', '--from', C, check=False)
-elapsed = time.monotonic()-started
+try:
+    failed = lifecycle('update', '--from', C, check=False, gate_trace=gate_trace)
+    gate_trace['command_returned_monotonic'] = time.monotonic()
+    gate_trace['total_started_monotonic'] = started
+    elapsed = gate_trace['command_returned_monotonic']-started
+    monitor.join(timeout=2)
+finally:
+    monitor_stop.set()
+    monitor.join(timeout=2)
+assert not monitor.is_alive(), gate_trace
+busy_timing = {'total_command_seconds': elapsed, 'gate': gate_trace,
+               'returncode': failed.returncode, 'stderr': failed.stderr}
+(RUN/'busy-timing.json').write_text(json.dumps(busy_timing, indent=2)+'\n')
 assert failed.returncode and 'still busy after 30 seconds' in failed.stderr, failed.stderr
-assert 29.5 <= elapsed < 38, elapsed
+assert 'monitor_error' not in gate_trace and 'first_free_after' in gate_trace, gate_trace
+# Sampling brackets both lock transitions. Prove the accepted interval across
+# that uncertainty rather than treating runtime staging as maintenance time.
+lower = gate_trace['last_held']-gate_trace['first_held']
+upper = gate_trace['first_free_after']-gate_trace['last_free_before']
+assert 29.5 <= lower <= upper < 38, busy_timing
 assert info()['selected'] == b and info()['previous'] == a and info()['login_loaded']
 assert query()['result']['freshness'] == 'stale'
 BLOCK.unlink()
@@ -308,7 +370,8 @@ wait(lambda rows: rows[0]['phase']=='idle' and rows[0]['generation']>generation,
 prior = status()[0]['generation']
 (WORK/'value.ts').write_text('export function answer() { return 44; }\n')
 wait(lambda rows: rows[0]['phase']=='idle' and rows[0]['generation']>prior, 'scheduler resumed')
-(RUN/'busy-timing.json').write_text(json.dumps({'elapsed_seconds': elapsed, 'stderr': failed.stderr}, indent=2)+'\n')
+busy_timing.update(gate_held_lower_seconds=lower, gate_held_upper_seconds=upper, resumed_generation=status()[0]['generation'])
+(RUN/'busy-timing.json').write_text(json.dumps(busy_timing, indent=2)+'\n')
 record('busy_update_waits_30_seconds_keeps_selection_and_resumes_scheduler')
 
 lifecycle('rollback')
