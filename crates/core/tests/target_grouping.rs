@@ -321,6 +321,149 @@ fn context_support_keeps_each_exact_declaration_and_source() {
     assert!(scoped.contexts[0].supporting_targets.is_empty());
 }
 #[test]
+fn context_limit_bounds_declaration_slots_and_preserves_equivalent_support() {
+    for members in 1..=2 {
+        let path = database();
+        let mut writer = Writer::open(&path).unwrap();
+        for (comp, target) in [("a", "net10.0"), ("b", "netstandard2.1")]
+            .into_iter()
+            .take(members)
+        {
+            unit(&mut writer, comp, target, true, false);
+            let mut occurrences = vec![];
+            for at in [14, 16] {
+                occurrences.push(occurrence(
+                    &format!("{comp}:Root"),
+                    "code",
+                    at,
+                    "declaration",
+                ));
+                let mut definition = occurrence(&format!("{comp}:Root"), "code", at, "definition");
+                definition.end_byte += 1;
+                occurrences.push(definition);
+            }
+            writer
+                .stage(Payload::Facts(FactBatch {
+                    compilation_id: comp.into(),
+                    occurrences,
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        writer.publish().unwrap();
+        let view = ReadView::open(&path).unwrap();
+        for limit in 1..=3 {
+            let result = query(
+                &view,
+                serde_json::json!({
+                    "op":"symbol_context", "symbol_id":"a:Root", "limit":limit,
+                    "include_source":false
+                }),
+            );
+            assert_eq!(result.contexts.len(), 1);
+            assert_eq!(result.truncated, limit < 3);
+            let context = &result.contexts[0];
+            assert_eq!(context.declarations.len(), limit);
+            assert_eq!(
+                context.supporting_targets.len(),
+                if members == 1 { 0 } else { 2 }
+            );
+            let offsets = context
+                .declarations
+                .iter()
+                .map(|d| d.location.start_byte)
+                .collect::<Vec<_>>();
+            assert_eq!(offsets, [0, 14, 16][..limit]);
+            for support in &context.supporting_targets {
+                assert_eq!(support.declarations.len(), limit);
+                assert_eq!(support.symbol.locations.len(), limit);
+                assert_eq!(
+                    support
+                        .declarations
+                        .iter()
+                        .map(|d| d.location.start_byte)
+                        .collect::<Vec<_>>(),
+                    offsets
+                );
+                assert!(
+                    support
+                        .declarations
+                        .iter()
+                        .all(|d| d.source.is_none() && d.source_status == "omitted")
+                );
+            }
+        }
+        let bounded = query(
+            &view,
+            serde_json::json!({
+                "op":"symbol_context", "symbol_id":"a:Root", "limit":3, "max_bytes":5
+            }),
+        );
+        assert!(bounded.truncated);
+        let context = &bounded.contexts[0];
+        let declarations: Vec<_> = if members == 1 {
+            context.declarations.iter().collect()
+        } else {
+            context
+                .supporting_targets
+                .iter()
+                .flat_map(|s| &s.declarations)
+                .collect()
+        };
+        assert_eq!(
+            declarations
+                .iter()
+                .filter_map(|d| d.source.as_ref())
+                .map(|s| s.text.len())
+                .sum::<usize>(),
+            5
+        );
+    }
+}
+
+#[test]
+fn context_declaration_projection_cap_retains_all_exact_support() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    for (comp, target) in [("a", "net10.0"), ("b", "netstandard2.1")] {
+        unit(&mut writer, comp, target, true, false);
+        writer
+            .stage(Payload::Facts(FactBatch {
+                compilation_id: comp.into(),
+                occurrences: (1..=16)
+                    .map(|at| occurrence(&format!("{comp}:Root"), "code", at, "declaration"))
+                    .collect(),
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    writer.publish().unwrap();
+    let result = query(
+        &ReadView::open(&path).unwrap(),
+        serde_json::json!({
+            "op":"symbol_context", "symbol_id":"a:Root", "limit":1000, "include_source":false
+        }),
+    );
+    assert!(result.truncated);
+    assert_eq!(result.contexts.len(), 1);
+    let context = &result.contexts[0];
+    assert_eq!(context.declarations.len(), 16);
+    assert_eq!(context.supporting_targets.len(), 2);
+    for support in &context.supporting_targets {
+        assert_eq!(support.declarations.len(), 16);
+        assert_eq!(support.symbol.locations.len(), 16);
+        assert_eq!(
+            support
+                .declarations
+                .iter()
+                .map(|d| d.location.start_byte)
+                .collect::<Vec<_>>(),
+            (0..16).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
 fn graph_groups_only_projection_and_keeps_full_concrete_paths_and_shared_budgets() {
     let path = fixture();
     let view = ReadView::open(&path).unwrap();

@@ -946,17 +946,29 @@ impl ReadView {
         let mut budget = source_budget(request.max_bytes)?;
         let mut projection = ProjectionBudget::new(self, request)?;
         let mut contexts = vec![];
+        let mut declaration_slots = request.limit as usize;
         for keys in groups.into_values().take(request.limit as usize) {
+            if declaration_slots == 0 {
+                truncated = true;
+                break;
+            }
+            let mut used_slots = 0;
             let multiple = keys.len() > 1;
             let mut representative = None;
             let mut supporting_targets = vec![];
             for key in keys {
                 self.check()?;
                 // Reuse the same bounded symbol/declaration projection as graph reads.
-                let mut symbol = crate::graph::symbol_full(&self.connection, key)?;
-                truncated |= symbol.locations_limited;
+                let mut symbol = crate::graph::symbol(&self.connection, key)?;
+                truncated |= symbol.locations_limited || symbol.locations.len() > declaration_slots;
+                // Equivalent targets share declaration slots, but each retains
+                // its own exact evidence and consumes the shared source budget.
+                used_slots = used_slots.max(symbol.locations.len().min(declaration_slots));
                 let mut declarations = vec![];
-                for location in std::mem::take(&mut symbol.locations) {
+                for location in std::mem::take(&mut symbol.locations)
+                    .into_iter()
+                    .take(declaration_slots)
+                {
                     self.check()?;
                     let line = self.source_line(&location.content_hash, location.start_byte)?;
                     let mut extents = self.connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='definition' AND artifact_id=? AND start_byte<=? AND end_byte>=? ORDER BY start_byte,end_byte LIMIT 2")?;
@@ -1046,6 +1058,7 @@ impl ReadView {
                     representative = Some(context);
                 }
             }
+            declaration_slots -= used_slots;
             if let Some(mut context) = representative {
                 context.supporting_targets = supporting_targets;
                 contexts.push(context);
