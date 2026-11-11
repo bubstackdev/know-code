@@ -118,6 +118,27 @@ def judge_decls(items, labels, decls, source):
     return j
 
 
+def judge_files(items, labels, single):
+    """A co-change answer. `items` are ('path', file) in the answer's order; `labels` the files sharing at least two
+    of F's commits; `single` those sharing exactly one, which history-v1's rule doesn't call co-changed and which are
+    left unjudged. Any other file named is wrong."""
+    labels, single = set(labels), set(single)
+    named = set()
+    j = Judged()
+    for item in _unique(items):
+        f = item[1]
+        if f in labels:
+            named.add(f)
+            j.right.append(item)
+        elif f in single:
+            j.unjudged.append(item)
+        else:
+            j.wrong.append(item)
+    j.hits = sorted(named)
+    j.misses = sorted(labels - named)
+    return j
+
+
 def judge_paths(paths, labels, budgets=(2000, 4000, 8000)):
     """A locate or task answer. `paths` is a list of (path, end byte of its first mention). Returns recall of
     `labels` on the whole answer and within each budget, as {budget or 'all': (named, total)}."""

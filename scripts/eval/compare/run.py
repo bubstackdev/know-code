@@ -15,7 +15,7 @@ On the host, over every repository's OUT and the pinned clones:
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 from pathlib import Path
 import sys
@@ -24,6 +24,8 @@ import traceback
 
 from compare import adapters, score, tools
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # scripts/eval: task_gate's judging
+
 STATE = '/work/state'
 QUESTIONS = '/in/questions.jsonl'
 LANGUAGES = {'swift-argument-parser': 'swift', 'swift-collections': 'swift', 'swift-nio': 'swift',
@@ -31,10 +33,16 @@ LANGUAGES = {'swift-argument-parser': 'swift', 'swift-collections': 'swift', 'sw
              'jellyfin-web': 'typescript', 'hono': 'typescript'}
 
 
+def asked_tools(args):
+    """The tools this run starts. A tool left out must have no call for any question type asked (mapping.toml): it
+    answers `no_counterpart` without a session, which saves indexing a tree it will never be asked about."""
+    return [t for t in tools.TOOLS if t in args.tools.split(',')]
+
+
 def index(args):
     out = Path(args.out)
     record = {}
-    for tool in tools.TOOLS:
+    for tool in asked_tools(args):
         started = time.time()
         try:
             session = tools.Session(tool, args.src, args.language, STATE, out/'logs')
@@ -50,10 +58,16 @@ def ask(args):
     out = Path(args.out)
     indexed = json.loads((out/'index.json').read_text())
     types = set(args.types.split(','))
-    questions = [q for q in map(json.loads, Path(args.questions).read_text().splitlines())
-                 if q['repo'] == args.repo and q['type'] in types]
+    from compare import questions as draw
+    asked = draw.expand([json.loads(l) for l in Path(args.questions).read_text().splitlines() if l.strip()])
+    questions = [q for q in asked if q['repo'] == args.repo and q['type'] in types]
     with open(out/'answers.jsonl', 'w') as f:
         for tool in tools.TOOLS:
+            if tool not in indexed:
+                for q in questions:
+                    f.write(json.dumps({'id': q['id'], 'tool': tool, 'type': q['type'], 'outcome': 'no_counterpart',
+                                        'items': [], 'raw': []}, sort_keys=True) + '\n')
+                continue
             session = None
             if indexed[tool]['ok']:
                 try:
@@ -101,6 +115,8 @@ def judge(q, answer, decls, bound, source):
     if q['type'] == 'refs':
         labels = {tuple(s) for s in q['labels']}
         return score.judge_refs(items, labels, bound[q['repo']].get(q['target'][2], {}))
+    if q['type'] in ('cochange', 'cochange_window'):
+        return score.judge_files(items, [f for f, _ in q['labels']], q['single'])
     labels = {tuple(d) for d in q['labels']}
     return score.judge_decls(items, labels, decls[q['repo']], source)
 
@@ -137,15 +153,77 @@ def summarise(questions, answers, decls, bound, clones):
     return out, misses
 
 
+def windowed(questions, answers):
+    """Each co-change question and answer again, judged against the labels limited to KnowCode's default window
+    (README, "0.8's additions" 3), as type `cochange_window`, beside the all-history score."""
+    qs, ans = [], []
+    for q in questions:
+        if q['type'] == 'cochange' and 'labels_window' in q:
+            qs.append(dict(q, type='cochange_window', id=q['id'] + ':window', labels=q['labels_window'],
+                           single=q['single_window']))
+    ids = {q['id'][:-len(':window')] for q in qs}
+    for a in answers:
+        if a['type'] == 'cochange' and a['id'] in ids:
+            ans.append(dict(a, type='cochange_window', id=a['id'] + ':window'))
+    return questions + qs, answers + ans
+
+
+def language(q):
+    return q.get('lang') or LANGUAGES[q['repo']]
+
+
+def summarise_paths(questions, answers, budgets=(2000, 4000, 8000), misses=None):
+    """locate and task (README, "Scoring"): per tool, type and language, recall of the changed files and, apart, of the
+    changed tests, on the whole answer and within each byte budget, with the outcomes counted apart."""
+    import task_gate
+    by_id = {q['id']: q for q in questions}
+    groups = defaultdict(lambda: {'outcomes': [], 'files': Counter(), 'tests': Counter(), 'questions': 0})
+    for a in answers:
+        q = by_id[a['id']]
+        if q['type'] not in ('locate', 'task'):
+            continue
+        for key in ((a['tool'], q['type'], language(q)), (a['tool'], q['type'], 'all')):
+            g = groups[key]
+            g['outcomes'].append(a['outcome'])
+            if a['outcome'] != 'judged':
+                continue
+            g['questions'] += 1
+            text = '\n'.join(a['raw'])
+            for kind in ('files', 'tests'):
+                judged = task_gate.named(text, q[kind], budgets)
+                for named in judged.values():
+                    g[kind]['n'] += 1
+                    for at in ('all', *map(str, budgets)):
+                        g[kind][at] += named[at]
+                if misses is not None and key[2] != 'all':
+                    missed = [p for p, n in judged.items() if not n['all']]
+                    if missed:
+                        misses.append({'id': q['id'], 'tool': a['tool'], 'missed': [[p, '', kind] for p in missed],
+                                       'wrong': [], 'unjudged': 0})
+    out = []
+    for (tool, qtype, lang), g in sorted(groups.items()):
+        row = {'tool': tool, 'type': qtype, 'language': lang, 'questions': g['questions'],
+               'outcomes': score.tally(g['outcomes'])}
+        for kind in ('files', 'tests'):
+            row[kind] = {at: score._rate(g[kind][at], g[kind]['n']) for at in ('all', *map(str, budgets))}
+        out.append(row)
+    return out
+
+
 def score_command(args):
-    questions = [json.loads(l) for l in Path(args.questions).read_text().splitlines() if l.strip()]
+    from compare import questions as draw
+    questions = draw.expand([json.loads(l) for l in Path(args.questions).read_text().splitlines() if l.strip()])
     answers = []
     for d in args.outs:
         answers += [json.loads(l) for l in (Path(d)/'answers.jsonl').read_text().splitlines() if l.strip()]
+    questions, answers = windowed(questions, answers)
     decls, bound = enumeration_view(sorted(Path(args.enumerations).glob('enumeration-*.jsonl.gz')))
-    summary, misses = summarise(questions, answers, decls, bound, args.clones)
-    all_questions = score_all_questions(questions, answers, decls, bound, args.clones)
-    Path(args.out).write_text(json.dumps({'answered': summary, 'all_questions': all_questions}, indent=1, sort_keys=True))
+    symbol = [a for a in answers if a['type'] not in ('locate', 'task')]
+    summary, misses = summarise(questions, symbol, decls, bound, args.clones)
+    all_questions = score_all_questions(questions, symbol, decls, bound, args.clones)
+    paths = summarise_paths(questions, answers, misses=misses)
+    Path(args.out).write_text(json.dumps({'answered': summary, 'all_questions': all_questions, 'paths': paths},
+                                         indent=1, sort_keys=True))
     with open(Path(args.out).with_suffix('.misses.jsonl'), 'w') as f:
         for m in misses:
             f.write(json.dumps(m, sort_keys=True) + '\n')
@@ -187,6 +265,7 @@ def main(argv=None):
         p.add_argument('--out', required=True)
         p.add_argument('--questions', default=QUESTIONS)
         p.add_argument('--types', default='refs,impact')
+        p.add_argument('--tools', default=','.join(tools.TOOLS))
     p = sub.add_parser('score')
     p.add_argument('--questions', required=True)
     p.add_argument('--enumerations', required=True)

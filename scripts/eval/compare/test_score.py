@@ -62,6 +62,13 @@ class DeclsTest(unittest.TestCase):
         self.assertEqual(score.name_line(['x', 'save()'], 1, 'save'), 2)
 
 
+class FilesTest(unittest.TestCase):
+    def test_a_file_sharing_one_commit_is_unjudged(self):
+        j = score.judge_files([('path', 'a.cs'), ('path', 'b.cs'), ('path', 'c.cs'), ('path', 'a.cs')],
+                              ['a.cs', 'd.cs'], ['b.cs'])
+        self.assertEqual(j.counts(), {'hits': 1, 'misses': 1, 'right': 1, 'wrong': 1, 'unjudged': 1})
+
+
 class PathsTest(unittest.TestCase):
     def test_recall_within_budgets_uses_the_first_mention(self):
         out = score.judge_paths([('a.cs', 100), ('b.cs', 3000), ('a.cs', 9000)], {'a.cs', 'b.cs', 'c.cs'})
