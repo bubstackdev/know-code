@@ -1,6 +1,6 @@
 # Shared temporary disk and WAL pressure
 
-Status: accepted policy; implementation in progress. The manual SQLite probe below is evidence for this design, not proof of automatic enforcement or v0.0.1 readiness.
+Status: implementation has passed the focused managed checkpoint below on a named Debug prefix. This is not final v0.0.1 certification; the earlier manual probe remains separate design evidence.
 
 ## Accepted behavior
 
@@ -18,7 +18,7 @@ Rebuild preflight waits automatically for space **before allocating an attempt**
 - Cursor publication retains the writer outside the global cursor mutex on both success and error. Explicit checkpoints, automatic checkpoints and last-connection-close work must not hide inside that mutex.
 - Coordinator owns preflight deferral, durable ordinary-job pause/resume, bounded fair maintenance and the active-rebuild retry exception. Paused jobs release shared analysis capacity. WAL-maintenance SQL, filesystem census and checkpoints run outside global entry/settings/cursor locks. Existing publication and retention metadata transactions remain serialized.
 
-Reuse lifecycle capability 3, resource capability 3, storage 8, framing 7 and recovery receipt 2. No public DTO shape, new disk engine, per-language scheduler or background query RPC is required.
+The WAL slice adds no separate capability or budget DTO. The current pre-tag runtime uses lifecycle capability 4 for the separate project-execution trust boundary; resource capability 3, storage 8, framing 7 and recovery receipt 2 remain unchanged. No new disk engine, per-language scheduler or background query RPC is required.
 
 ## Measurement motivating the policy
 
@@ -29,3 +29,12 @@ Evidence: [raw measurement](../.artifacts/qa/.artifacts/wal-pressure/d9168f72d8/
 ## Focused acceptance
 
 Exercise a held raw reader, idle logical cursor, ordinary saves and a healthy sibling under one small shared pool. Verify stale/coherent reads, bounded maintenance, slot/worker release, automatic resume after actual reclamation, and no repeat-analysis loop from rollback alone. Cancel and restart while paused; preserve cancellation and dependency failure/retry rules. Check both rebuild preflight deferral and active-attempt explicit retry. Include selected WAL plus pending/retired/cutover accounting, changed families, free-space reserve, unsupported/corrupt/missing paths and busy checkpoints. Keep full Debug, optimized/platform/encoding/signing/publication gates separate.
+
+
+## Managed focused checkpoint — 2026-11-11
+
+[Four managed groups passed](../.artifacts/wp/7cdb3fb00/summary.json) using build `276a80615840445cb81776445afb4a5b`, source `90ec4ad110e1d1ab026f35eae2fc1725954de522`. The fixture held actual common-core bundled-SQLite raw views while saved TS revisions retained 4,861,440 charged bytes against a 4 MiB pool. It verified coherent old reader results, stale disk-pressure fallback, usable current sibling reads, unchanged pause/high-water state across maintenance ticks, cancellation and restart, then automatic saved-source publication after reader release. A saved sibling also deferred under the same exhausted shared pool and resumed after reclamation.
+
+A second case deferred corruption rebuilding before allocating any pending/failed attempt. The final case observed a real allocated candidate and owned worker PID, imposed reserve pressure, and proved the failed attempt survived policy restoration, saves and restart until explicit refresh. The worker gate is fixture-owned, not a production fault switch.
+
+The receipt binds the harness, holder source/executable, host/producer, Node wrapper and real Node hashes; independent read-only checking found those bindings consistent with the retained files. Raw commands are in the same run directory and [execution logs](../.artifacts/pretag-wave/diagnostic/wal-01/summary.json) bind the holder build and fixture invocation. Cleanup reports no owned coordinator socket, zero retained holders and no active worker gate; the `.ready` receipt remains as evidence. This finite checkpoint proves neither a hard disk ceiling nor a WAL latency SLO, and does not replace full Debug/optimized, installed-package/offline, platform, contention or signing/release gates. See [the pre-tag checkpoint](PRETAG_EXECUTION.md#audited-focused-checkpoint--2026-11-11) for the separate earlier trust/provider prefixes.

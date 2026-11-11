@@ -27,7 +27,25 @@ Lifecycle capability 4 and native query contract 8 cover this new boundary, incl
 
 Development diagnostics are under `.artifacts/pretag-wave/diagnostic/`. The first assembled pre-trust compile passed; its Rust run exposed four fixture expectations that needed correction (cleanup warning policy, actual main/WAL corruption, and DiskPressure type). Those failures stay retained. The first combined C# source chunk builds with zero compiler warnings/errors. None of those prefixes certifies the final trust/native/transport assembly.
 
-Required next checks include actual native trust/revocation/restart/identity cases; typed project failures and fresh healthy siblings; graph/cleanup plans; retained raw readers/WAL pause/resume and active rebuild retry; real Node panic and fs/crypto progress with test-only hooks absent from default artifacts; current/prior compatibility; then the frozen full Debug/optimized, installed offline/toolchain, real-encoding/resource, conditional free-VM minimum-OS, license/zero-telemetry and signed/notarized installation gates.
+The focused checkpoint below now covers actual trust, provider failures and managed WAL behavior on named development prefixes. Remaining gates include the npm 10 policy and scripts-safe package-manager pin matrix, final signing pipeline, graph/cleanup and native/compatibility evidence, then the settled candidate's full Debug/optimized, installed offline/toolchain, real-encoding/resource, conditional free-VM minimum-OS, license/zero-telemetry and signed/notarized installation checks.
+
+## Audited focused checkpoint — 2026-11-11
+
+These are development-prefix results, not a final candidate certification. The recorded log SHA-256 values were independently checked; the three Python harness hashes match their recorded values. The current build-04 producer/host and WAL holder source/binary, Node wrapper and real Node hashes also match the WAL receipt.
+
+| Evidence | Bound source/build | Result |
+| --- | --- | --- |
+| [Rust prefix](../.artifacts/pretag-wave/diagnostic/rust-04/summary.json) | `e21f0e25c61a4301f0a5c7a9c30bd9360ba1ba42` | 245 passed, 2 ignored |
+| [Trust](../.artifacts/pt/9e73924a8/summary.json) | build-03 `d3324306ea0e4ecd900ba6e3042b18a6`, source `3cea4a23bdaa7837aa59c2a011a29cde11fa3f7d` | 6 groups passed |
+| [Providers](../.artifacts/pf/ab8b21228/summary.json) | Same build-03 prefix | 6 groups passed |
+| [Later handoff probes](../.artifacts/pretag-wave/diagnostic/trust-handoff-01/summary.json) | Separate focused Cargo runs after the coordinator handoff fixes | 2 handoff tests, 1 raw-worker revocation test and formatting passed |
+| [Managed WAL](../.artifacts/wp/7cdb3fb00/summary.json) | build-04 `276a80615840445cb81776445afb4a5b`, source `90ec4ad110e1d1ab026f35eae2fc1725954de522` | 4 groups passed |
+
+The trust fixture proves inert pregrant/enrollment separation, registration/settings/restart without implicit permission, an actual compiler-module marker executing only after trust, stale reads during revocation, regrant without a new restore retry, cancellation while untrusted, and missing-root revoke/unregister. The provider fixture exercises real unsupported TypeScript 5.8.3, missing declared compiler versus own fallback and outside-store hoisting, near/over-frame TS/C# source gaps, recursive/accessor facts through native queries, scoped malformed project failures, repair and fatal unknown extraction without incomplete publication. The shared compiler selection/restoration resolver is already present in build-03; later scripts-off child-installer propagation is not certified by that provider run.
+
+Build-03 does **not** contain the later coordinator consumed-restore-retry and cancellation-handoff fixes. Those have the separate focused Rust evidence above; the full Rust prefix is not relabeled as a full run of their combined source. The two ignored Rust WAL probes were not counted as passing tests. Build-03's summaries retain its producer hash and output bindings, but its full producer manifest was overwritten by build-04 and was not independently reverified. Build-04's available producer hash is `a24f17c2dfbcf7115a36a8a25be1856af69afb0f4b31feeb21a23532143925f7`.
+
+Successful fixture receipts report their owned coordinator sockets removed; WAL additionally reports zero retained holder processes and removal of its active worker gate. Raw command/error evidence remains beside each summary. The earlier [trust attempt](../.artifacts/pt/d2d892be0/summary.json) remains failed with `KeyError: 'symbols'`; test-only `24c103d` corrected the omitted-empty-array assertion before the passing rerun. No full optimized/platform/package/offline/signing/encoding/performance or release-tag claim follows from this checkpoint.
 
 ## Signing preparation — 2026-11-11
 
