@@ -604,12 +604,12 @@ pub fn reconcile(logical: &Path) -> Result<()> {
 fn validate_candidate(candidate: &Candidate, control: &Control) -> Result<u64> {
     control.check()?;
     regular(&candidate.database)?;
-    let connection = rusqlite::Connection::open_with_flags(
+    let mut connection = rusqlite::Connection::open_with_flags(
         &candidate.database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    connection.progress_handler(4096, Some(move || std::time::Instant::now() >= deadline));
+    connection.progress_handler(4096, Some(move || std::time::Instant::now() >= deadline))?;
     control
         .interruptible(connection.get_interrupt_handle(), || {
             let result: String =
