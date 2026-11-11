@@ -836,6 +836,13 @@ fn begin_replacement(
             generation
         }
     };
+    // An authorized source probe can observe a publication ahead of the
+    // registry acknowledgement. Preserve that known floor with this attempt,
+    // even if resources/setup fail before a candidate Writer reserves a value.
+    state.high_water = state
+        .high_water
+        .max(trusted_generation)
+        .max(actual_generation);
     if state.retired.len() >= MAX_INCARNATIONS {
         let message = "retained index incarnation count reached limit; cleanup is required";
         state.failed = Some(message.into());
@@ -845,8 +852,6 @@ fn begin_replacement(
     }
     let minimum_generation = state
         .high_water
-        .max(trusted_generation)
-        .max(actual_generation)
         .checked_add(1)
         .ok_or_else(|| invalid("index generation exhausted"))?;
     let index = Incarnation {

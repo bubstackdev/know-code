@@ -389,3 +389,76 @@ fn invalid_target_or_mutated_candidate_cannot_checkpoint_unowned_paths_or_publis
     drop(old);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn observed_source_floor_survives_pre_writer_failure_and_later_corruption() {
+    use std::os::unix::fs::FileExt;
+    for failure in ["disk", "start_sync"] {
+        let (root, logical) = fixture(2, Some(42));
+        let source = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        assert_eq!(load(&logical).unwrap().unwrap().high_water, 2);
+        if failure == "disk" {
+            let candidate = begin_upgrade(&logical, false, 2, 2).unwrap();
+            assert_eq!(candidate.minimum_generation, 43);
+            assert!(
+                !candidate.database.exists(),
+                "no Writer has reserved or published anything"
+            );
+            let limits = Limits {
+                min_free_disk_mib: u64::MAX / (1024 * 1024),
+                ..Default::default()
+            };
+            limits.validate().unwrap();
+            assert!(matches!(
+                DiskBudget::new(&logical, &root)
+                    .unwrap()
+                    .check(&limits, false),
+                Err(Error::ResourceLimited(_))
+            ));
+            fail_rebuild(&logical, "disk guard stopped before Writer").unwrap();
+        } else {
+            FAIL_NEXT_DIRECTORY_SYNC.with(|flag| flag.set(true));
+            assert!(matches!(
+                begin_upgrade(&logical, false, 2, 2),
+                Err(Error::Io(_))
+            ));
+        }
+        assert_eq!(
+            load(&logical).unwrap().unwrap().high_water,
+            42,
+            "{failure}: observed serving generation must outlive the failed attempt"
+        );
+        assert!(load(&logical).unwrap().unwrap().pending.is_none());
+        assert_eq!(
+            failure_reason(&logical).unwrap(),
+            Some(RebuildReason::Upgrade {
+                source_format: 2,
+                target_format: 8
+            })
+        );
+        OpenOptions::new()
+            .write(true)
+            .open(source.physical_path())
+            .unwrap()
+            .write_all_at(b"broken-db-header", 0)
+            .unwrap();
+        assert!(matches!(
+            selected_format(&logical),
+            Err(Error::IndexCorrupt { .. })
+        ));
+        assert!(source.check().is_err());
+        let recovery = begin_rebuild(&logical, true, 2).unwrap();
+        assert_eq!(recovery.reason, RebuildReason::Corruption);
+        assert_eq!(
+            recovery.minimum_generation, 43,
+            "{failure}: unreadable source cannot erase its already observed generation floor"
+        );
+        assert_eq!(
+            load(&logical).unwrap().unwrap().high_water,
+            42,
+            "candidate43 is not reserved until Writer uses it"
+        );
+        drop(source);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
