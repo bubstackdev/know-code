@@ -88,6 +88,21 @@ pub struct Candidate {
     logical: PathBuf,
 }
 
+/// Verified, durable candidate receipt. Its fields are private so the short
+/// publication phase can consume only the exact state prepared beforehand.
+#[derive(Debug)]
+pub struct PreparedRebuild {
+    candidate: Candidate,
+    generation: u64,
+    source_incarnation: String,
+    file_identity: (u64, u64),
+}
+impl PreparedRebuild {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
 fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidRequest(message.into())
 }
@@ -688,7 +703,17 @@ fn probe_format(guard: &IndexReadGuard) -> Result<Option<(i32, u64)>> {
         let generation: Option<u64> =
             connection.query_row("SELECT current_generation FROM state", [], |r| r.get(0))?;
         guard.check()?;
-        Ok(generation.map(|generation| (format, generation)))
+        Ok(match generation {
+            Some(generation) => Some((format, generation)),
+            None if matches!(
+                crate::store::upgrade_action(format),
+                crate::store::UpgradeAction::Rebuild { .. }
+            ) =>
+            {
+                Some((format, 0))
+            }
+            None => None,
+        })
     })();
     crate::index_result(guard, result)
 }
@@ -880,8 +905,25 @@ pub fn reconcile(logical: &Path) -> Result<()> {
     }
     Ok(())
 }
+fn check_candidate_receipt(candidate: &Candidate, pending: &Pending) -> Result<()> {
+    if pending.index.id != candidate.incarnation
+        || pending.reason != candidate.reason
+        || pending.minimum_generation != candidate.minimum_generation
+        || physical(&candidate.logical, &pending.index)? != candidate.database
+    {
+        return Err(invalid("replacement does not match its durable receipt"));
+    }
+    Ok(())
+}
 fn validate_candidate(candidate: &Candidate, control: &Control) -> Result<u64> {
     control.check()?;
+    let state = load(&candidate.logical)?.ok_or_else(|| invalid("missing lifecycle state"))?;
+    let pending = state
+        .pending
+        .as_ref()
+        .ok_or_else(|| invalid("replacement is no longer pending"))?;
+    check_candidate_receipt(candidate, pending)?;
+    validate_identity(&candidate.database, &pending.index)?;
     regular(&candidate.database)?;
     let mut connection = rusqlite::Connection::open_with_flags(
         &candidate.database,
@@ -930,39 +972,76 @@ fn validate_candidate(candidate: &Candidate, control: &Control) -> Result<u64> {
             Ok(generation)
         })
 }
-pub fn finish_rebuild(
-    candidate: &Candidate,
+/// Run SQLite integrity/checkpoint and fsync work before entering the shared
+/// cursor publication fence. A ready receipt still consumes an interrupted
+/// attempt; only the short selector phase below can expose this candidate.
+pub fn prepare_rebuild(candidate: &Candidate, control: &Control) -> Result<PreparedRebuild> {
+    let generation = validate_candidate(candidate, control)?;
+    let _lock = lock(&candidate.logical)?;
+    let mut state = load(&candidate.logical)?.ok_or_else(|| invalid("missing lifecycle state"))?;
+    let source_incarnation = state.selected.id.clone();
+    let pending = state
+        .pending
+        .as_mut()
+        .ok_or_else(|| invalid("replacement is no longer pending"))?;
+    check_candidate_receipt(candidate, pending)?;
+    validate_identity(&candidate.database, &pending.index)?;
+    let identity = file_identity(&candidate.database)?
+        .ok_or_else(|| invalid("replacement file disappeared before preparation"))?;
+    pending.index.file_identity = Some(identity);
+    pending.ready_generation = Some(generation);
+    state.high_water = state.high_water.max(generation);
+    control.check()?;
+    save(&candidate.logical, &state)?;
+    Ok(PreparedRebuild {
+        candidate: candidate.clone(),
+        generation,
+        source_incarnation,
+        file_identity: identity,
+    })
+}
+/// Only bounded receipt/identity checks and the selector save occur here. The
+/// coordinator may run this inside cursor publication admission; no SQLite
+/// integrity scan, checkpoint or candidate fsync belongs inside that fence.
+pub fn finish_prepared_rebuild(
+    prepared: &PreparedRebuild,
     control: &Control,
     before_cutover: impl FnOnce() -> Result<()>,
 ) -> Result<u64> {
-    let generation = validate_candidate(candidate, control)?;
+    control.check()?;
+    let candidate = &prepared.candidate;
     let _lock = lock(&candidate.logical)?;
     let mut state = load(&candidate.logical)?.ok_or_else(|| invalid("missing lifecycle state"))?;
     let pending = state
         .pending
-        .as_mut()
-        .filter(|p| p.index.id == candidate.incarnation)
+        .as_ref()
         .ok_or_else(|| invalid("replacement is no longer pending"))?;
-    if pending.reason != candidate.reason {
-        return Err(invalid(
-            "replacement cause does not match its durable receipt",
-        ));
+    check_candidate_receipt(candidate, pending)?;
+    if state.selected.id != prepared.source_incarnation
+        || pending.ready_generation != Some(prepared.generation)
+        || pending.index.file_identity != Some(prepared.file_identity)
+        || file_identity(&candidate.database)? != Some(prepared.file_identity)
+    {
+        return Err(invalid("prepared replacement identity or receipt changed"));
     }
-    validate_identity(&candidate.database, &pending.index)?;
-    pending.index.file_identity = file_identity(&candidate.database)?;
-    pending.ready_generation = Some(generation);
-    state.high_water = state.high_water.max(generation);
-    save(&candidate.logical, &state)?;
     before_cutover()?;
     control.check()?;
     let pending = state.pending.take().unwrap();
     let old = std::mem::replace(&mut state.selected, pending.index);
     state.retired.push(old);
-    state.selected_generation = Some(generation);
+    state.selected_generation = Some(prepared.generation);
     state.failed = None;
     state.failed_reason = None;
     control.publish(|| save(&candidate.logical, &state))?;
-    Ok(generation)
+    Ok(prepared.generation)
+}
+pub fn finish_rebuild(
+    candidate: &Candidate,
+    control: &Control,
+    before_cutover: impl FnOnce() -> Result<()>,
+) -> Result<u64> {
+    let prepared = prepare_rebuild(candidate, control)?;
+    finish_prepared_rebuild(&prepared, control, before_cutover)
 }
 
 fn family_path(path: &Path, suffix: &str) -> PathBuf {

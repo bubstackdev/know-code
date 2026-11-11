@@ -164,3 +164,108 @@ fn disk_sampling_observes_other_healthy_retired_wal_growth_and_cleanup() {
     budget.check(&limits, false).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
+
+fn candidate_database(candidate: &Candidate, generation: u64) {
+    let connection = Connection::open(&candidate.database).unwrap();
+    connection.execute_batch("PRAGMA user_version=8; PRAGMA journal_mode=WAL; CREATE TABLE state(current_generation INTEGER);").unwrap();
+    connection
+        .execute("INSERT INTO state VALUES(?)", [generation])
+        .unwrap();
+}
+
+#[test]
+fn known_unpublished_old_formats_keep_the_rebuild_decision() {
+    for source_format in [1, 2] {
+        let (root, logical) = fixture(source_format, None);
+        assert_eq!(selected_format(&logical).unwrap(), Some((source_format, 0)));
+        assert_eq!(
+            begin_upgrade(&logical, false, 0, source_format)
+                .unwrap()
+                .reason,
+            RebuildReason::Upgrade {
+                source_format,
+                target_format: 8
+            }
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    let (root, logical) = fixture(8, None);
+    assert_eq!(selected_format(&logical).unwrap(), None);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn prepared_upgrade_seal_rejects_changed_receipts_or_physical_identity() {
+    for changed in ["reason", "floor", "ready_generation", "identity"] {
+        let (root, logical) = fixture(2, Some(12));
+        let old = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+        let candidate = begin_upgrade(&logical, false, 2, 2).unwrap();
+        candidate_database(&candidate, 13);
+        let prepared = prepare_rebuild(&candidate, &Control::default()).unwrap();
+        assert_eq!(prepared.generation(), 13);
+        let mut state = load(&logical).unwrap().unwrap();
+        let pending = state.pending.as_mut().unwrap();
+        match changed {
+            "reason" => pending.reason = RebuildReason::Corruption,
+            "floor" => pending.minimum_generation += 1,
+            "ready_generation" => pending.ready_generation = Some(14),
+            "identity" => {
+                let held = candidate.database.with_extension("held");
+                fs::rename(&candidate.database, &held).unwrap();
+                fs::copy(&held, &candidate.database).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        save(&logical, &state).unwrap();
+        assert!(
+            matches!(
+                finish_prepared_rebuild(&prepared, &Control::default(), || Ok(())),
+                Err(Error::InvalidRequest(_))
+            ),
+            "{changed} must invalidate the prepared seal"
+        );
+        assert_eq!(
+            selected_incarnation(&logical).unwrap().as_deref(),
+            Some(old.incarnation())
+        );
+        assert!(old.check().is_ok());
+        drop(old);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn ready_upgrade_waits_for_publication_and_interruption_consumes_its_attempt() {
+    let (root, logical) = fixture(2, Some(12));
+    let old = IndexReadGuard::open_unbudgeted(&logical).unwrap();
+    let candidate = begin_upgrade(&logical, false, 2, 2).unwrap();
+    candidate_database(&candidate, 13);
+    let prepared = prepare_rebuild(&candidate, &Control::default()).unwrap();
+    assert_eq!(
+        selected_incarnation(&logical).unwrap().as_deref(),
+        Some(old.incarnation())
+    );
+    reconcile(&logical).unwrap();
+    assert_eq!(failure_reason(&logical).unwrap(), Some(candidate.reason));
+    assert!(finish_prepared_rebuild(&prepared, &Control::default(), || Ok(())).is_err());
+    assert!(matches!(
+        begin_upgrade(&logical, false, 2, 2),
+        Err(Error::IndexRecovering(_))
+    ));
+    let retry = begin_upgrade(&logical, true, 2, 2).unwrap();
+    assert_eq!(retry.minimum_generation, 14);
+    candidate_database(&retry, 14);
+    let prepared = prepare_rebuild(&retry, &Control::default()).unwrap();
+    // A writer lock does not change the verified candidate. The short selector
+    // phase must not reopen SQL to scan/checkpoint while cursor admission holds.
+    let writer = Connection::open(&retry.database).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE;").unwrap();
+    finish_prepared_rebuild(&prepared, &Control::default(), || Ok(())).unwrap();
+    writer.execute_batch("ROLLBACK;").unwrap();
+    drop(writer);
+    assert_eq!(selected_replacement_generation(&logical).unwrap(), Some(14));
+    assert!(!is_bad(&logical).unwrap());
+    assert!(old.check().is_ok());
+    drop(old);
+    fs::remove_dir_all(root).unwrap();
+}
