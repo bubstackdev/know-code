@@ -43,6 +43,7 @@ static class TargetPeers
                 || current is IMethodSymbol { MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction };
             if (!scoped && documentation is not null)
             {
+                if (chain.Count == 0) return documentation;
                 chain.Add(new { documentation });
                 return JsonSerializer.Serialize(chain);
             }
