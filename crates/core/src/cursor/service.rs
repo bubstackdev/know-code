@@ -582,11 +582,16 @@ impl CursorService {
     }
     /// Analysis has completed before entry. Keep admission serialized through
     /// actual commit, but release the mutex while bounded active reads finish.
-    pub fn publish(&self, database: &Path, writer: Writer, control: &Control) -> Result<u64> {
+    pub fn publish(&self, database: &Path, mut writer: Writer, control: &Control) -> Result<u64> {
         let generation = writer.generation;
-        self.publish_with(database, Some(generation), control, || {
-            writer.publish_controlled(control)
-        })
+        let result = self.publish_with(database, Some(generation), control, || {
+            writer.commit_controlled(control)
+        });
+        writer.maintain_published();
+        // Failed staging cleanup and sqlite close also happen after the global
+        // cursor fence has been released, not inside the publication callback.
+        drop(writer);
+        result
     }
     /// Serialize a selector cutover with cursor admission and shared retention
     /// pressure. Healthy old pins remain valid on their original incarnation.

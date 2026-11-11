@@ -1,8 +1,10 @@
 use crate::{Error, Result, protocol::*};
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, config::DbConfig, params};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     time::Duration,
 };
@@ -13,6 +15,121 @@ pub const SCHEMA_VERSION: i32 = 8;
 pub const READABLE_FORMATS: &[i32] = &[2, 3, 4, 5, 6, 7, 8];
 pub const MIGRATION_FORMATS: &[i32] = &[3, 4, 5, 6, 7];
 pub const REBUILD_FORMATS: &[i32] = &[1, 2];
+
+/// Managed write connections must not checkpoint on commit/close while their
+/// caller owns a shared coordinator fence. Maintenance is explicit instead.
+pub(crate) fn defer_checkpoints(connection: &Connection) -> Result<()> {
+    connection.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)?;
+    connection.execute_batch("PRAGMA wal_autocheckpoint=0;")?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct CheckpointProgress {
+    pub busy: bool,
+    /// SQLite reports -1 when frame counts are unavailable or no WAL exists.
+    pub log_frames: i32,
+    pub checkpointed_frames: i32,
+}
+
+fn checkpoint(connection: &Connection) -> Result<CheckpointProgress> {
+    connection.busy_timeout(Duration::ZERO)?;
+    match connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok(CheckpointProgress {
+            busy: row.get(0)?,
+            log_frames: row.get(1)?,
+            checkpointed_frames: row.get(2)?,
+        })
+    }) {
+        Ok(progress) => Ok(progress),
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if matches!(
+                error.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            ) =>
+        {
+            Ok(CheckpointProgress {
+                busy: true,
+                log_frames: -1,
+                checkpointed_frames: -1,
+            })
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Attempt WAL reclamation for one adopted workspace without consumer query
+/// admission, schema migration or waiting for its writer/readers. Call outside
+/// coordinator cursor/entry/settings mutexes. Busy is workspace-local deferral.
+pub fn maintain_index(logical: &Path) -> Result<CheckpointProgress> {
+    let ownership = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(logical.with_extension("writer.lock"))?;
+    let metadata = ownership.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(Error::InvalidRequest(
+            "index writer fence is not an owned regular file".into(),
+        ));
+    }
+    match ownership.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => {
+            return Err(Error::Busy(
+                "index writer is active; checkpoint deferred".into(),
+            ));
+        }
+        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+    }
+    let health = crate::recovery::IndexReadGuard::open_unbudgeted(logical)?;
+    if health.incarnation().is_empty() {
+        return Err(Error::InvalidRequest(
+            "checkpoint maintenance requires an adopted workspace index".into(),
+        ));
+    }
+    let result = (|| {
+        health.check()?;
+        let connection = Connection::open_with_flags(
+            health.physical_path(),
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        defer_checkpoints(&connection)?;
+        connection.busy_timeout(Duration::ZERO)?;
+        let progress_health = health.clone();
+        connection.progress_handler(1_000, Some(move || progress_health.check().is_err()))?;
+        let format: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if !READABLE_FORMATS.contains(&format) {
+            return Err(Error::UpdateRequired(format!(
+                "index format {format} cannot be checkpointed by this runtime"
+            )));
+        }
+        let tables: u32 = connection.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('state','generation_units','compilations','reports')", [], |r| r.get(0))?;
+        if tables != 4 {
+            return Err(Error::InvalidRequest(
+                "checkpoint target is not a workspace fact store".into(),
+            ));
+        }
+        let generation: Option<u64> = connection.query_row(
+            "SELECT current_generation FROM state WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        generation.ok_or(Error::NotReady)?;
+        let mode: String = connection.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+        if mode != "wal" {
+            return Err(Error::InvalidRequest(
+                "checkpoint target is not in WAL mode".into(),
+            ));
+        }
+        health.check()?;
+        let progress = checkpoint(&connection)?;
+        health.check()?;
+        Ok(progress)
+    })();
+    crate::index_result(&health, result)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpgradeAction {
@@ -256,6 +373,7 @@ impl Writer {
         });
         let result = (|| -> Result<Self> {
             let mut connection = Connection::open(path)?;
+            defer_checkpoints(&connection)?;
             let interrupt = connection.get_interrupt_handle();
             control.interruptible(interrupt, || {
         connection.busy_timeout(Duration::from_secs(2))?;
@@ -650,7 +768,14 @@ impl Writer {
         self.publish_controlled(&crate::resource::Control::default())
     }
 
-    pub fn publish_controlled(self, control: &crate::resource::Control) -> Result<u64> {
+    pub fn publish_controlled(mut self, control: &crate::resource::Control) -> Result<u64> {
+        let result = self.commit_controlled(control);
+        self.maintain_published();
+        result
+    }
+    /// Commit only. The caller keeps Writer ownership outside any publication
+    /// fence, including on errors/panic, so cleanup and close occur afterward.
+    pub(crate) fn commit_controlled(&mut self, control: &crate::resource::Control) -> Result<u64> {
         let health = self.health.clone();
         if let Some(guard) = &health {
             guard.check()?;
@@ -663,7 +788,7 @@ impl Writer {
             result
         }
     }
-    fn finish_publication(mut self, control: &crate::resource::Control) -> Result<u64> {
+    fn finish_publication(&mut self, control: &crate::resource::Control) -> Result<u64> {
         control.check()?;
         let tx = self
             .connection
@@ -702,14 +827,25 @@ impl Writer {
             Ok(())
         })?;
         self.published = true;
-        // Passive checkpoints never force a reader to change its served generation.
-        if let Err(error) = self
-            .connection
-            .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")
-        {
+        Ok(self.generation)
+    }
+    pub(crate) fn maintain_published(&self) {
+        if !self.published {
+            return;
+        }
+        let result = if let Some(health) = &self.health {
+            crate::index_result(
+                health,
+                health.check().and_then(|_| checkpoint(&self.connection)),
+            )
+        } else {
+            checkpoint(&self.connection)
+        };
+        if let Err(error) = result {
+            // The generation already committed. Never misreport it as failed
+            // publication because best-effort maintenance could not complete.
             eprintln!("index publication committed; checkpoint deferred: {error}");
         }
-        Ok(self.generation)
     }
 }
 
@@ -730,6 +866,273 @@ impl Drop for Writer {
                 [self.generation],
             );
             let _ = reclaim(&self.connection);
+        }
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+    use std::{
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicU64, Ordering},
+            mpsc,
+        },
+    };
+    fn fixture() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/checkpoint-tests")
+            .join(format!(
+                "{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join("index.db")
+    }
+    fn populate(writer: &mut Writer, text: &str, completed: bool) {
+        writer
+            .stage(envelope::Payload::Compilation(Compilation {
+                id: "comp".into(),
+                language: "typescript".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(envelope::Payload::Source(SourceArtifact {
+                id: "src".into(),
+                compilation_id: "comp".into(),
+                path: "fixture.ts".into(),
+                utf8: text.as_bytes().into(),
+                sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                ..Default::default()
+            }))
+            .unwrap();
+        if completed {
+            writer
+                .stage(envelope::Payload::Report(AnalysisReport {
+                    compilation_id: "comp".into(),
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+    }
+    fn managed() -> PathBuf {
+        let path = fixture();
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, "old", true);
+        let generation = writer.publish().unwrap();
+        crate::recovery::adopt(&path, generation).unwrap();
+        path
+    }
+    fn wal_bytes(path: &Path) -> u64 {
+        std::fs::metadata(format!("{}-wal", path.display())).map_or(0, |m| m.len())
+    }
+    fn source(view: &crate::query::ReadView) -> String {
+        view.query(
+            serde_json::from_value(
+                serde_json::json!({"op":"source","artifact_id":"src","max_bytes":262144}),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .source
+        .unwrap()
+        .text
+    }
+    #[test]
+    fn managed_checkpoint_preserves_full_scope_raw_reader_then_truncates_and_reuses() {
+        let path = managed();
+        let old = "// old π😀\n".repeat(4096);
+        let new = "// new π😀\n".repeat(4096);
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, &old, true);
+        let original = writer.publish().unwrap();
+        let scope =
+            crate::admission::AdmissionScope::at(path.parent().unwrap().join("scope")).unwrap();
+        scope.configure(1).unwrap();
+        let held = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        assert_eq!(held.generation, original);
+        assert_eq!(source(&held), old);
+        assert!(matches!(scope.try_reserve(), Err(Error::Busy(_))));
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, &new, true);
+        let published = writer.publish().unwrap();
+        assert!(published > original);
+        assert!(wal_bytes(&path) > 0);
+        // Maintenance needs no consumer reservation even while the only slot
+        // belongs to the actual coherent old ReadView.
+        let blocked = maintain_index(&path).unwrap();
+        assert!(blocked.busy, "{blocked:?}");
+        assert_eq!(source(&held), old);
+        assert_eq!(held.generation, original);
+        drop(held);
+        let reclaimed = maintain_index(&path).unwrap();
+        assert!(!reclaimed.busy, "{reclaimed:?}");
+        assert_eq!(wal_bytes(&path), 0);
+        let current = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        assert_eq!(current.generation, published);
+        assert_eq!(source(&current), new);
+        drop(current);
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, "reused", true);
+        let next = writer.publish().unwrap();
+        assert!(next > published);
+        assert!(!maintain_index(&path).unwrap().busy);
+        assert_eq!(wal_bytes(&path), 0);
+    }
+    #[test]
+    fn maintenance_defers_active_writer_and_refuses_foreign_future_missing_and_bad() {
+        let missing = fixture();
+        assert!(matches!(maintain_index(&missing), Err(Error::Io(_))));
+        assert!(!missing.parent().unwrap().exists());
+        let path = managed();
+        let writer = Writer::open(&path).unwrap();
+        assert!(matches!(maintain_index(&path), Err(Error::Busy(_))));
+        drop(writer);
+        let connection = Connection::open(&path).unwrap();
+        defer_checkpoints(&connection).unwrap();
+        connection
+            .execute_batch("PRAGMA user_version=999;")
+            .unwrap();
+        drop(connection);
+        let before = (
+            std::fs::read(&path).unwrap(),
+            std::fs::read(format!("{}-wal", path.display())).unwrap(),
+        );
+        assert!(matches!(
+            maintain_index(&path),
+            Err(Error::UpdateRequired(_))
+        ));
+        assert_eq!(
+            before,
+            (
+                std::fs::read(&path).unwrap(),
+                std::fs::read(format!("{}-wal", path.display())).unwrap()
+            )
+        );
+        assert!(!crate::recovery::is_bad(&path).unwrap());
+        let foreign = fixture();
+        std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+        File::create(foreign.with_extension("writer.lock")).unwrap();
+        let connection = Connection::open(&foreign).unwrap();
+        connection
+            .execute_batch("PRAGMA user_version=8; CREATE TABLE foreign_data(value);")
+            .unwrap();
+        drop(connection);
+        let bytes = std::fs::read(&foreign).unwrap();
+        assert!(matches!(
+            maintain_index(&foreign),
+            Err(Error::InvalidRequest(_))
+        ));
+        assert_eq!(bytes, std::fs::read(&foreign).unwrap());
+        assert!(!foreign.with_extension("lifecycle.json").exists());
+        let bad = managed();
+        let guard = crate::recovery::IndexReadGuard::open_unbudgeted(&bad).unwrap();
+        crate::recovery::report_corruption(&bad, guard.incarnation()).unwrap();
+        let bytes = std::fs::read(&bad).unwrap();
+        assert!(matches!(
+            maintain_index(&bad),
+            Err(Error::IndexCorrupt { .. })
+        ));
+        assert_eq!(bytes, std::fs::read(&bad).unwrap());
+    }
+    #[test]
+    fn publication_checkpoint_and_failed_writer_cleanup_release_the_cursor_fence() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        for failed in [false, true] {
+            let path = managed();
+            let root = path.parent().unwrap().join("coordinator");
+            std::fs::create_dir_all(&root).unwrap();
+            let service =
+                Arc::new(crate::cursor::CursorService::new(&root, [path.clone()]).unwrap());
+            service.sweep().unwrap();
+            let mut writer = Writer::open(&path).unwrap();
+            populate(&mut writer, "next", !failed);
+            let (start, begin) = mpsc::channel();
+            let (reply, response) = mpsc::channel();
+            let observed = Arc::new(AtomicBool::new(false));
+            let fired = Arc::new(AtomicBool::new(false));
+            let check = observed.clone();
+            let called = fired.clone();
+            let sibling = service.clone();
+            let database = path.clone();
+            let probe = std::thread::spawn(move || {
+                if begin.recv_timeout(Duration::from_secs(5)).is_err() {
+                    return;
+                }
+                let execution =
+                    crate::execution::Execution::new(Default::default(), Some(5000)).unwrap();
+                let result = sibling.request(
+                    &database,
+                    CursorRequest {
+                        action: "settings".into(),
+                        remaining_ms: 5000,
+                        deadline_at_ms: execution.deadline_ms().unwrap(),
+                        ..Default::default()
+                    },
+                    Default::default(),
+                );
+                let _ = reply.send(result.is_ok());
+            });
+            writer
+                .connection
+                .authorizer(Some(move |action: AuthContext<'_>| {
+                    let target = if failed {
+                        matches!(
+                            action.action,
+                            AuthAction::Delete {
+                                table_name: "staging_generations",
+                                ..
+                            }
+                        )
+                    } else {
+                        matches!(
+                            action.action,
+                            AuthAction::Pragma {
+                                pragma_name: "wal_checkpoint",
+                                ..
+                            }
+                        )
+                    };
+                    if target && !called.swap(true, Ordering::AcqRel) {
+                        start.send(()).unwrap();
+                        check.store(
+                            response
+                                .recv_timeout(Duration::from_secs(2))
+                                .unwrap_or(false),
+                            Ordering::Release,
+                        );
+                    }
+                    // A real postcommit checkpoint failure must not change the
+                    // already committed publication into an error outcome.
+                    if target && !failed {
+                        Authorization::Deny
+                    } else {
+                        Authorization::Allow
+                    }
+                }))
+                .unwrap();
+            let result = service.publish(&path, writer, &crate::resource::Control::default());
+            probe.join().unwrap();
+            assert!(fired.load(Ordering::Acquire));
+            assert!(
+                observed.load(Ordering::Acquire),
+                "cursor mutex held during checkpoint/failed cleanup"
+            );
+            if failed {
+                assert!(result.is_err());
+            } else {
+                assert!(result.unwrap() > 1);
+            }
+            assert!(!maintain_index(&path).unwrap().busy);
         }
     }
 }
