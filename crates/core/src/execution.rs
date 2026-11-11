@@ -529,8 +529,7 @@ mod tests {
             .unwrap()
             .join(".artifacts/qcw")
             .join(format!(
-                "{}-{}",
-                std::process::id(),
+                "{:x}",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
@@ -647,7 +646,11 @@ mod tests {
             );
             return;
         }
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/qd");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/qd");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join(format!("sigpipe-{}", std::process::id()));
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
@@ -671,7 +674,11 @@ mod tests {
     }
     #[test]
     fn timed_connect_exchanges_a_complete_frame() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/qd");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/qd");
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join(format!(
             "{}-{:x}",
