@@ -1190,6 +1190,18 @@ mod tests {
                 .admit_controlled(&db, execution.clone())
                 .unwrap();
             let guard = state.registry.entries[&handle.id].pin.health.clone();
+            let checkpoint = rusqlite::Connection::open(&db).unwrap();
+            assert_eq!(
+                checkpoint
+                    .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| Ok((
+                        row.get::<_, i32>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, i32>(2)?
+                    )))
+                    .unwrap(),
+                (0, 0, 0)
+            );
+            drop(checkpoint);
             std::fs::write(&db, b"owned corrupt header between admit and borrow").unwrap();
             let connection = rusqlite::Connection::open(&db).unwrap();
             let error = connection
@@ -1294,6 +1306,18 @@ mod tests {
             let healthy_result = ready(&service, &healthy);
             let guard = crate::recovery::IndexReadGuard::open_unbudgeted(&db).unwrap();
             assert_eq!(bad_result.index_incarnation, guard.incarnation());
+            let checkpoint = rusqlite::Connection::open(&db).unwrap();
+            assert_eq!(
+                checkpoint
+                    .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| Ok((
+                        row.get::<_, i32>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, i32>(2)?
+                    )))
+                    .unwrap(),
+                (0, 0, 0)
+            );
+            drop(checkpoint);
             std::fs::write(&db, b"owned corrupt SQLite header").unwrap();
             let connection = rusqlite::Connection::open(&db).unwrap();
             let error = connection

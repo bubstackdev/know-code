@@ -1256,10 +1256,8 @@ mod lifecycle_tests {
         connection
             .execute("UPDATE cursor_retention_state SET version=99", [])
             .unwrap();
-        assert!(matches!(
-            cursors.sweep_at(at(99)),
-            Err(Error::UpdateRequired(_))
-        ));
+        cursors.sweep_at(at(99)).unwrap();
+        assert!(cursors.retirement_warning.is_some());
         assert_eq!(cursors.entries.len(), 1);
         assert!(cursors.entries[&handle.id].reads.is_empty());
         connection
