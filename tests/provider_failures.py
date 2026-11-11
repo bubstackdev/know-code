@@ -16,8 +16,9 @@ ENV=dict(os.environ,KNOW_CODE_DATA_DIR=str(DATA),KNOW_CODE_QUERY_SCOPE=str(SCOPE
  DOTNET_CLI_TELEMETRY_OPTOUT='1',DOTNET_NOLOGO='1',MSBUILDDISABLENODEREUSE='1',DOTNET_CLI_USE_MSBUILD_SERVER='0')
 for key in ['KNOW_CODE_COORDINATOR','KNOW_CODE_RUNTIME_DIR','NODE_PATH','NODE_OPTIONS']:ENV.pop(key,None)
 GOOD_TS=WORK/'ts/good';BAD_TS=WORK/'ts/bad';OLD_TS=WORK/'ts/old-version'
+MISSING_TS=WORK/'ts/missing-compiler';HOISTED_TS=WORK/'ts/hoisted/pkg';STORE=RUN/'pnpm-store/typescript';HOIST_MARKER=RUN/'hoisted-compiler-required.txt'
 GOOD_CS=WORK/'cs/good';BAD_CS=WORK/'cs/bad'
-for directory in [GOOD_TS,BAD_TS,OLD_TS,GOOD_CS,BAD_CS]:directory.mkdir(parents=True)
+for directory in [GOOD_TS,BAD_TS,OLD_TS,MISSING_TS,HOISTED_TS,GOOD_CS,BAD_CS]:directory.mkdir(parents=True)
 TS_CONFIG='{"compilerOptions":{"strict":true,"noEmit":true,"skipLibCheck":true},"include":["*.ts"]}'
 CS_PROJECT='<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup></Project>'
 TS_CODE='''export function TsRecursive(n: number): number { return n ? TsRecursive(n-1) : 0; }
@@ -48,10 +49,25 @@ public static class CsAccess {
  public static void CsTupleWrite() { (cell.Value, cell.Value) = (1, 2); }
 }
 '''
-for directory in [GOOD_TS,BAD_TS,OLD_TS]:(directory/'tsconfig.json').write_text(TS_CONFIG)
+for directory in [GOOD_TS,BAD_TS,OLD_TS,MISSING_TS,HOISTED_TS]:(directory/'tsconfig.json').write_text(TS_CONFIG)
 (GOOD_TS/'code.ts').write_text(TS_CODE);(BAD_TS/'code.ts').write_text('export function TsRecoverableOld() { return 1; }\n')
 (OLD_TS/'code.ts').write_text('export function TsUnsupportedBody() { return 0; }\n')
 (OLD_TS/'package.json').write_text('{"name":"owned-unsupported-compiler","private":true,"devDependencies":{"typescript":"5.8.3"}}')
+# A failed repository selection cannot use the checkout's installed ancestor
+# compiler. The missing local package gives deterministic ENOENT restoration.
+(MISSING_TS/'package.json').write_text(json.dumps({'private':True,'devDependencies':{'typescript':'file:'+str(RUN/'missing-typescript.tgz')}}))
+(MISSING_TS/'code.ts').write_text('export function TsMissingCompilerBody() { return 0; }\n')
+(WORK/'loose.ts').write_text('export function TsLooseFallback() { return 1; }\n')
+# A lexical hoisted node_modules origin remains valid when its physical store is
+# outside the workspace, as with pnpm. This package forwards the actual compiler
+# and records selection so fallback cannot accidentally satisfy the assertion.
+STORE.mkdir(parents=True)
+(STORE/'package.json').write_text('{"name":"typescript","version":"5.9.3","main":"index.cjs"}')
+(STORE/'index.cjs').write_text('require("node:fs").appendFileSync('+json.dumps(str(HOIST_MARKER))+',"selected\\n");module.exports=require('+json.dumps(str(ROOT/'node_modules/typescript/lib/typescript.js'))+');\n')
+hoist=WORK/'ts/hoisted/node_modules';hoist.mkdir(parents=True);(hoist/'typescript').symlink_to(STORE,target_is_directory=True)
+(HOISTED_TS/'package.json').write_text('{"private":true,"devDependencies":{"typescript":"5.9.3"}}')
+(HOISTED_TS/'code.ts').write_text('export function TsHoistedCompiler() { return 2; }\n')
+
 (GOOD_CS/'Good.csproj').write_text(CS_PROJECT);(BAD_CS/'Bad.csproj').write_text(CS_PROJECT)
 (GOOD_CS/'Code.cs').write_text(CS_CODE);(BAD_CS/'Old.cs').write_text('public class CsRecoverableOld { public int Read() => 1; }\n')
 # Under/over cases exercise the actual source envelope, not increased frame caps.
@@ -126,6 +142,15 @@ try:
  first=coverage();DETAILS['initial_coverage']=first
  assert any(c['project_path']=='ts/old-version/tsconfig.json' and c['status']=='unavailable' and any(d['code']=='unsupported_compiler' for d in c.get('diagnostics',[])) for c in first),first
  assert not symbols('TsUnsupportedBody')
+ assert not symbols('TsMissingCompilerBody')
+ missing=next(c for c in first if c['project_path']=='ts/missing-compiler/tsconfig.json')
+ assert missing['status']=='unavailable' and any(d['code']=='compiler_unavailable' for d in missing.get('diagnostics',[])),missing
+ assert symbols('TsLooseFallback') and symbols('TsHoistedCompiler') and HOIST_MARKER.read_text().count('selected\n')>0
+ ancestor=json.loads((ROOT/'node_modules/typescript/package.json').read_text())['version']
+ assert ancestor.startswith('5.9.')
+ DETAILS['compiler_selection']={'outside_ancestor_version':ancestor,'missing':missing,'hoisted_lexical_origin':str(hoist/'typescript'),'outside_store':str(STORE),'selected_module_sha256':sha(STORE/'index.cjs'),'loose_fallback':True}
+ CHECKS.append('missing_declared_compiler_cannot_use_outside_ancestor_while_unconfigured_fallback_and_outside_store_hoist_work')
+
  for language,prefix in [('typescript','Ts'),('csharp','Cs')]:
   assert symbols(prefix+'NearLimit') and not symbols(prefix+'Oversized')
   entry=next(c for c in first if c['language']==language and c['project_path'].endswith('good/'+('tsconfig.json' if language=='typescript' else 'Good.csproj')))

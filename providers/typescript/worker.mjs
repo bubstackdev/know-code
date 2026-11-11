@@ -9,24 +9,33 @@ import {ProjectSetupError,boundedText} from './project-errors.mjs';
 
 const ownRequire = createRequire(import.meta.url);
 
-function compilerFor(directory) {
-  const require = createRequire(path.join(directory, '__know_code__.cjs'));
+function compilerFor(directory, root, declared) {
+  directory=path.resolve(directory);root=path.resolve(root);
+  const inside=directory===root||directory.startsWith(root+path.sep);
   let filename;
-  try { filename = require.resolve('typescript'); }
-  catch {
-    // An unconfigured standalone project can use the provider's pinned compiler.
-    for (let current = directory;; current = path.dirname(current)) {
-      const manifest = path.join(current, 'package.json');
-      if (fs.existsSync(manifest)) {
-        let pkg;
-        try {pkg=JSON.parse(fs.readFileSync(manifest,'utf8'));}
-        catch(error) {throw new ProjectSetupError('invalid_package_configuration',`${manifest}: ${error.message}`);}
-        if (pkg.dependencies?.typescript || pkg.devDependencies?.typescript)
-          throw new ProjectSetupError('compiler_unavailable',`missing repository TypeScript dependency in ${directory}; restore its packages`);
-      }
-      if (path.dirname(current) === current) break;
+  // Inspect logical installation origins, not the resolved physical filename:
+  // pnpm may legitimately link an in-workspace entry to an outside store.
+  for(let current=directory;;current=path.dirname(current)) {
+    const entry=path.join(current,'node_modules','typescript');
+    let present=false;
+    try {fs.lstatSync(entry);present=true;}
+    catch(error) {
+      if(error.code!=='ENOENT')
+        throw new ProjectSetupError('typescript_load_failed',`Cannot inspect selected TypeScript installation ${entry}: ${error.message}`);
     }
-    filename = ownRequire.resolve('typescript');
+    if(present) {
+      try {filename=ownRequire.resolve(entry);}
+      catch(error) {throw new ProjectSetupError('compiler_unavailable',`Cannot resolve repository TypeScript installation ${entry}: ${error.message}`);}
+      break;
+    }
+    if(current===root||!inside)break;
+  }
+  if(!filename) {
+    if(!inside)
+      throw new ProjectSetupError('compiler_context_unavailable',`Referenced TypeScript project ${directory} has no local compiler installation; ambient compilers outside the selected workspace were not substituted`);
+    if(declared)
+      throw new ProjectSetupError('compiler_unavailable',`Missing repository TypeScript dependency in ${directory}; restore its packages; no compiler substitution was made`);
+    filename=ownRequire.resolve('typescript');
   }
   let ts;
   try {ts=ownRequire(filename);}
@@ -47,6 +56,7 @@ try {
     analysisPolicyVersion: 1, testClassificationPolicy: testPolicy});
   const directories = [...request.configuredProjects.map(c => path.dirname(c)), ...request.looseSources.map(f => path.dirname(f))];
   const setupDiagnostics = await preparePackages(root, directories, request, send);
+  const compiler = directory => compilerFor(directory,root,setupDiagnostics.typescriptDeclared(directory));
   const compilationSend = directory => (kind, value) => {
     const setup = kind === 'compilation' && setupDiagnostics.metadata(directory);
     if (setup) value = {...value, inputPaths: [...new Set([...value.inputPaths, ...setup.inputPaths])],
@@ -75,7 +85,7 @@ try {
     try {
       const setupFailure=setupDiagnostics.failure(path.dirname(config));
       if(setupFailure)throw setupFailure;
-      const ts = compilerFor(path.dirname(config));
+      const ts = compiler(path.dirname(config));
       const read = ts.readConfigFile(config, ts.sys.readFile);
       if (read.error) throw new ProjectSetupError('invalid_project_configuration',ts.flattenDiagnosticMessageText(read.error.messageText,'\n'),ts.version);
       const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(config), undefined, config);
@@ -93,7 +103,7 @@ try {
     try {
       const setupFailure=setupDiagnostics.failure(path.dirname(config));
       if(setupFailure)throw setupFailure;
-      const result = analyze(compilerFor(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
+      const result = analyze(compiler(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
       queue.push(...result.references);
       for (const file of result.files) owned.add(file);
     } catch(error) {unavailable(config,error);}
@@ -114,7 +124,7 @@ try {
     try {
       const setupFailure=setupDiagnostics.failure(directory);
       if(setupFailure)throw setupFailure;
-      analyze(compilerFor(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);
+      analyze(compiler(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);
     }
     catch(error) {
       if(!(error instanceof ProjectSetupError))throw error;
