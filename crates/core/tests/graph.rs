@@ -409,7 +409,7 @@ fn v3_migration_preserves_pinned_readers_and_does_not_invent_call_evidence() {
       ALTER TABLE compilations DROP COLUMN input_fingerprint;
       ALTER TABLE symbols DROP COLUMN definition_compilation_id;
       ALTER TABLE symbols DROP COLUMN definition_symbol_id;
-      ALTER TABLE symbols DROP COLUMN definition_fingerprint; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; PRAGMA user_version=3;").unwrap();
+      ALTER TABLE symbols DROP COLUMN definition_fingerprint; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=3;").unwrap();
     drop(c);
     let old = ReadView::open(&db).unwrap();
     let graph = query(&old, serde_json::json!({"op":"callees","symbol_id":"a"}))
@@ -742,7 +742,7 @@ fn v4_migration_keeps_local_graphs_without_inventing_project_links() {
     );
     w.publish().unwrap();
     let c = rusqlite::Connection::open(&db).unwrap();
-    c.execute_batch("DROP INDEX symbol_definition; ALTER TABLE compilations DROP COLUMN references_json; ALTER TABLE compilations DROP COLUMN input_fingerprint; ALTER TABLE symbols DROP COLUMN definition_compilation_id; ALTER TABLE symbols DROP COLUMN definition_symbol_id; ALTER TABLE symbols DROP COLUMN definition_fingerprint; DROP INDEX relationship_evidence; ALTER TABLE relationships DROP COLUMN dispatch_key; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; PRAGMA user_version=4;").unwrap();
+    c.execute_batch("DROP INDEX symbol_definition; ALTER TABLE compilations DROP COLUMN references_json; ALTER TABLE compilations DROP COLUMN input_fingerprint; ALTER TABLE symbols DROP COLUMN definition_compilation_id; ALTER TABLE symbols DROP COLUMN definition_symbol_id; ALTER TABLE symbols DROP COLUMN definition_fingerprint; DROP INDEX relationship_evidence; ALTER TABLE relationships DROP COLUMN dispatch_key; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=4;").unwrap();
     drop(c);
     let old = ReadView::open(&db).unwrap();
     Writer::open_incremental(&db, &[])
@@ -908,7 +908,7 @@ fn v5_dispatch_key_migration_preserves_pinned_body_queries() {
     );
     w.publish().unwrap();
     let c = rusqlite::Connection::open(&db).unwrap();
-    c.execute_batch("DROP INDEX relationship_evidence; ALTER TABLE relationships DROP COLUMN dispatch_key; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; PRAGMA user_version=5;").unwrap();
+    c.execute_batch("DROP INDEX relationship_evidence; ALTER TABLE relationships DROP COLUMN dispatch_key; DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=5;").unwrap();
     drop(c);
     let old = ReadView::open(&db).unwrap();
     Writer::open_incremental(&db, &[])

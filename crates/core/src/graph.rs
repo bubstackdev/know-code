@@ -2,7 +2,7 @@
 mod dispatch;
 use crate::{
     Error, Result,
-    query::{Coverage, Location, QueryRequest, ReadView, SymbolResult},
+    query::{Coverage, Location, QueryRequest, ReadView, SymbolResult, SymbolSupport},
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,14 @@ pub struct ContextConflict {
 #[derive(Debug, Serialize)]
 pub struct Finding {
     pub symbol: SymbolResult,
+    pub paths: Vec<Vec<Edge>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub supporting_targets: Vec<GraphSupport>,
+}
+#[derive(Debug, Serialize)]
+pub struct GraphSupport {
+    #[serde(flatten)]
+    pub symbol: SymbolSupport,
     pub paths: Vec<Vec<Edge>>,
 }
 #[derive(Debug, Serialize)]
@@ -340,11 +348,17 @@ fn contains(steps: &[Step], mut index: usize, node: i64) -> bool {
         }
     }
 }
+pub(crate) fn symbol_full(connection: &Connection, key: i64) -> Result<SymbolResult> {
+    symbol_projection(connection, key, false)
+}
 pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<SymbolResult> {
+    symbol_projection(connection, key, true)
+}
+fn symbol_projection(connection: &Connection, key: i64, bounded: bool) -> Result<SymbolResult> {
     let mut result=connection.query_row("SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation FROM symbols s JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE s.rowid=?",[key],|r|Ok(SymbolResult{
-        id:r.get(0)?,name:r.get(1)?,kind:r.get(2)?,signature:r.get(3)?,external:r.get(4)?,compilation_id:r.get(5)?,target:r.get(6)?,owner_generation:r.get(7)?,locations:vec![],test_classification:Default::default(),locations_limited:false
+        id:r.get(0)?,name:r.get(1)?,kind:r.get(2)?,signature:r.get(3)?,external:r.get(4)?,compilation_id:r.get(5)?,target:r.get(6)?,owner_generation:r.get(7)?,locations:vec![],test_classification:Default::default(),locations_limited:false,supporting_targets:vec![]
     }))?;
-    let mut locations=connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte LIMIT 17")?;
+    let mut locations=connection.prepare_cached(if bounded {"SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte LIMIT 17"} else {"SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte"})?;
     result.locations = locations
         .query_map(
             params![result.owner_generation, result.compilation_id, result.id],
@@ -352,8 +366,10 @@ pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<SymbolResult> 
         )?
         .collect::<std::result::Result<_, _>>()?;
     result.test_classification = crate::testing::symbol(connection, key)?;
-    result.locations_limited = result.locations.len() > 16;
-    result.locations.truncate(16);
+    result.locations_limited = bounded && result.locations.len() > 16;
+    if bounded {
+        result.locations.truncate(16);
+    }
     Ok(result)
 }
 fn external_boundary(view: &ReadView, key: i64) -> Result<&'static str> {
@@ -531,17 +547,10 @@ pub(crate) fn query(
                 .unwrap_or_else(|| "unknown".into()),
         );
     }
-    let mut roots=view.connection.prepare("SELECT s.rowid FROM generation_units u JOIN symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE u.generation=? AND s.id=? AND (? IS NULL OR c.target=?) ORDER BY s.compilation_id")?;
-    let roots = roots
-        .query_map(
-            params![view.generation, id, request.target, request.target],
-            |r| r.get::<_, i64>(0),
-        )?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    if roots.is_empty() {
-        return Err(Error::InvalidRequest(
-            "symbol_id is not present in the served target scope".into(),
-        ));
+    let (roots, roots_limited) =
+        crate::grouping::roots_bounded(view, request, Some(node_budget as usize))?;
+    if roots_limited {
+        result.limits.push("node_budget".into());
     }
     if view.format_version < 4 {
         result.boundaries.push(Boundary {
@@ -631,6 +640,8 @@ pub(crate) fn query(
     let mut visits = BTreeMap::<(i64, bool, usize), u32>::new();
     let mut visited_nodes = BTreeSet::new();
     let mut findings = BTreeMap::<i64, usize>::new();
+    let mut groups = BTreeMap::<String, usize>::new();
+    let mut group_positions = vec![];
     let mut boundary_keys = BTreeSet::new();
     let mut size = 256usize;
     let started = Instant::now();
@@ -678,54 +689,63 @@ pub(crate) fn query(
                 size += added;
                 result.findings[*position].paths.push(p);
             } else {
-                if result.findings.len() >= request.limit as usize {
-                    result.limits.push("result_limit".into());
-                    break;
+                let key = crate::grouping::key(&view.connection, node)?;
+                if !groups.contains_key(&key) && groups.len() >= request.limit as usize {
+                    // The omitted finding does not stop other concrete peers
+                    // from contributing to admitted groups or being traversed.
+                    if !result.limits.iter().any(|s| s == "result_limit") {
+                        result.limits.push("result_limit".into());
+                    }
+                } else {
+                    let position = groups.len();
+                    let group = *groups.entry(key).or_insert(position);
+                    let finding = Finding {
+                        symbol: symbol(&view.connection, node)?,
+                        paths: vec![p],
+                        supporting_targets: vec![],
+                    };
+                    let boundaries = [
+                        (
+                            finding.symbol.external,
+                            if finding.symbol.external {
+                                external_boundary(view, node)?
+                            } else {
+                                ""
+                            },
+                        ),
+                        (
+                            finding.symbol.locations_limited,
+                            "declaration_locations_limited",
+                        ),
+                    ]
+                    .into_iter()
+                    .filter(|(include, _)| *include)
+                    .map(|(_, reason)| Boundary {
+                        context_conflict: None,
+                        reason: reason.into(),
+                        symbol_id: finding.symbol.id.clone(),
+                        compilation_id: finding.symbol.compilation_id.clone(),
+                        evidence: None,
+                    })
+                    .collect::<Vec<_>>();
+                    let added = serde_json::to_vec(&finding)?.len()
+                        + boundaries
+                            .iter()
+                            .map(serde_json::to_vec)
+                            .collect::<std::result::Result<Vec<_>, _>>()?
+                            .iter()
+                            .map(Vec::len)
+                            .sum::<usize>();
+                    if size + added > bytes {
+                        result.limits.push("response_bytes".into());
+                        break;
+                    }
+                    size += added;
+                    result.boundaries.extend(boundaries);
+                    findings.insert(node, result.findings.len());
+                    result.findings.push(finding);
+                    group_positions.push(group);
                 }
-                let finding = Finding {
-                    symbol: symbol(&view.connection, node)?,
-                    paths: vec![p],
-                };
-                let boundaries = [
-                    (
-                        finding.symbol.external,
-                        if finding.symbol.external {
-                            external_boundary(view, node)?
-                        } else {
-                            ""
-                        },
-                    ),
-                    (
-                        finding.symbol.locations_limited,
-                        "declaration_locations_limited",
-                    ),
-                ]
-                .into_iter()
-                .filter(|(include, _)| *include)
-                .map(|(_, reason)| Boundary {
-                    context_conflict: None,
-                    reason: reason.into(),
-                    symbol_id: finding.symbol.id.clone(),
-                    compilation_id: finding.symbol.compilation_id.clone(),
-                    evidence: None,
-                })
-                .collect::<Vec<_>>();
-                let added = serde_json::to_vec(&finding)?.len()
-                    + boundaries
-                        .iter()
-                        .map(serde_json::to_vec)
-                        .collect::<std::result::Result<Vec<_>, _>>()?
-                        .iter()
-                        .map(Vec::len)
-                        .sum::<usize>();
-                if size + added > bytes {
-                    result.limits.push("response_bytes".into());
-                    break;
-                }
-                size += added;
-                result.boundaries.extend(boundaries);
-                findings.insert(node, result.findings.len());
-                result.findings.push(finding);
             }
         }
         // Once search is limited, project already discovered paths without
@@ -939,9 +959,65 @@ pub(crate) fn query(
                 )));
             }
         }
-        if result.limits.iter().any(|s| s != "depth_budget") {
+        if result
+            .limits
+            .iter()
+            .any(|s| !matches!(s.as_str(), "depth_budget" | "result_limit"))
+        {
             expand = false;
         }
+    }
+    let mut projected = (0..groups.len()).map(|_| Vec::new()).collect::<Vec<_>>();
+    for (finding, position) in std::mem::take(&mut result.findings)
+        .into_iter()
+        .zip(group_positions)
+    {
+        projected[position].push(finding);
+    }
+    let mut projection_bytes = 256usize;
+    for boundary in &result.boundaries {
+        projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(boundary)?.len());
+    }
+    for mut members in projected {
+        view.check()?;
+        if members.is_empty() {
+            continue;
+        }
+        members.sort_by(|a, b| {
+            (&a.symbol.target, &a.symbol.compilation_id, &a.symbol.id).cmp(&(
+                &b.symbol.target,
+                &b.symbol.compilation_id,
+                &b.symbol.id,
+            ))
+        });
+        if members.len() == 1 {
+            let finding = members.pop().expect("one member");
+            projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(&finding)?.len());
+            if projection_bytes > bytes {
+                result.limits.push("response_bytes".into());
+                break;
+            }
+            result.findings.push(finding);
+            continue;
+        }
+        let first = &members[0];
+        let finding = Finding {
+            symbol: first.symbol.clone(),
+            paths: first.paths.clone(),
+            supporting_targets: members
+                .into_iter()
+                .map(|m| GraphSupport {
+                    symbol: SymbolSupport::from(&m.symbol),
+                    paths: m.paths,
+                })
+                .collect(),
+        };
+        projection_bytes = projection_bytes.saturating_add(serde_json::to_vec(&finding)?.len());
+        if projection_bytes > bytes {
+            result.limits.push("response_bytes".into());
+            break;
+        }
+        result.findings.push(finding);
     }
     result.limits.sort();
     result.limits.dedup();

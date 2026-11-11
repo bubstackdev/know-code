@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
-    io::Read,
+    io::{Read, Write},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -47,6 +47,7 @@ pub struct QueryRequest {
     pub end_byte: Option<u64>,
     pub content_hash: Option<String>,
     pub generation: Option<u64>,
+    pub snapshot: Option<String>,
     pub compilation_id: Option<String>,
     #[serde(default)]
     pub coverage_detail: CoverageDetail,
@@ -91,10 +92,41 @@ pub struct SymbolResult {
     pub target: String,
     pub locations: Vec<Location>,
     pub test_classification: crate::testing::Classification,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub supporting_targets: Vec<SymbolSupport>,
     #[serde(skip)]
     pub(crate) owner_generation: u64,
     #[serde(skip)]
     pub(crate) locations_limited: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct SymbolSupport {
+    pub symbol_id: String,
+    pub compilation_id: String,
+    pub target: String,
+    pub signature: String,
+    pub locations: Vec<Location>,
+    pub test_classification: crate::testing::Classification,
+}
+impl From<&SymbolResult> for SymbolSupport {
+    fn from(s: &SymbolResult) -> Self {
+        Self {
+            symbol_id: s.id.clone(),
+            compilation_id: s.compilation_id.clone(),
+            target: s.target.clone(),
+            signature: s.signature.clone(),
+            locations: s.locations.clone(),
+            test_classification: s.test_classification.clone(),
+        }
+    }
+}
+#[derive(Debug, Serialize)]
+pub struct OccurrenceSupport {
+    pub symbol_id: String,
+    pub compilation_id: String,
+    pub target: String,
+    pub location: Location,
+    pub test_classification: crate::testing::Classification,
 }
 #[derive(Debug, Serialize)]
 pub struct OccurrenceResult {
@@ -104,6 +136,8 @@ pub struct OccurrenceResult {
     pub target: String,
     pub location: Location,
     pub test_classification: crate::testing::Classification,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub supporting_targets: Vec<OccurrenceSupport>,
 }
 #[derive(Debug, Serialize)]
 pub struct Coverage {
@@ -123,7 +157,7 @@ pub struct Coverage {
     pub details_omitted: bool,
     pub capabilities: BTreeMap<String, String>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SourceResult {
     pub artifact_id: String,
     pub path: String,
@@ -139,9 +173,10 @@ pub struct WorkspaceCoverage {
     pub compilations: usize,
     pub statuses: BTreeMap<String, usize>,
     pub test_classification: BTreeMap<String, usize>,
+    pub target_equivalence: BTreeMap<String, usize>,
     pub diagnostic_counts: BTreeMap<String, usize>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DeclarationContext {
     pub location: Location,
     pub line: u64,
@@ -155,12 +190,23 @@ pub struct DeclarationContext {
 pub struct SymbolContext {
     pub symbol: SymbolResult,
     pub declarations: Vec<DeclarationContext>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub supporting_targets: Vec<ContextSupport>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub boundary: Option<&'static str>,
+}
+#[derive(Debug, Serialize)]
+pub struct ContextSupport {
+    #[serde(flatten)]
+    pub symbol: SymbolSupport,
+    pub declarations: Vec<DeclarationContext>,
     pub boundary: Option<&'static str>,
 }
 #[derive(Debug, Serialize)]
 pub struct QueryResult {
     pub generation: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
     // An explicit refresh prototype cannot claim it observes later saved files.
     pub freshness: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -179,6 +225,41 @@ pub struct QueryResult {
     pub graph: Option<crate::graph::GraphResult>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contexts: Vec<SymbolContext>,
+}
+
+struct ProjectionBudget {
+    remaining: usize,
+    execution: Option<crate::execution::Execution>,
+}
+impl ProjectionBudget {
+    fn new(view: &ReadView, request: &QueryRequest) -> Result<Self> {
+        let remaining = view
+            .projection_maximum
+            .get()
+            .unwrap_or(crate::execution::response_budget(
+                request.response_max_bytes,
+            )?);
+        Ok(Self {
+            remaining,
+            execution: view.execution.lock().unwrap().clone(),
+        })
+    }
+    fn charge(&mut self, value: &impl Serialize) -> Result<()> {
+        struct Count(usize);
+        impl Write for Count {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let Count(size) =
+            crate::execution::write_json(value, self.execution.clone(), self.remaining, Count(0))?;
+        self.remaining -= size;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -200,6 +281,7 @@ pub struct ReadView {
     pub generation: u64,
     execution: Arc<Mutex<Option<crate::execution::Execution>>>,
     stopped: Cell<Option<Stopped>>,
+    projection_maximum: Cell<Option<usize>>,
 }
 impl ReadView {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
@@ -288,7 +370,7 @@ impl ReadView {
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, true)?;
         connection.execute_batch("PRAGMA cache_size=-2048; BEGIN DEFERRED;")?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if ![2, 3, 4, 5, 6, SCHEMA_VERSION].contains(&version) {
+        if ![2, 3, 4, 5, 6, 7, SCHEMA_VERSION].contains(&version) {
             return Err(Error::UpdateRequired(format!(
                 "index format {version} is unsupported; update required (readable: 2 through {SCHEMA_VERSION})"
             )));
@@ -300,6 +382,7 @@ impl ReadView {
         };
         connection.execute_batch(locations)?;
         crate::testing::create_views(&connection, version)?;
+        crate::grouping::create_view(&connection, version)?;
         if version >= 4 {
             crate::graph::create_view(&connection, version)?;
         }
@@ -326,6 +409,7 @@ impl ReadView {
             generation: generation.ok_or(Error::NotReady)?,
             execution,
             stopped: Cell::new(None),
+            projection_maximum: Cell::new(None),
         })
     }
 
@@ -357,6 +441,19 @@ impl ReadView {
             self.expire(&error)?;
             return Err(error);
         }
+        result
+    }
+    /// The cursor client materializes one bounded logical result before packing
+    /// pages. Its aggregate allowance differs from each page's response cap.
+    pub(crate) fn query_materialized_controlled(
+        &self,
+        request: QueryRequest,
+        execution: crate::execution::Execution,
+    ) -> Result<QueryResult> {
+        self.projection_maximum
+            .set(Some(crate::cursor::MAX_RESULT_BYTES as usize));
+        let result = self.query_controlled(request, execution);
+        self.projection_maximum.set(None);
         result
     }
     pub(crate) fn query_controlled(
@@ -436,6 +533,15 @@ impl ReadView {
         for c in &coverage {
             self.check()?;
             *workspace_coverage
+                .target_equivalence
+                .entry(
+                    c.capabilities
+                        .get("target_equivalence")
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".into()),
+                )
+                .or_default() += 1;
+            *workspace_coverage
                 .test_classification
                 .entry(
                     c.capabilities
@@ -457,6 +563,7 @@ impl ReadView {
         }
         let mut result = QueryResult {
             generation: self.generation,
+            snapshot: None,
             freshness: "unverified",
             coordination: None,
             workspace_coverage,
@@ -469,6 +576,7 @@ impl ReadView {
             graph: None,
             contexts: vec![],
         };
+        let mut relevant_roots = BTreeSet::new();
         match request.op.as_str() {
             "coverage" => {
                 if let Some(id) = &request.compilation_id {
@@ -502,93 +610,53 @@ impl ReadView {
                     return Err(Error::InvalidRequest("search query is empty".into()));
                 }
                 let mut statement = self.connection.prepare(&symbols_sql(&request))?;
-                let rows = statement.query_map(
-                    params![
-                        self.generation,
-                        request.name,
-                        terms,
-                        request.target,
-                        request.limit + 1
-                    ],
-                    |r| {
-                        Ok(SymbolResult {
-                            id: r.get(0)?,
-                            name: r.get(1)?,
-                            kind: r.get(2)?,
-                            signature: r.get(3)?,
-                            external: r.get(4)?,
-                            compilation_id: r.get(5)?,
-                            target: r.get(6)?,
-                            locations: vec![],
-                            test_classification: Default::default(),
-                            owner_generation: r.get(7)?,
-                            locations_limited: false,
-                        })
-                    },
-                )?;
-                result.symbols = rows.collect::<std::result::Result<Vec<_>, _>>()?;
-                result.truncated = result.symbols.len() > request.limit as usize;
-                result.symbols.truncate(request.limit as usize);
-                let mut locations = self.connection.prepare_cached("SELECT o.artifact_id,o.path,o.content_hash,o.start_byte,o.end_byte,o.generated FROM occurrence_locations o WHERE o.generation=? AND o.compilation_id=? AND o.symbol_id=? AND o.role='declaration' ORDER BY o.path,o.start_byte")?;
-                for symbol in &mut result.symbols {
-                    self.check()?;
-                    let key = self.connection.query_row("SELECT rowid FROM symbols WHERE generation=? AND compilation_id=? AND id=?", params![symbol.owner_generation,symbol.compilation_id,symbol.id], |r|r.get(0))?;
-                    symbol.test_classification = crate::testing::symbol(&self.connection, key)?;
-                    symbol.locations = locations
-                        .query_map(
-                            params![symbol.owner_generation, symbol.compilation_id, symbol.id],
-                            read_location,
-                        )?
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                }
-            }
-            "references" => {
-                let symbol = request
-                    .symbol_id
-                    .as_ref()
-                    .ok_or_else(|| Error::InvalidRequest("references requires symbol_id".into()))?;
-                let predicate = request.tests.predicate("t.mask");
-                let mut statement = self.connection.prepare(&format!("SELECT o.symbol_id,o.role,o.compilation_id,c.target,o.artifact_id,o.path,o.content_hash,o.start_byte,o.end_byte,o.generated,o.generation FROM generation_units u JOIN occurrence_locations o ON o.generation=u.owner_generation AND o.compilation_id=u.compilation_id JOIN compilations c ON c.generation=o.generation AND c.id=o.compilation_id WHERE u.generation=? AND o.symbol_id=? AND o.role='reference' AND (? IS NULL OR c.target=?) AND EXISTS(SELECT 1 FROM test_origin_masks t WHERE t.owner_generation=o.generation AND t.compilation_id=o.compilation_id AND t.artifact_id=o.artifact_id AND {predicate}) ORDER BY o.path,o.start_byte,o.compilation_id LIMIT ?"))?;
-                result.occurrences = statement
+                let keys = statement
                     .query_map(
                         params![
                             self.generation,
-                            symbol,
+                            request.name,
+                            terms,
                             request.target,
-                            request.target,
-                            request.limit + 1
+                            request.limit + 1,
+                            request.compilation_id
                         ],
-                        |r| {
-                            Ok(OccurrenceResult {
-                                symbol_id: r.get(0)?,
-                                role: r.get(1)?,
-                                test_classification: Default::default(),
-                                compilation_id: r.get(2)?,
-                                target: r.get(3)?,
-                                location: Location {
-                                    artifact_id: r.get(4)?,
-                                    path: r.get(5)?,
-                                    content_hash: r.get(6)?,
-                                    start_byte: r.get(7)?,
-                                    end_byte: r.get(8)?,
-                                    generated: r.get(9)?,
-                                },
-                            })
-                        },
+                        |r| r.get::<_, String>(0),
                     )?
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                result.truncated = result.occurrences.len() > request.limit as usize;
-                result.occurrences.truncate(request.limit as usize);
-                for occurrence in &mut result.occurrences {
-                    let owner: u64 = self.connection.query_row("SELECT owner_generation FROM generation_units WHERE generation=? AND compilation_id=?",params![self.generation,occurrence.compilation_id],|r|r.get(0))?;
-                    occurrence.test_classification = crate::testing::origin(
-                        &self.connection,
-                        owner,
-                        &occurrence.compilation_id,
-                        &occurrence.location.artifact_id,
-                        &occurrence.location.path,
-                    )?;
+                result.truncated = keys.len() > request.limit as usize;
+                let mut budget = ProjectionBudget::new(self, &request)?;
+                for group in keys.into_iter().take(request.limit as usize) {
+                    self.check()?;
+                    let mut representative = None;
+                    let mut supports = vec![];
+                    crate::grouping::members(self, &request, &group, |key| {
+                        let symbol = crate::graph::symbol_full(&self.connection, key)?;
+                        if let Some(first) = &representative {
+                            if supports.is_empty() {
+                                let support = SymbolSupport::from(first);
+                                budget.charge(&support)?;
+                                supports.push(support);
+                            }
+                            let support = SymbolSupport::from(&symbol);
+                            budget.charge(&support)?;
+                            supports.push(support);
+                        } else {
+                            budget.charge(&symbol)?;
+                            representative = Some(symbol);
+                        }
+                        Ok(())
+                    })?;
+                    if let Some(mut symbol) = representative {
+                        symbol.supporting_targets = supports;
+                        result.symbols.push(symbol);
+                    }
                 }
+            }
+            "references" => {
+                let (occurrences, truncated, owners) = self.references(&request)?;
+                result.occurrences = occurrences;
+                result.truncated = truncated;
+                relevant_roots = owners;
             }
             "source" => {
                 let (source, truncated) = self.source_excerpt(&request, false)?;
@@ -605,26 +673,30 @@ impl ReadView {
             && request.op != "coverage"
             && result.graph.is_none()
         {
-            let mut relevant = BTreeSet::new();
+            let mut relevant = relevant_roots;
             for s in &result.symbols {
                 relevant.insert(s.compilation_id.clone());
+                relevant.extend(
+                    s.supporting_targets
+                        .iter()
+                        .map(|s| s.compilation_id.clone()),
+                );
             }
             for c in &result.contexts {
                 relevant.insert(c.symbol.compilation_id.clone());
+                relevant.extend(
+                    c.supporting_targets
+                        .iter()
+                        .map(|s| s.symbol.compilation_id.clone()),
+                );
             }
             for o in &result.occurrences {
                 relevant.insert(o.compilation_id.clone());
-            }
-            if request.op == "references"
-                && let Some(id) = &request.symbol_id
-            {
-                let mut q = self.connection.prepare("SELECT s.compilation_id FROM generation_units u JOIN symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE u.generation=? AND s.id=? AND (? IS NULL OR c.target=?)")?;
-                for id in q.query_map(
-                    params![self.generation, id, request.target, request.target],
-                    |r| r.get::<_, String>(0),
-                )? {
-                    relevant.insert(id?);
-                }
+                relevant.extend(
+                    o.supporting_targets
+                        .iter()
+                        .map(|s| s.compilation_id.clone()),
+                );
             }
             if let Some(source) = &result.source {
                 let mut q = self.connection.prepare("SELECT u.compilation_id FROM generation_units u JOIN unit_artifacts a ON a.owner_generation=u.owner_generation AND a.compilation_id=u.compilation_id WHERE u.generation=? AND a.artifact_id=?")?;
@@ -683,131 +755,236 @@ impl ReadView {
         Ok(result)
     }
 
-    fn symbol_context(&self, request: &QueryRequest) -> Result<(Vec<SymbolContext>, bool)> {
-        let id = request
-            .symbol_id
-            .as_ref()
-            .ok_or_else(|| Error::InvalidRequest("symbol_context requires symbol_id".into()))?;
-        let predicate = request.tests.predicate("s.test_mask");
-        let mut q = self.connection.prepare(&format!("SELECT s.rowid FROM generation_units u JOIN classified_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE u.generation=? AND s.id=? AND (? IS NULL OR c.target=?) AND (? IS NULL OR s.compilation_id=?) AND {predicate} ORDER BY s.compilation_id LIMIT ?"))?;
-        let keys = q
-            .query_map(
-                params![
-                    self.generation,
-                    id,
-                    request.target,
-                    request.target,
-                    request.compilation_id,
-                    request.compilation_id,
-                    request.limit + 1
-                ],
-                |r| r.get::<_, i64>(0),
-            )?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        if keys.is_empty() {
-            if request.tests != crate::testing::TestFilter::All {
-                let mut unfiltered = request.clone();
-                unfiltered.tests = crate::testing::TestFilter::All;
-                unfiltered.include_source = false;
-                self.symbol_context(&unfiltered)?;
-                return Ok((vec![], false));
-            }
-            return Err(Error::InvalidRequest(
-                "symbol_id is not present in the served compilation/target scope".into(),
-            ));
-        }
-        let mut truncated = keys.len() > request.limit as usize;
-        let mut budget = source_budget(request.max_bytes)?;
-        let mut count = 0;
-        let mut contexts = vec![];
-        for key in keys.into_iter().take(request.limit as usize) {
+    fn references(
+        &self,
+        request: &QueryRequest,
+    ) -> Result<(Vec<OccurrenceResult>, bool, BTreeSet<String>)> {
+        let roots = crate::grouping::roots(self, request)?;
+        let mut owners = BTreeSet::new();
+        for key in &roots {
             self.check()?;
-            if count >= request.limit {
-                truncated = true;
-                break;
+            owners.insert(self.connection.query_row(
+                "SELECT compilation_id FROM symbols WHERE rowid=?",
+                [key],
+                |r| r.get::<_, String>(0),
+            )?);
+        }
+        let roots_json = serde_json::to_string(&roots)?;
+        let predicate = request.tests.predicate("t.mask");
+        // Equivalent use locations need the same referent group, evaluated
+        // origin family, exact source bytes/range, and classification mask.
+        let family = if self.format_version >= 8 {
+            "CASE WHEN c.target_family<>'' AND a.generated=0 THEN 'f:'||c.target_family ELSE 'c:'||c.id END"
+        } else {
+            "'c:'||c.id"
+        };
+        let joins = if self.format_version >= 3 {
+            "JOIN occurrences o ON o.symbol_key=s.symbol_key JOIN artifacts a ON a.rowid=o.artifact_key"
+        } else {
+            "JOIN occurrences o ON o.generation=s.generation AND o.compilation_id=s.compilation_id AND o.symbol_id=s.id JOIN artifacts a ON a.generation=o.generation AND a.id=o.artifact_id"
+        };
+        // Select logical groups before materializing support. The second pass
+        // joins the selected keys once, not once per result or per framework.
+        let key =
+            "path,start_byte,end_byte,family,finding_key,artifact_id,content_hash,generated,mask";
+        let sql=format!("WITH uses AS NOT MATERIALIZED (
+            SELECT s.id AS symbol_id,s.compilation_id,c.target,s.generation AS owner_generation,
+                {family} AS family,s.finding_key,a.id AS artifact_id,a.path,a.content_hash,
+                o.start_byte,o.end_byte,a.generated,t.mask
+            FROM grouped_symbols s {joins}
+            JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id
+            JOIN test_origin_masks t ON t.owner_generation=s.generation AND t.compilation_id=s.compilation_id AND t.artifact_id=a.id
+            WHERE s.symbol_key IN(SELECT value FROM json_each(?1)) AND o.role='reference' AND {predicate}
+        ), selected AS MATERIALIZED (SELECT {key} FROM uses GROUP BY {key} ORDER BY {key} LIMIT ?2)
+        SELECT dense_rank() OVER (ORDER BY {key}),symbol_id,compilation_id,target,artifact_id,path,content_hash,start_byte,end_byte,generated,owner_generation
+        FROM uses JOIN selected USING({key}) ORDER BY {key},target,compilation_id,symbol_id");
+        let mut q = self.connection.prepare(&sql)?;
+        let mut rows = q.query(params![roots_json, request.limit + 1])?;
+        let mut output = Vec::<OccurrenceResult>::new();
+        let mut budget = ProjectionBudget::new(self, request)?;
+        while let Some(r) = rows.next()? {
+            self.check()?;
+            let rank = r.get::<_, usize>(0)?;
+            if rank > request.limit as usize {
+                return Ok((output, true, owners));
             }
-            // Reuse the same bounded symbol/declaration projection as graph reads.
-            let mut symbol = crate::graph::symbol(&self.connection, key)?;
-            truncated |= symbol.locations_limited;
-            let mut declarations = vec![];
-            for location in std::mem::take(&mut symbol.locations) {
-                self.check()?;
-                if count >= request.limit {
-                    truncated = true;
-                    break;
-                }
-                count += 1;
-                let line = self.source_line(&location.content_hash, location.start_byte)?;
-                let mut extents = self.connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='definition' AND artifact_id=? AND start_byte<=? AND end_byte>=? ORDER BY start_byte,end_byte LIMIT 2")?;
-                let ranges = extents
-                    .query_map(
-                        params![
-                            symbol.owner_generation,
-                            symbol.compilation_id,
-                            symbol.id,
-                            location.artifact_id,
-                            location.start_byte,
-                            location.end_byte
-                        ],
-                        read_location,
-                    )?
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                // A unique compiler declaration is required. Never select an
-                // arbitrary branch of a synthetic/multiple-root symbol view.
-                let (extent, mut status) = match ranges.len() {
-                    1 => (ranges.into_iter().next(), "omitted"),
-                    0 => (None, "extent_unavailable"),
-                    _ => (None, "extent_ambiguous"),
-                };
-                let mut source = None;
-                if request.include_source
-                    && let Some(extent) = &extent
-                {
-                    if budget == 0 {
-                        status = "budget_exhausted";
-                        truncated = true;
-                    } else {
-                        let mut read = request.clone();
-                        read.artifact_id = Some(extent.artifact_id.clone());
-                        read.content_hash = Some(extent.content_hash.clone());
-                        read.start_byte = Some(extent.start_byte);
-                        read.end_byte = Some(extent.end_byte);
-                        read.max_bytes = Some(budget);
-                        let (body, clipped) = self.source_excerpt(&read, true)?;
-                        budget -= (body.end_byte - body.start_byte) as u32;
-                        status = if body.text.is_empty() && clipped {
-                            "budget_exhausted"
-                        } else if clipped {
-                            "truncated"
-                        } else {
-                            "included"
-                        };
-                        truncated |= clipped;
-                        source = Some(body);
-                    }
-                }
-                declarations.push(DeclarationContext {
-                    location,
-                    line,
-                    extent,
-                    source,
-                    source_status: status,
-                });
-            }
-            let boundary = if declarations.is_empty() {
-                Some(if symbol.external {
-                    "external_or_other_compilation_body"
-                } else {
-                    "declaration_unavailable"
-                })
-            } else {
-                None
+            let support = OccurrenceSupport {
+                symbol_id: r.get(1)?,
+                compilation_id: r.get(2)?,
+                target: r.get(3)?,
+                location: Location {
+                    artifact_id: r.get(4)?,
+                    path: r.get(5)?,
+                    content_hash: r.get(6)?,
+                    start_byte: r.get(7)?,
+                    end_byte: r.get(8)?,
+                    generated: r.get(9)?,
+                },
+                test_classification: Default::default(),
             };
-            contexts.push(SymbolContext {
-                symbol,
-                declarations,
-                boundary,
-            });
+            let mut support = support;
+            support.test_classification = crate::testing::origin(
+                &self.connection,
+                r.get(10)?,
+                &support.compilation_id,
+                &support.location.artifact_id,
+                &support.location.path,
+            )?;
+            if rank > output.len() {
+                let occurrence = OccurrenceResult {
+                    symbol_id: support.symbol_id,
+                    role: "reference".into(),
+                    compilation_id: support.compilation_id,
+                    target: support.target,
+                    location: support.location,
+                    test_classification: support.test_classification,
+                    supporting_targets: vec![],
+                };
+                budget.charge(&occurrence)?;
+                output.push(occurrence);
+            } else {
+                let occurrence = &mut output[rank - 1];
+                if occurrence.supporting_targets.is_empty() {
+                    let first = OccurrenceSupport {
+                        symbol_id: occurrence.symbol_id.clone(),
+                        compilation_id: occurrence.compilation_id.clone(),
+                        target: occurrence.target.clone(),
+                        location: occurrence.location.clone(),
+                        test_classification: occurrence.test_classification.clone(),
+                    };
+                    budget.charge(&first)?;
+                    occurrence.supporting_targets.push(first);
+                }
+                budget.charge(&support)?;
+                occurrence.supporting_targets.push(support);
+            }
+        }
+        Ok((output, false, owners))
+    }
+
+    fn symbol_context(&self, request: &QueryRequest) -> Result<(Vec<SymbolContext>, bool)> {
+        let roots = crate::grouping::roots(self, request)?;
+        let mut groups = BTreeMap::<String, Vec<i64>>::new();
+        for key in roots {
+            self.check()?;
+            if request
+                .tests
+                .matches(crate::testing::symbol_mask(&self.connection, key)?)
+            {
+                groups
+                    .entry(crate::grouping::key(&self.connection, key)?)
+                    .or_default()
+                    .push(key);
+            }
+        }
+        let mut truncated = groups.len() > request.limit as usize;
+        let mut budget = source_budget(request.max_bytes)?;
+        let mut projection = ProjectionBudget::new(self, request)?;
+        let mut contexts = vec![];
+        for keys in groups.into_values().take(request.limit as usize) {
+            let multiple = keys.len() > 1;
+            let mut representative = None;
+            let mut supporting_targets = vec![];
+            for key in keys {
+                self.check()?;
+                // Reuse the same bounded symbol/declaration projection as graph reads.
+                let mut symbol = crate::graph::symbol_full(&self.connection, key)?;
+                truncated |= symbol.locations_limited;
+                let mut declarations = vec![];
+                for location in std::mem::take(&mut symbol.locations) {
+                    self.check()?;
+                    let line = self.source_line(&location.content_hash, location.start_byte)?;
+                    let mut extents = self.connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='definition' AND artifact_id=? AND start_byte<=? AND end_byte>=? ORDER BY start_byte,end_byte LIMIT 2")?;
+                    let ranges = extents
+                        .query_map(
+                            params![
+                                symbol.owner_generation,
+                                symbol.compilation_id,
+                                symbol.id,
+                                location.artifact_id,
+                                location.start_byte,
+                                location.end_byte
+                            ],
+                            read_location,
+                        )?
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    // A unique compiler declaration is required. Never select an
+                    // arbitrary branch of a synthetic/multiple-root symbol view.
+                    let (extent, mut status) = match ranges.len() {
+                        1 => (ranges.into_iter().next(), "omitted"),
+                        0 => (None, "extent_unavailable"),
+                        _ => (None, "extent_ambiguous"),
+                    };
+                    let mut source = None;
+                    if request.include_source
+                        && let Some(extent) = &extent
+                    {
+                        if budget == 0 {
+                            status = "budget_exhausted";
+                            truncated = true;
+                        } else {
+                            let mut read = request.clone();
+                            read.artifact_id = Some(extent.artifact_id.clone());
+                            read.content_hash = Some(extent.content_hash.clone());
+                            read.start_byte = Some(extent.start_byte);
+                            read.end_byte = Some(extent.end_byte);
+                            read.max_bytes = Some(budget);
+                            let (body, clipped) = self.source_excerpt(&read, true)?;
+                            budget -= (body.end_byte - body.start_byte) as u32;
+                            status = if body.text.is_empty() && clipped {
+                                "budget_exhausted"
+                            } else if clipped {
+                                "truncated"
+                            } else {
+                                "included"
+                            };
+                            truncated |= clipped;
+                            source = Some(body);
+                        }
+                    }
+                    declarations.push(DeclarationContext {
+                        location,
+                        line,
+                        extent,
+                        source,
+                        source_status: status,
+                    });
+                }
+                let boundary = if declarations.is_empty() {
+                    Some(if symbol.external {
+                        "external_or_other_compilation_body"
+                    } else {
+                        "declaration_unavailable"
+                    })
+                } else {
+                    None
+                };
+                if multiple {
+                    let mut metadata = SymbolSupport::from(&symbol);
+                    metadata.locations = declarations.iter().map(|d| d.location.clone()).collect();
+                    let support = ContextSupport {
+                        symbol: metadata,
+                        declarations: declarations.clone(),
+                        boundary,
+                    };
+                    projection.charge(&support)?;
+                    supporting_targets.push(support);
+                }
+                if representative.is_none() {
+                    let context = SymbolContext {
+                        symbol,
+                        declarations,
+                        supporting_targets: vec![],
+                        boundary,
+                    };
+                    projection.charge(&context)?;
+                    representative = Some(context);
+                }
+            }
+            if let Some(mut context) = representative {
+                context.supporting_targets = supporting_targets;
+                contexts.push(context);
+            }
         }
         Ok((contexts, truncated))
     }
@@ -938,6 +1115,16 @@ impl ReadView {
         Ok(self.connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language IN ('typescript','csharp') AND {missing})"),[self.generation],|r|r.get(0))?)
     }
 
+    /// Missing C# policy evidence schedules ordinary bounded backfill.
+    pub fn needs_target_equivalence(&self) -> Result<bool> {
+        let missing = if self.format_version >= 8 {
+            "c.target_equivalence_policy<>1"
+        } else {
+            "1"
+        };
+        Ok(self.connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language='csharp' AND {missing})"),[self.generation],|r|r.get(0))?)
+    }
+
     fn coverage(&self, details: bool) -> Result<Vec<Coverage>> {
         let caps = if self.format_version >= 4 {
             "r.capabilities_json"
@@ -1007,6 +1194,9 @@ impl ReadView {
                         .entry("test_classification".into())
                         .or_insert_with(|| "unknown".into());
                     capabilities
+                        .entry("target_equivalence".into())
+                        .or_insert_with(|| "unknown".into());
+                    capabilities
                 },
                 status: r.get(7)?,
                 diagnostic_counts,
@@ -1030,18 +1220,16 @@ fn source_budget(value: Option<u32>) -> Result<u32> {
 // Join order keeps exact names on symbol_name and FTS hits on symbol rowids,
 // rather than scanning every symbol in each visible compilation.
 fn symbols_sql(request: &QueryRequest) -> String {
-    let mut sql =
-        "SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation "
-            .to_owned();
+    let mut sql = "SELECT s.finding_key ".to_owned();
     if request.name.is_some() {
-        sql.push_str("FROM generation_units u CROSS JOIN classified_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
+        sql.push_str("FROM generation_units u CROSS JOIN grouped_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
         if request.query.is_some() {
-            sql.push_str(" CROSS JOIN symbol_search ON symbol_search.rowid=s.rowid");
+            sql.push_str(" CROSS JOIN symbol_search ON symbol_search.rowid=s.symbol_key");
         }
     } else if request.query.is_some() {
-        sql.push_str("FROM symbol_search CROSS JOIN classified_symbols s ON s.rowid=symbol_search.rowid CROSS JOIN generation_units u ON u.owner_generation=s.generation AND u.compilation_id=s.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
+        sql.push_str("FROM symbol_search CROSS JOIN grouped_symbols s ON s.symbol_key=symbol_search.rowid CROSS JOIN generation_units u ON u.owner_generation=s.generation AND u.compilation_id=s.compilation_id CROSS JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
     } else {
-        sql.push_str("FROM generation_units u JOIN classified_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
+        sql.push_str("FROM generation_units u JOIN grouped_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id");
     }
     sql.push_str(" WHERE u.generation=?1");
     if request.name.is_some() {
@@ -1057,7 +1245,7 @@ fn symbols_sql(request: &QueryRequest) -> String {
         sql.push_str(" AND ");
         sql.push_str(&request.tests.predicate("s.test_mask"));
     }
-    sql.push_str(" ORDER BY s.name,s.id,s.compilation_id LIMIT ?5");
+    sql.push_str(" AND (?6 IS NULL OR s.compilation_id=?6) GROUP BY s.finding_key ORDER BY MIN(s.name),MIN(s.id),MIN(s.compilation_id) LIMIT ?5");
     sql
 }
 
@@ -1080,6 +1268,99 @@ mod tests {
         store::Writer,
     };
 
+    #[test]
+    fn cursor_materialization_has_one_bounded_aggregate_budget_before_page_packing() {
+        use crate::protocol::{FactBatch, Occurrence, SourceArtifact, Symbol};
+        use sha2::{Digest, Sha256};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/grouping-materialization")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("index.db");
+        let mut writer = Writer::open(&path).unwrap();
+        for comp in ["a", "b"] {
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: comp.into(),
+                    target: comp.into(),
+                    target_family: "family".into(),
+                    target_equivalence_policy: 1,
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Source(SourceArtifact {
+                    id: "body".into(),
+                    path: "body.cs".into(),
+                    compilation_id: comp.into(),
+                    utf8: b"x".to_vec(),
+                    sha256: format!("{:x}", Sha256::digest(b"x")),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Facts(FactBatch {
+                    compilation_id: comp.into(),
+                    symbols: (0..20)
+                        .map(|i| Symbol {
+                            id: format!("{comp}:{i}"),
+                            name: format!("Member{i:02}"),
+                            kind: "method".into(),
+                            signature: "signature".repeat(64),
+                            declaration_key: format!("decl:{i}"),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    occurrences: (0..20)
+                        .map(|i| Occurrence {
+                            symbol_id: format!("{comp}:{i}"),
+                            artifact_id: "body".into(),
+                            role: "declaration".into(),
+                            end_byte: 1,
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: comp.into(),
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        writer.publish().unwrap();
+        let view = ReadView::open(&path).unwrap();
+        let request: QueryRequest =
+            serde_json::from_value(serde_json::json!({"op":"symbols","response_max_bytes":8192}))
+                .unwrap();
+        assert!(matches!(
+            view.query(request.clone()),
+            Err(Error::ResponseLimitExceeded)
+        ));
+        let result = view
+            .query_materialized_controlled(
+                request,
+                crate::execution::Execution::new(Default::default(), None).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(result.symbols.len(), 20);
+        assert!(
+            result
+                .symbols
+                .iter()
+                .all(|symbol| symbol.supporting_targets.len() == 2)
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() > 8192);
+    }
     #[test]
     fn symbol_filters_use_name_or_fts_lookups() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1119,9 +1400,17 @@ mod tests {
                         .connection
                         .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
                         .unwrap()
-                        .query_map(params![view.generation, name, text, target, 101], |r| {
-                            r.get(3)
-                        })
+                        .query_map(
+                            params![
+                                view.generation,
+                                name,
+                                text,
+                                target,
+                                101,
+                                Option::<String>::None
+                            ],
+                            |r| r.get(3),
+                        )
                         .unwrap()
                         .map(std::result::Result::unwrap)
                         .collect();

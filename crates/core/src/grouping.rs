@@ -163,6 +163,18 @@ pub(crate) fn members(
     group: &str,
     mut visit: impl FnMut(i64) -> Result<()>,
 ) -> Result<()> {
+    members_until(view, request, group, |key| {
+        visit(key)?;
+        Ok(true)
+    })?;
+    Ok(())
+}
+fn members_until(
+    view: &ReadView,
+    request: &QueryRequest,
+    group: &str,
+    mut visit: impl FnMut(i64) -> Result<bool>,
+) -> Result<bool> {
     let singleton = group.strip_prefix("s:").and_then(|s| s.parse::<i64>().ok());
     let predicate = if singleton.is_some() {
         "s.rowid=?2"
@@ -183,13 +195,22 @@ pub(crate) fn members(
     ])?;
     while let Some(r) = rows.next()? {
         view.check()?;
-        visit(r.get(0)?)?;
+        if !visit(r.get(0)?)? {
+            return Ok(false);
+        }
     }
-    Ok(())
+    Ok(true)
 }
 // Resolve the original member first. Filters may narrow its peers, but cannot
 // make an absent original valid, nor use tests to erase a traversal root.
 pub(crate) fn roots(view: &ReadView, request: &QueryRequest) -> Result<Vec<i64>> {
+    Ok(roots_bounded(view, request, None)?.0)
+}
+pub(crate) fn roots_bounded(
+    view: &ReadView,
+    request: &QueryRequest,
+    maximum: Option<usize>,
+) -> Result<(Vec<i64>, bool)> {
     let id = request
         .symbol_id
         .as_ref()
@@ -197,17 +218,24 @@ pub(crate) fn roots(view: &ReadView, request: &QueryRequest) -> Result<Vec<i64>>
     let mut q=view.connection.prepare_cached("SELECT DISTINCT s.finding_key FROM generation_units u CROSS JOIN grouped_symbols s ON s.generation=u.owner_generation AND s.compilation_id=u.compilation_id WHERE u.generation=? AND s.id=? ORDER BY s.finding_key")?;
     let mut rows = q.query(params![view.generation, id])?;
     let mut result = vec![];
+    let mut limited = false;
     while let Some(r) = rows.next()? {
         let group = r.get::<_, String>(0)?;
-        members(view, request, &group, |key| {
+        if !members_until(view, request, &group, |key| {
+            if maximum.is_some_and(|max| result.len() >= max) {
+                limited = true;
+                return Ok(false);
+            }
             result.push(key);
-            Ok(())
-        })?;
+            Ok(true)
+        })? {
+            break;
+        }
     }
     if result.is_empty() {
         return Err(Error::InvalidRequest("symbol_id is absent from the served generation or has no members in the requested compilation/target scope".into()));
     }
-    Ok(result)
+    Ok((result, limited))
 }
 pub(crate) fn key(c: &Connection, key: i64) -> Result<String> {
     Ok(c.query_row(

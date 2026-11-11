@@ -71,6 +71,7 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
     public ulong? EndByte { get; init; }
     public string? ContentHash { get; init; }
     public ulong? Generation { get; init; }
+    public string? Snapshot { get; init; }
     public string? CompilationId { get; init; }
     public bool? IncludeSource { get; init; }
     public string? CoverageDetail { get; init; }
@@ -91,8 +92,8 @@ internal static partial class Native
     };
     internal static void CheckQueryContract()
     {
-        if (QueryContractVersion() != 4)
-            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; query classification/filter support is incompatible.");
+        if (QueryContractVersion() != 5)
+            throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; query grouping/snapshot support is incompatible.");
     }
     internal static QueryCancellationHandle CreateQueryCancellation()
     {

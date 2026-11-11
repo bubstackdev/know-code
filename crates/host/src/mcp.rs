@@ -72,7 +72,7 @@ impl ServerHandler for Mcp {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("know-code",env!("CARGO_PKG_VERSION")))
-            .with_instructions("Query the explicitly selected workspace's saved, indexed code. Check workspace_status while initial indexing runs. Results expose freshness, partial coverage, targets and uncertainty; possible dispatch is not proof of runtime execution. Use indexed artifact IDs and content hashes for source excerpts. Disconnecting leaves background indexing running.")
+            .with_instructions("Query the explicitly selected workspace's saved, indexed code. Check workspace_status while initial indexing runs. Results expose freshness, partial coverage, targets and uncertainty; possible dispatch is not proof of runtime execution. Use indexed artifact IDs and content hashes for source excerpts. When reusing a generation, forward its snapshot token. Disconnecting leaves background indexing running.")
     }
     fn get_tool(&self, name: &str) -> Option<Tool> {
         self.tools.iter().find(|tool| tool.name == name).cloned()
@@ -200,10 +200,11 @@ fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
         "tests":{"type":"string","enum":["all","exclude","only"],"default":"all","description":"Filter findings by declaration/use evidence. Unknown is retained by exclude; traversal remains unfiltered."},
         "name":{"type":"string","description":"Exact, case-sensitive symbol name."},
         "query":{"type":"string","description":"Lexical search text, not semantic graph evidence."},
-        "symbol_id":{"type":"string","description":"Opaque symbol ID returned by a prior lookup."},
+        "symbol_id":{"type":"string","description":"Exact member ID from a prior lookup. Follow-up operations include equivalent members unless narrowed by target or compilation_id."},
         "artifact_id":{"type":"string","description":"Indexed artifact ID from a source location."},
-        "generation":{"type":"integer","minimum":1,"description":"Expected served generation; a changed generation requires restarting lookup."},
-        "compilation_id":{"type":"string"},
+        "generation":{"type":"integer","minimum":1,"description":"Expected served generation; pass its snapshot token on managed reads."},
+        "snapshot":{"type":"string","description":"Opaque snapshot token from the result whose generation is being expanded."},
+        "compilation_id":{"type":"string","description":"Narrow findings or a symbol follow-up to one concrete compilation."},
         "include_source":{"type":"boolean","default":true},
         "coverage_detail":{"type":"string","enum":["summary","full"],"default":"summary"},
         "detail_max_bytes":{"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES},
@@ -231,12 +232,14 @@ fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
 fn tools() -> Vec<Tool> {
     let waits = [
         "target",
+        "compilation_id",
         "limit",
         "page_size",
         "freshness_wait_ms",
         "deadline_ms",
         "response_max_bytes",
         "generation",
+        "snapshot",
         "coverage_detail",
         "detail_max_bytes",
     ];
@@ -273,6 +276,7 @@ fn tools() -> Vec<Tool> {
             "deadline_ms",
             "response_max_bytes",
             "generation",
+            "snapshot",
             "coverage_detail",
             "detail_max_bytes",
         ],
@@ -280,7 +284,7 @@ fn tools() -> Vec<Tool> {
     );
     source["properties"]["max_bytes"] = json!({"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES});
     let mut context = references.clone();
-    context.extend(["compilation_id", "include_source", "max_bytes", "cursor"]);
+    context.extend(["include_source", "max_bytes", "cursor"]);
     let mut context_schema = schema(&context, &["symbol_id"]);
     context_schema["properties"]["max_bytes"] = source["properties"]["max_bytes"].clone();
     let mut result = vec![
@@ -295,6 +299,7 @@ fn tools() -> Vec<Tool> {
             schema(
                 &[
                     "generation",
+                    "snapshot",
                     "compilation_id",
                     "limit",
                     "page_size",

@@ -10,8 +10,8 @@ function checkAborted(signal) { if (signal?.aborted) throw abortError(signal); }
 async function query(database, request, {signal} = {}) {
   checkAborted(signal);
   const start = performance.now();
-  if (typeof native.queryJsonElapsed !== 'function' || typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 4)
-    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; cancellable query support is missing or incompatible.');
+  if (typeof native.queryJsonElapsed !== 'function' || typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 5)
+    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; query grouping/snapshot support is missing or incompatible.');
   const encoded = JSON.stringify(request);
   const elapsed = () => Math.min(Math.floor(performance.now() - start), 0xffffffff);
   if (!signal) return JSON.parse(await native.queryJsonElapsed(database, encoded, elapsed()));

@@ -23,3 +23,12 @@ Keep format7 current and pinned readers coherent during compatible migration. Mi
 ## Parallel boundary
 
 Grouping owner: query.rs, graph.rs, grouping.rs, store.rs migration/derived grouping, C# identity/emission/snapshot adapters, thin query binding/MCP types and focused fixtures. Root owns proto and update/workspace policy acknowledgement/backfill integration; recovery owner owns coordinator/recovery destinations. Root applies the recovery Writer/open hook to store.rs after grouping handoff and wires IndexReadGuard into ReadView after query handoff. No simultaneous writes to those shared files.
+
+
+## Grouping lane implementation
+
+The common projection implements logical limits before support materialization for symbols/references/context and counts logical graph findings while traversing concrete nodes. `supporting_targets` is omitted for singletons; multi-member arrays include the representative and all actually included witnesses. Workspace and per-compilation coverage expose missing target-equivalence evidence as unknown, including empty relevant result sets. Compiler-specific bindings and paths remain on each supporting target.
+
+Expanded graph seeds consume `max_nodes` before root/context setup. A partial root selection reports `node_budget`; pagination cannot reset that work. The cursor client must use `ReadView::query_materialized_controlled` only for initial aggregate materialization, with the existing16MiB result allowance, before normal per-page packing. Ordinary reads use `query_controlled` and their response cap. This is one engine with two bounded output phases, not a separate graph implementation.
+
+Focused owned Rust fixtures cover logical search/reference limits, conditional projected variants, exact support/source, peer-expanded and narrowed follow-ups, concrete graph paths/shared seed budgets, singleton unknown/external/generated cases, format7 pinned migration, and aggregate materialization larger than a page. Existing context/graph/publication/classification fixtures remain part of the affected check set. Provider/compiler, in-process native, health/snapshot/cursor and installed acceptance are separate evidence scopes; root wires the recovery guard and performs assembled validation.

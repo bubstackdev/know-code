@@ -29,6 +29,7 @@ export interface QueryRequest {
   end_byte?: number;
   content_hash?: string;
   generation?: number;
+  snapshot?: string;
   compilation_id?: string;
   include_source?: boolean;
   coverage_detail?: 'summary' | 'full';
@@ -54,7 +55,7 @@ export interface GraphEdge {
 }
 export interface GraphResult {
   root_definitions?: DefinitionLink[];
-  findings: Array<{symbol: SymbolResult; paths: GraphEdge[][]}>;
+  findings: Array<{symbol: SymbolResult; paths: GraphEdge[][]; supporting_targets?: Array<SymbolSupport & {paths: GraphEdge[][]}>}>;
   boundaries: Array<{reason: string; symbol_id: string; compilation_id: string; evidence?: GraphEdge; context_conflict?: {project_path: string; selected_compilation_id: string; required_compilation_id: string}} >;
   capability_coverage: Record<string, 'complete' | 'partial' | 'unavailable' | 'unknown'>;
   limits: string[]; examined_edges: number; visited_nodes: number;
@@ -72,6 +73,19 @@ export interface SymbolResult {
   test_classification: TestClassification;
   id: string; name: string; kind: string; signature: string; external: boolean;
   compilation_id: string; target: string; locations: Location[];
+  supporting_targets?: SymbolSupport[];
+}
+export interface SymbolSupport {
+  symbol_id: string; compilation_id: string; target: string; signature: string;
+  locations: Location[]; test_classification: TestClassification;
+}
+export interface OccurrenceSupport {
+  symbol_id: string; compilation_id: string; target: string;
+  location: Location; test_classification: TestClassification;
+}
+export interface DeclarationContext {
+  location: Location; line: number; extent?: Location; source?: SourceResult;
+  source_status: 'included' | 'truncated' | 'omitted' | 'extent_unavailable' | 'extent_ambiguous' | 'budget_exhausted';
 }
 export interface PageSection {
   total: number;
@@ -88,22 +102,20 @@ export interface QueryPage {
   sections: Partial<Record<'symbols' | 'occurrences' | 'contexts' | 'coverage' | 'findings' | 'boundaries', PageSection>>;
 }
 export interface QueryResult {
-  generation: number; freshness: 'current' | 'stale' | 'unverified'; truncated: boolean;
+  generation: number; snapshot?: string; freshness: 'current' | 'stale' | 'unverified'; truncated: boolean;
   coordination?: WorkspaceStatus;
   page?: QueryPage;
-  workspace_coverage: { test_classification: Record<string, number>;compilations: number; statuses: Record<string, number>; diagnostic_counts: Record<string, number>};
+  workspace_coverage: { target_equivalence: Record<string, number>; test_classification: Record<string, number>;compilations: number; statuses: Record<string, number>; diagnostic_counts: Record<string, number>};
   coverage_scope: 'workspace' | 'relevant' | 'compilation';
-  contexts?: Array<{symbol: SymbolResult; boundary?: string; declarations: Array<{
-    location: Location; line: number; extent?: Location; source?: SourceResult;
-    source_status: 'included' | 'truncated' | 'omitted' | 'extent_unavailable' | 'extent_ambiguous' | 'budget_exhausted';
-  }>}>;
+  contexts?: Array<{symbol: SymbolResult; boundary?: string; declarations: DeclarationContext[];
+    supporting_targets?: Array<SymbolSupport & {boundary: string | null; declarations: DeclarationContext[]}>}>;
   coverage: Array<{compilation_id: string; language: string; project_path: string;
     target: string; configuration: string; inferred: boolean; compiler_version: string; analysis_options?: Record<string, unknown>;
     status: 'complete' | 'partial' | 'unavailable'; capabilities: Record<string, string>;
     details_omitted: boolean; diagnostic_counts: Record<string, number>;
     diagnostics?: Array<{code: string; severity: string; message: string; path: string}>}>;
   symbols?: SymbolResult[];
-  occurrences?: Array<{test_classification: TestClassification; symbol_id: string; role: string; compilation_id: string; target: string; location: Location}>;
+  occurrences?: Array<OccurrenceSupport & {role: string; supporting_targets?: OccurrenceSupport[]}>;
   source?: SourceResult;
   graph?: GraphResult;
 }

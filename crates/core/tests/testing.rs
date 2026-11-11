@@ -269,7 +269,7 @@ fn shared_source_inherits_distinct_contexts_and_explicit_unknown() {
 fn format6_migration_keeps_old_readers_unknown_until_backfill() {
     let p = fixture();
     let c = rusqlite::Connection::open(&p).unwrap();
-    c.execute_batch("DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; UPDATE reports SET capabilities_json='{}'; PRAGMA user_version=6;").unwrap();
+    c.execute_batch("DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; UPDATE reports SET capabilities_json='{}'; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=6;").unwrap();
     let old = ReadView::open(&p).unwrap();
     assert!(old.needs_test_classification().unwrap());
     assert!(
