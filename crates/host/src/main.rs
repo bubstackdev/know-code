@@ -88,7 +88,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut rebuild_disk = None;
             let mut min_free_disk = None;
             for pair in args[2..].chunks(2) {
-                if pair.len() != 2 { return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] [--temporary-disk-mib MIB] [--min-free-disk-mib MIB]".into()); }
+                if pair.len() != 2 { return Err("usage: know-code trust WORKSPACE [--revoke] | resources [--cpu CORES] [--memory-mib MIB] [--temporary-disk-mib MIB] [--min-free-disk-mib MIB]".into()); }
                 match pair[0].as_str() {
                     "--cpu" => cpu = Some(pair[1].parse::<f64>()?),
                     "--memory-mib" => memory = Some(pair[1].parse::<u64>()?),
@@ -107,6 +107,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("{}", serde_json::to_string(&limits)?);
         }
+        Some("trust") => {
+            if args.len() < 3 || args.len() > 4 || (args.len() == 4 && args[3] != "--revoke") {
+                return Err("usage: know-code trust WORKSPACE [--revoke]".into());
+            }
+            let grant = args.len() == 3;
+            let root = std::fs::canonicalize(&args[2]).unwrap_or(absolute(Path::new(&args[2]))?);
+            control::ensure_running(&data, Some(&std::env::current_exe()?))?;
+            let reply = control::request(&data, ControlRequest { operation: "trust".into(),
+                workspace_root: root.to_string_lossy().into_owned(),
+                settings_json: Some(serde_json::to_string(&grant)?), ..Default::default() })?;
+            println!("{}", serde_json::to_string(reply.workspaces.first().ok_or("missing trust status")?)?);
+        }
         Some("cancel") if args.len() == 3 => {
             control::ensure_running(&data, Some(&std::env::current_exe()?))?;
             control::require_resource_control(&data)?;
@@ -114,6 +126,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let response = control::request(&data, ControlRequest { operation: "status".into(), ..Default::default() })?;
             let status = response.workspaces.iter().find(|s| Path::new(&s.workspace_root) == root).ok_or("workspace is not registered; inspect coordinator status")?;
             let result = control::workspace_operation(control::WorkspaceRequest {
+                grant: None,
                 op: control::WorkspaceOperation::Cancel, database: Some(status.database.clone()), data_directory: Some(data),
                 workspace_root: None, coordinator_executable: None, configuration: None, wait_ms: None, personal_settings: None,
             })?;
@@ -124,6 +137,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let personal_settings = args.get(3).map(|s| serde_json::from_str(s)).transpose()?;
             let status = coordinator::attach_workspace(&data, Path::new(&args[2]), String::new(), false)?;
             let result = control::workspace_operation(control::WorkspaceRequest {
+                grant: None,
                 op: if personal_settings.is_some() { control::WorkspaceOperation::Configure } else { control::WorkspaceOperation::Settings }, database: Some(status.database), data_directory: Some(data),
                 workspace_root: None, coordinator_executable: Some(std::env::current_exe()?), configuration: None, wait_ms: None,
                 personal_settings,
@@ -167,7 +181,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some("login-plist") => print!("{}", coordinator::login_plist(&std::env::current_exe()?, &absolute(&data)?)),
             _ => return Err("usage: know-code coordinator run|status|stop|login-plist".into()),
         },
-        _ => return Err("usage: know-code resources [--cpu CORES] [--memory-mib MIB] [--temporary-disk-mib MIB] [--min-free-disk-mib MIB] | cancel WORKSPACE | settings WORKSPACE [JSON] | index|watch WORKSPACE [--configuration NAME] | query DATABASE JSON | mcp --workspace PATH [--configuration NAME] | coordinator run|status|stop|login-plist | install|update [--from BUNDLE] [--prefix DIR] | rollback|uninstall|install-info [--prefix DIR] | service enable|disable|status [--prefix DIR]".into()),
+        _ => return Err("usage: know-code trust WORKSPACE [--revoke] | resources [--cpu CORES] [--memory-mib MIB] [--temporary-disk-mib MIB] [--min-free-disk-mib MIB] | cancel WORKSPACE | settings WORKSPACE [JSON] | index|watch WORKSPACE [--configuration NAME] | query DATABASE JSON | mcp --workspace PATH [--configuration NAME] | coordinator run|status|stop|login-plist | install|update [--from BUNDLE] [--prefix DIR] | rollback|uninstall|install-info [--prefix DIR] | service enable|disable|status [--prefix DIR]".into()),
     }
     Ok(())
 }

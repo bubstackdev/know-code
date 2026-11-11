@@ -417,7 +417,7 @@ fn observed_source_floor_survives_pre_writer_failure_and_later_corruption() {
                 DiskBudget::new(&logical, &root)
                     .unwrap()
                     .check(&limits, false),
-                Err(Error::ResourceLimited(_))
+                Err(Error::DiskPressure(_))
             ));
             fail_rebuild(&logical, "disk guard stopped before Writer").unwrap();
         } else {

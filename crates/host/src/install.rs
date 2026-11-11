@@ -408,7 +408,7 @@ fn compatible_info(a: &Value, b: &Value) -> Result<()> {
     if !a["index_lifecycle_version"]
         .as_u64()
         .is_some_and(|version| {
-            matches!(version, 1 | 2)
+            matches!(version, 1 | 2 | 3)
                 || version == u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
         })
         || a["resource_control_version"] != know_code_core::resource::CONTROL_VERSION
@@ -820,7 +820,7 @@ pub fn run(args: &[String]) -> Result<Value> {
         let version = info(&selected)?["index_lifecycle_version"]
             .as_u64()
             .ok_or("installed runtime lacks lifecycle evidence")?;
-        if !matches!(version, 1 | 2)
+        if !matches!(version, 1 | 2 | 3)
             && version != u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
         {
             return Err("installed lifecycle is unsupported; use a compatible installer".into());
