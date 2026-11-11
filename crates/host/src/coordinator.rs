@@ -69,6 +69,7 @@ struct DiskPause {
     free_reclaim: u64,
     limit_bytes: u64,
     reserve_bytes: u64,
+    baseline_pending: bool,
 }
 impl DiskPause {
     fn improved(&self, usage: &recovery::DiskUsage) -> bool {
@@ -130,6 +131,25 @@ fn display_disk_pause(entry: &mut Entry) {
             message: pause.message.clone(),
         });
     }
+}
+fn record_disk_pause(entry: &mut Entry, pause: DiskPause) {
+    // Cancellation can be accepted after execute returns, so checking only its
+    // Control is insufficient. Never restore a consumed grant revoked at the
+    // shared result handoff; a later explicit refresh deliberately clears this
+    // block and remains authorized.
+    if entry.recovery_blocked && !entry.recovery_explicit {
+        entry.pending = false;
+        entry.disk_pause = None;
+        if entry.status.phase == "cancelling" {
+            entry.status.phase = "cancelled".into();
+            entry.status.outcome_code = "cancelled".into();
+            entry.status.error = "index replacement cancelled; explicit refresh is required".into();
+        }
+        return;
+    }
+    entry.pending = true;
+    entry.disk_pause = Some(pause);
+    display_disk_pause(entry);
 }
 fn release_disk_pause(entry: &mut Entry) {
     if let Some(pause) = entry.disk_pause.take() {
@@ -1096,9 +1116,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     } else {
                         match done.result {
                             Ok(JobOutput::DiskPaused(pause)) => {
-                                entry.pending = true;
-                                entry.disk_pause = Some(pause);
-                                display_disk_pause(entry);
+                                record_disk_pause(entry, pause);
                                 None
                             }
                             Ok(JobOutput::CancellationBaseline(inputs, newer, verified)) => {
@@ -1493,6 +1511,21 @@ fn execute(
             // are not write work and must not acquire new retry authorization.
             guard_temporary_disk(&job, data, &origin, &mut disk)?;
         }
+        let check_disk = || -> know_code_core::Result<()> {
+            let pool = disk.as_ref().expect("analysis disk guard");
+            let limits = job.session.limits();
+            if let Err(error) = pool.check(&limits, false) {
+                if matches!(error, know_code_core::Error::DiskPressure(_)) {
+                    let usage = pool.usage(false)?;
+                    origin
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(|| DiskOrigin::capture(&usage, &limits));
+                }
+                return Err(error);
+            }
+            Ok(())
+        };
         analysis_started = true;
         let generation = workspace::refresh_controlled(
             &job.root,
@@ -1507,6 +1540,7 @@ fn execute(
                 settings: &effective_settings,
                 cursors,
                 destination: candidate.as_ref(),
+                before_publish: Some(&check_disk),
             },
             progress,
             &control,
@@ -1524,6 +1558,11 @@ fn execute(
         // after a follow-up reconciliation; saves during analysis cannot disappear.
         let generation = if let Some(candidate) = &candidate {
             let prepared = recovery::prepare_rebuild(candidate, &control)?;
+            // Full pool preview is outside cursor admission/publication locks.
+            // The sampled active guard remains live while admission waits.
+            disk.as_ref()
+                .expect("candidate disk guard")
+                .check(&job.session.limits(), true)?;
             let cutover = || {
                 recovery::finish_prepared_rebuild(&prepared, &control, || {
                     control.check()?;
@@ -1532,9 +1571,7 @@ fn execute(
                             "workspace identity changed before replacement cutover".into(),
                         ));
                     }
-                    disk.as_ref()
-                        .expect("candidate disk guard")
-                        .check(&job.session.limits(), true)
+                    Ok(())
                 })
             };
             if job.upgrade_format.is_some()
@@ -1557,6 +1594,19 @@ fn execute(
         && let Some(know_code_core::Error::DiskPressure(message)) =
             error.downcast_ref::<know_code_core::Error>()
     {
+        // Closing/rolling back a writer deliberately leaves its WAL. Settle
+        // freely reclaimable own staging first, before retaining the baseline.
+        // A real held snapshot may keep the checkpoint busy until its owner
+        // releases it; that is genuine externally reclaimed headroom.
+        let baseline_pending = if job.recovering {
+            false
+        } else {
+            match know_code_core::store::maintain_index(Path::new(&job.database)) {
+                Ok(_) | Err(know_code_core::Error::NotReady) => false,
+                Err(know_code_core::Error::Busy(_)) => true,
+                Err(error) => return Err(error.into()),
+            }
+        };
         let usage = disk
             .as_ref()
             .expect("pressure has a pool guard")
@@ -1567,6 +1617,7 @@ fn execute(
             .clone()
             .unwrap_or_else(|| DiskOrigin::capture(&usage, &job.session.limits()));
         return Ok(JobOutput::DiskPaused(DiskPause {
+            baseline_pending,
             used_reclaim: cause.used_reclaim,
             free_reclaim: cause.free_reclaim,
             limit_bytes: cause.limit_bytes,
@@ -1822,6 +1873,7 @@ fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<
         let path = Path::new(&database);
         let cleanup = recovery::cleanup(path, generation).and_then(|_| recovery::has_retired(path));
         let checkpoint = know_code_core::store::maintain_index(path);
+        let checkpoint_finished = checkpoint.is_ok();
         let retired = cleanup.as_ref().is_ok_and(|retained| *retained);
         let failure = match cleanup {
             Err(error) => Some(error),
@@ -1836,15 +1888,19 @@ fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<
                 Ok(_) => None,
             },
         };
+        let rebaseline = pause.as_ref().is_some_and(|p| p.baseline_pending)
+            && checkpoint_finished
+            && failure.is_none();
         let decision = if let Some(pause) = &pause {
             if sample.is_none() {
                 sample =
                     Some(recovery::DiskBudget::new(path, data).and_then(|pool| pool.usage(false)));
             }
             match sample.as_ref().unwrap() {
-                Ok(usage) => Ok((pause.improved(usage)
-                    || pause.limit_bytes != limits.rebuild_disk_mib * 1024 * 1024
-                    || pause.reserve_bytes != limits.min_free_disk_mib * 1024 * 1024)
+                Ok(usage) => Ok(!pause.baseline_pending
+                    && (pause.improved(usage)
+                        || pause.limit_bytes != limits.rebuild_disk_mib * 1024 * 1024
+                        || pause.reserve_bytes != limits.min_free_disk_mib * 1024 * 1024)
                     && usage.used_bytes < limits.rebuild_disk_mib * 1024 * 1024
                     && usage.free_bytes > limits.min_free_disk_mib * 1024 * 1024),
                 Err(error) => Err(error.to_string()),
@@ -1878,7 +1934,11 @@ fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<
             }
             continue;
         }
-        if failure.is_none() && !decision.as_ref().is_ok_and(|resume| *resume) && decision.is_ok() {
+        if !rebaseline
+            && failure.is_none()
+            && !decision.as_ref().is_ok_and(|resume| *resume)
+            && decision.is_ok()
+        {
             continue;
         }
         let mut entries = shared.entries.lock().unwrap();
@@ -1899,6 +1959,13 @@ fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<
         } else if let Err(message) = decision {
             entry.status.error = format!("temporary disk accounting failed: {message}");
             entry.status.outcome_code = "io_error".into();
+        } else if rebaseline {
+            let usage = sample.as_ref().unwrap().as_ref().unwrap();
+            let pause = entry.disk_pause.as_mut().unwrap();
+            pause.used_bytes = usage.used_bytes;
+            pause.free_bytes = usage.free_bytes;
+            pause.baseline_pending = false;
+            display_disk_pause(entry);
         } else if entry.disk_pause.is_some()
             && !entry.cancel_pending
             && (!entry.recovery_blocked
@@ -2527,6 +2594,7 @@ mod live_lifetime_tests {
             free_reclaim: 0,
             limit_bytes: 200,
             reserve_bytes: 500,
+            baseline_pending: false,
         }
     }
     #[test]
@@ -2633,6 +2701,32 @@ mod live_lifetime_tests {
         begin_cancellation(&mut entry);
         assert!(entry.disk_pause.is_none() && entry.cancel_pending && entry.pending);
         assert!(!entry.force && !entry.retry_preparation && !entry.recovery_explicit);
+        entry.cancel_pending = false;
+        entry.recovering = true;
+        entry.pending = false;
+        entry.recovery_explicit = false;
+        entry.recovery_blocked = false;
+        let stale = DiskPause {
+            recovery_explicit: true,
+            force: true,
+            ..pause_fixture()
+        };
+        begin_cancellation(&mut entry);
+        record_disk_pause(&mut entry, stale.clone());
+        assert!(
+            entry.disk_pause.is_none()
+                && entry.recovery_blocked
+                && !entry.pending
+                && !entry.recovery_explicit
+        );
+        assert_eq!(entry.status.phase, "cancelled");
+        // A refresh after cancel is a new authorization, not stale resurrection.
+        entry.recovery_blocked = false;
+        entry.recovery_explicit = true;
+        entry.pending = true;
+        entry.force = true;
+        record_disk_pause(&mut entry, stale);
+        assert!(entry.disk_pause.is_some() && entry.pending && entry.recovery_explicit);
     }
     fn cancellation_job() -> Job {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
