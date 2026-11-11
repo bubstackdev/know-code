@@ -657,7 +657,7 @@ mod pipe_tests {
         // This owned shell leaves the worker's process group, retains both
         // output endpoints, emits no bytes, and exits on release or watchdog.
         // Tests release it through a file; they never kill an escaped process.
-        let retainer=Command::new("/bin/sh").args(["-c","n=0; while [ ! -f \"$KNOW_CODE_PIPE_FIXTURE/release\" ] && [ $n -lt 500 ]; do /bin/sleep 0.02; n=$((n+1)); done; : > \"$KNOW_CODE_PIPE_FIXTURE/retainer-done\""])
+        let mut retainer=Command::new("/bin/sh").args(["-c","n=0; while [ ! -f \"$KNOW_CODE_PIPE_FIXTURE/release\" ] && [ $n -lt 500 ]; do /bin/sleep 0.02; n=$((n+1)); done; : > \"$KNOW_CODE_PIPE_FIXTURE/retainer-done\""])
             .env("KNOW_CODE_PIPE_FIXTURE",&root).process_group(0).stdin(Stdio::null()).spawn().unwrap();
         std::fs::write(root.join("retainer-pid"), retainer.id().to_string()).unwrap();
         // The fixture leader exits explicitly below; while alive it still
