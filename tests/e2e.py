@@ -67,7 +67,9 @@ DATABASE = initial['database']
 
 
 def equivalent(request):
-    request = dict(request, coverage_detail="full")
+    # This broad fixture expands full diagnostics and exact target support.
+    # Default/minimum envelope limits are exercised in response_budget.py.
+    request = dict(request, coverage_detail="full", response_max_bytes=2 * 1024 * 1024)
     encoded = json.dumps(request)
     commands = ([HOST, 'query', DATABASE, encoded],
                 ['node', ROOT / f'.artifacts/build/{PROFILE}/node/smoke.mjs', DATABASE, encoded],
