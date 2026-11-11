@@ -9,10 +9,13 @@ Experimental [Swift/SwiftPM](docs/SWIFT_PROVIDER.md) and [Rust](docs/RUST_PROVID
 ```sh
 bash scripts/build.sh
 bash scripts/test.sh
+target/debug/know-code trust /absolute/repository
 target/debug/know-code watch /absolute/repository
 # Configure your agent to launch:
 target/debug/know-code mcp --workspace /absolute/repository
 ```
+
+Grant project execution only for repositories you trust: compiler loading and MSBuild evaluation can execute repository-selected code. Registration or opening a workspace does not grant this permission. Package installation scripts remain disabled unless separately enabled in [personal settings](docs/WORKSPACE_SETTINGS.md).
 
 Local runtime candidates have a [user-scoped installer, updates, rollback and uninstall](docs/INSTALLATION.md), separate from the native SDKs. Uninstall retains index data and registrations.
 
@@ -50,7 +53,7 @@ v0.0.1 must allow concurrent local processes to share a repository index while r
 
 A persistent local coordinator starts at user login and keeps indexes current after consumers disconnect, reusing the same Rust core and language workers.
 
-Register repositories individually or register parent folders for discovery. New repositories beneath registered parents automatically enroll and begin indexing, subject to exclusions and resource limits.
+Register repositories individually or register parent folders for discovery. New repositories beneath registered parents automatically enroll; analysis requires each workspace’s explicit project-execution grant and remains subject to exclusions and resource limits.
 
 Indexes and durable coordinator state are stored centrally per user, outside source repositories.
 
