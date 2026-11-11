@@ -323,6 +323,11 @@ pub(crate) fn index_published(
         worker.request.preparations = preparations.values().cloned().collect();
         let job_id = format!("{}-{number}", writer.generation);
         control.check()?;
+        // A prior worker can outlive a personal revocation in a raw embedding;
+        // do not start another compiler/dependency process using its old grant.
+        worker
+            .execution_grant
+            .check_root(Path::new(&worker.request.workspace_root))?;
         let executable = worker_executable(&worker.program, &path)?;
         let mut child = control
             .spawn(

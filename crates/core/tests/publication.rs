@@ -763,3 +763,94 @@ fn legacy_worker_cannot_publish_when_new_policy_is_required() {
     assert_eq!(current.generation, published);
     assert_eq!(current.symbols.len(), 1);
 }
+
+#[test]
+fn revocation_between_workers_prevents_new_execution_and_preserves_prior_generation() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "retained source");
+    let published = writer.publish().unwrap();
+    let root = path.parent().unwrap();
+    let trust_data = root.join("personal-trust");
+    know_code_core::settings::set_project_execution(root, &trust_data, true).unwrap();
+    let grant = know_code_core::settings::project_execution_grant(root, &trust_data).unwrap();
+    let first_started = root.join("first-started");
+    let second_started = root.join("second-started");
+    let mut workers = Vec::new();
+    for number in 0..2 {
+        let response_path = root.join(format!("worker-{number}-frames"));
+        let mut response = std::fs::File::create(&response_path).unwrap();
+        let mut payloads = vec![Payload::Provider(ProviderInfo {
+            language: "typescript".into(),
+            ..Default::default()
+        })];
+        if number == 0 {
+            payloads.push(Payload::Progress(Progress {
+                stage: "owned-revoke".into(),
+                ..Default::default()
+            }));
+        }
+        payloads.push(Payload::Complete(Completion { success: true }));
+        for payload in payloads {
+            write_frame(
+                &mut response,
+                &Envelope {
+                    protocol_version: VERSION,
+                    job_id: format!("{}-{number}", published + 1),
+                    payload: Some(payload),
+                },
+            )
+            .unwrap();
+        }
+        workers.push(know_code_core::update::WorkerCommand {
+            execution_grant: grant.clone(),
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                ": > \"$1\"; /bin/cat >/dev/null; /bin/cat \"$2\"".into(),
+                "owned-worker".into(),
+                (if number == 0 {
+                    &first_started
+                } else {
+                    &second_started
+                })
+                .to_string_lossy()
+                .into_owned(),
+                response_path.to_string_lossy().into_owned(),
+            ],
+            request: AnalyzeRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        });
+    }
+    let mut revoked = false;
+    let result = know_code_core::update::index_checked(
+        &path,
+        workers,
+        None,
+        &mut |progress| {
+            if progress.stage == "owned-revoke" {
+                assert!(!revoked);
+                know_code_core::settings::revoke_project_execution(root, &trust_data).unwrap();
+                revoked = true;
+            }
+        },
+        || Ok(()),
+    );
+    assert!(revoked && first_started.is_file());
+    assert!(
+        matches!(result, Err(know_code_core::Error::TrustRequired(_))),
+        "{result:?}"
+    );
+    assert!(
+        !second_started.exists(),
+        "a new compiler process started after personal revocation"
+    );
+    let retained = ReadView::open_in_scope(&path, &common::scope(&path))
+        .unwrap()
+        .query(request("symbols"))
+        .unwrap();
+    assert_eq!(retained.generation, published);
+    assert_eq!(retained.symbols.len(), 1);
+}
