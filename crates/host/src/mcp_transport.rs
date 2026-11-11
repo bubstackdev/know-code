@@ -1,11 +1,17 @@
 //! Limits around the SDK's existing JSON-RPC codec, not another protocol.
 use rmcp::{
-    model::{ErrorData, JsonRpcMessage, RequestId},
-    service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage},
+    model::{
+        ClientNotification, ClientRequest, ErrorData, JsonRpcMessage, ProtocolVersion, RequestId,
+        ServerConfig, ServerResult,
+    },
+    service::{
+        NotificationContext, RequestContext, RoleServer, RxJsonRpcMessage, TxJsonRpcMessage,
+    },
     transport::Transport,
 };
 use serde::Serialize;
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io,
     pin::Pin,
@@ -121,6 +127,16 @@ impl Connection {
     fn take_response(&self, id: &RequestId) -> Option<KeepAlive> {
         self.responses.lock().unwrap().remove(id)?.reservation
     }
+    pub fn retain_response(&self, key: &ResponseKey, reservation: KeepAlive) -> io::Result<()> {
+        let mut responses = self.responses.lock().unwrap();
+        self.check()?;
+        let entry = responses
+            .get_mut(&key.id)
+            .filter(|entry| entry.started && entry.serial == key.serial)
+            .ok_or_else(|| io::Error::other("MCP request ownership is no longer active"))?;
+        entry.reservation = Some(reservation);
+        Ok(())
+    }
     fn begin_frame(self: &Arc<Self>) -> io::Result<FrameOwnership> {
         self.check()?;
         if self
@@ -159,7 +175,19 @@ pub struct ResponseHandoff {
     serial: usize,
     handed_off: bool,
 }
+#[derive(Clone)]
+pub struct ResponseKey {
+    id: RequestId,
+    serial: usize,
+}
 impl ResponseHandoff {
+    fn key(&self) -> ResponseKey {
+        ResponseKey {
+            id: self.id.clone(),
+            serial: self.serial,
+        }
+    }
+    #[cfg(test)]
     pub fn retain(&self, reservation: KeepAlive) {
         if let Some(entry) = self.connection.responses.lock().unwrap().get_mut(&self.id)
             && entry.serial == self.serial
@@ -169,6 +197,57 @@ impl ResponseHandoff {
     }
     pub fn complete(mut self) {
         self.handed_off = true;
+    }
+}
+
+/// Forward through the SDK's existing dispatcher while owning every response,
+/// including ping/list and errors rejected before a tool handler is called.
+pub struct ResponseService<S> {
+    inner: S,
+    connection: Arc<Connection>,
+}
+impl<S> ResponseService<S> {
+    pub fn new(inner: S, connection: Arc<Connection>) -> Self {
+        Self { inner, connection }
+    }
+}
+impl<S: rmcp::Service<RoleServer>> rmcp::Service<RoleServer> for ResponseService<S> {
+    async fn handle_request(
+        &self,
+        request: ClientRequest,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<ServerResult, ErrorData> {
+        let cancellation = context.ct.clone();
+        let probe = cancellation.clone();
+        let handoff = self
+            .connection
+            .begin_response(context.id.clone(), move || probe.is_cancelled())
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        context.extensions.insert(handoff.key());
+        if cancellation.is_cancelled() {
+            return Err(ErrorData::internal_error(
+                "request cancelled",
+                Some(serde_json::json!({"code":"cancelled"})),
+            ));
+        }
+        let result = self.inner.handle_request(request, context).await;
+        if !cancellation.is_cancelled() {
+            handoff.complete();
+        }
+        result
+    }
+    async fn handle_notification(
+        &self,
+        notification: ClientNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.inner.handle_notification(notification, context).await
+    }
+    fn get_info(&self) -> ServerConfig {
+        self.inner.get_info()
+    }
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        self.inner.supported_protocol_versions()
     }
 }
 impl Drop for ResponseHandoff {
@@ -616,6 +695,125 @@ mod tests {
         });
     }
     #[test]
+    fn actual_sdk_repeated_cancel_before_dispatch_releases_non_tool_placeholders() {
+        use rmcp::{ServerHandler, ServiceExt, model::*};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        type CancellationProbe = Arc<Mutex<Option<Box<dyn Fn() -> bool + Send + Sync>>>>;
+        struct Empty;
+        impl ServerHandler for Empty {
+            fn get_info(&self) -> ServerConfig {
+                ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            }
+            async fn list_tools(
+                &self,
+                _: Option<PaginatedRequestParams>,
+                _: RequestContext<RoleServer>,
+            ) -> Result<ListToolsResult, ErrorData> {
+                Ok(ListToolsResult::with_all_items(vec![]))
+            }
+        }
+        // Only this owned fixture delays the SDK service before the ownership
+        // adapter is polled. Production adds no task or waiting queue.
+        struct Deferred<S> {
+            inner: S,
+            entered: Arc<Notify>,
+            resume: Arc<Notify>,
+            cancelled: CancellationProbe,
+        }
+        impl<S: rmcp::Service<RoleServer>> rmcp::Service<RoleServer> for Deferred<S> {
+            async fn handle_request(
+                &self,
+                request: ClientRequest,
+                context: RequestContext<RoleServer>,
+            ) -> Result<ServerResult, ErrorData> {
+                if !matches!(&request, ClientRequest::InitializeRequest(_)) {
+                    let token = context.ct.clone();
+                    *self.cancelled.lock().unwrap() = Some(Box::new(move || token.is_cancelled()));
+                    self.entered.notify_one();
+                    self.resume.notified().await;
+                }
+                self.inner.handle_request(request, context).await
+            }
+            async fn handle_notification(
+                &self,
+                notification: ClientNotification,
+                context: NotificationContext<RoleServer>,
+            ) -> Result<(), ErrorData> {
+                self.inner.handle_notification(notification, context).await
+            }
+            fn get_info(&self) -> ServerConfig {
+                self.inner.get_info()
+            }
+        }
+        runtime().block_on(async {
+            let (mut input, read) = tokio::io::duplex(8192);
+            let (write, output) = tokio::io::duplex(8192);
+            let mut output = BufReader::new(output);
+            let connection = Arc::new(Connection::default());
+            let entered = Arc::new(Notify::new());
+            let resume = Arc::new(Notify::new());
+            let cancelled = Arc::new(Mutex::new(None));
+            let service = Deferred {
+                inner: ResponseService::new(Empty, connection.clone()),
+                entered: entered.clone(),
+                resume: resume.clone(),
+                cancelled: cancelled.clone(),
+            };
+            let inner = AsyncRwTransport::<RoleServer, _, _>::new(
+                read,
+                Output::new(write, connection.clone()),
+            );
+            let transport = Bounded::new(inner, connection.clone());
+            let server = tokio::spawn(async move {
+                service.serve(transport).await.unwrap().waiting().await
+            });
+            input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"admission-test\",\"version\":\"1\"}}}\n{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n").await.unwrap();
+            let mut line = String::new();
+            tokio::time::timeout(Duration::from_secs(2), output.read_line(&mut line))
+                .await.unwrap().unwrap();
+            for id in 10..16 {
+                let method = if id % 2 == 0 { "ping" } else { "tools/list" };
+                input.write_all(format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\"}}\n").as_bytes()).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(2), entered.notified()).await.unwrap();
+                assert!(!connection.responses.lock().unwrap()[&RequestId::Number(id)].started);
+                input.write_all(format!("{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{{\"requestId\":{id}}}}}\n").as_bytes()).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    while !cancelled.lock().unwrap().as_ref().is_some_and(|probe| probe()) {
+                        tokio::task::yield_now().await;
+                    }
+                }).await.unwrap();
+                resume.notify_one();
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    while !connection.responses.lock().unwrap().is_empty() {
+                        tokio::task::yield_now().await;
+                    }
+                }).await.unwrap();
+                assert!(connection.check().is_ok());
+            }
+            // Metadata rejection also passes the adapter before SDK validation.
+            input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":90,\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2099-01-01\"}}}\n").await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), entered.notified()).await.unwrap();
+            resume.notify_one();
+            line.clear();
+            tokio::time::timeout(Duration::from_secs(2), output.read_line(&mut line)).await.unwrap().unwrap();
+            let invalid: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(invalid["id"], 90);
+            assert!(invalid.get("error").is_some());
+            input.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"ping\"}\n").await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), entered.notified()).await.unwrap();
+            resume.notify_one();
+            line.clear();
+            tokio::time::timeout(Duration::from_secs(2), output.read_line(&mut line)).await.unwrap().unwrap();
+            let healthy: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(healthy["id"], 99);
+            assert!(healthy.get("result").is_some());
+            assert!(connection.responses.lock().unwrap().is_empty());
+            assert!(connection.check().is_ok());
+            drop(input);
+            tokio::time::timeout(Duration::from_secs(2), server).await.unwrap().unwrap().unwrap();
+        });
+    }
+    #[test]
     fn unpolled_send_owns_reservation_and_all_frame_kinds_have_a_shared_bound() {
         runtime().block_on(async {
             let (_input, read) = tokio::io::duplex(32);
@@ -677,15 +875,14 @@ mod tests {
             ) -> Result<CallToolResponse, ErrorData> {
                 let token = context.ct.clone();
                 *self.cancelled.lock().unwrap() = Some(Box::new(move || token.is_cancelled()));
-                let token = context.ct.clone();
-                let handoff = self
-                    .connection
-                    .begin_response(context.id, move || token.is_cancelled())
-                    .unwrap();
                 let reservation = Arc::new(());
                 *self.alive.lock().unwrap() = Some(Arc::downgrade(&reservation));
-                handoff.retain(reservation);
-                handoff.complete();
+                self.connection
+                    .retain_response(
+                        context.extensions.get::<ResponseKey>().unwrap(),
+                        reservation,
+                    )
+                    .unwrap();
                 Ok(CallToolResult::structured(serde_json::json!({"body":"x".repeat(4096)})).into())
             }
         }
@@ -706,6 +903,7 @@ mod tests {
                 Output::new(write, connection.clone()),
             );
             let transport = Bounded::new(inner, connection.clone());
+            let service = ResponseService::new(service, connection.clone());
             let server = tokio::spawn(async move {
                 service.serve(transport).await.unwrap().waiting().await
             });

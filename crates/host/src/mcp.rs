@@ -34,8 +34,9 @@ pub fn run(data: PathBuf, workspace: WorkspaceStatus) -> Result<(), Box<dyn std:
             database: workspace.database,
             tools: Arc::new(tools()),
             slots: Arc::new(Semaphore::new(2)),
-            connection,
+            connection: connection.clone(),
         };
+        let server = bounded::ResponseService::new(server, connection);
         match server.serve(transport).await {
             Ok(server) => {
                 server.waiting().await?;
@@ -96,17 +97,6 @@ impl ServerHandler for Mcp {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let start = know_code_core::execution::QueryStart::default();
-        let context_cancelled = context.ct.clone();
-        let handoff = match self
-            .connection
-            .begin_response(context.id.clone(), move || context_cancelled.is_cancelled())
-        {
-            Ok(handoff) => handoff,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                return Ok(failure("busy", error));
-            }
-            Err(error) => return Err(ErrorData::internal_error(error.to_string(), None)),
-        };
         let name = request.name.as_ref();
         if self.get_tool(name).is_none() {
             return Err(ErrorData::invalid_params("unknown Know Code tool", None));
@@ -167,7 +157,15 @@ impl ServerHandler for Mcp {
             match admission::AdmissionScope::local().and_then(|scope| scope.try_reserve()) {
                 Ok(reservation) => {
                     let reservation = Arc::new(reservation);
-                    handoff.retain(reservation.clone());
+                    let Some(key) = context.extensions.get::<bounded::ResponseKey>() else {
+                        return Err(ErrorData::internal_error(
+                            "MCP request ownership is missing",
+                            None,
+                        ));
+                    };
+                    self.connection
+                        .retain_response(key, reservation.clone())
+                        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
                     Some(reservation)
                 }
                 Err(error) => return Ok(failure(error.code(), error.to_string())),
@@ -215,17 +213,13 @@ impl ServerHandler for Mcp {
                 }
             }
         });
-        let response = tokio::select! {
+        tokio::select! {
             _=context.ct.cancelled()=>{
                 cancellation.cancel();
                 Ok(failure("cancelled","request cancelled; its slot is released when core cleanup finishes"))
             },
             value=task=>value.map_err(|error|ErrorData::internal_error(error.to_string(),None)),
-        };
-        if !context.ct.is_cancelled() {
-            handoff.complete();
         }
-        response
     }
 }
 
