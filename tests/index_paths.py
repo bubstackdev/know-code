@@ -12,7 +12,7 @@ def physical_database(database: str | Path) -> Path:
     selector = logical.with_suffix('.lifecycle.json')
     if selector.exists():
         state = json.loads(selector.read_text())
-        if state['version'] != 1 or state.get('initializing', False):
+        if state['version'] not in [1, 2] or state.get('initializing', False):
             raise ValueError(f'index lifecycle is not ready for inspection: {selector}')
         selected = state['selected']
         incarnation = selected['id']

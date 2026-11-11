@@ -7,6 +7,14 @@ use std::path::{Component, Path, PathBuf};
 struct Manifest {
     layout_version: u32,
     worker_protocol: u32,
+    store_format: i32,
+    analysis_settings_version: u32,
+    resource_control_version: u32,
+    index_lifecycle_version: u32,
+    index_lifecycle_read_versions: Vec<u32>,
+    store_read_versions: Vec<i32>,
+    store_migrate_versions: Vec<i32>,
+    store_rebuild_versions: Vec<i32>,
     build_profile: String,
     providers: Vec<Provider>,
 }
@@ -64,9 +72,17 @@ fn validate(root: &Path) -> Result<PathBuf> {
         if manifest.layout_version != 1
             || manifest.worker_protocol != VERSION
             || manifest.build_profile != profile()
+            || manifest.store_format != know_code_core::store::SCHEMA_VERSION
+            || manifest.analysis_settings_version != know_code_core::settings::VERSION
+            || manifest.resource_control_version != know_code_core::resource::CONTROL_VERSION
+            || manifest.index_lifecycle_version != know_code_core::protocol::INDEX_LIFECYCLE_VERSION
+            || manifest.index_lifecycle_read_versions != [1, 2]
+            || manifest.store_read_versions != know_code_core::store::READABLE_FORMATS
+            || manifest.store_migrate_versions != know_code_core::store::MIGRATION_FORMATS
+            || manifest.store_rebuild_versions != know_code_core::store::REBUILD_FORMATS
         {
             return Err(invalid(
-                "runtime layout/protocol/build profile is incompatible",
+                "runtime layout/protocol/store/lifecycle/build profile is incompatible",
             ));
         }
         for required in ["typescript", "csharp"] {
@@ -120,7 +136,7 @@ pub fn info() -> Result<serde_json::Value> {
         })?;
     Ok(
         json!({"version":env!("CARGO_PKG_VERSION"),"target":"darwin-arm64","profile":profile(),"resource_directory":root,
-        "layout":if root.join("runtime.json").is_file(){"bundle"}else{"development"},"worker_protocol":VERSION,"store_format":know_code_core::store::SCHEMA_VERSION,"resource_control_version":know_code_core::resource::CONTROL_VERSION,"analysis_settings_version":know_code_core::settings::VERSION,"index_lifecycle_version":know_code_core::protocol::INDEX_LIFECYCLE_VERSION,
+        "layout":if root.join("runtime.json").is_file(){"bundle"}else{"development"},"worker_protocol":VERSION,"store_format":know_code_core::store::SCHEMA_VERSION,"resource_control_version":know_code_core::resource::CONTROL_VERSION,"analysis_settings_version":know_code_core::settings::VERSION,"index_lifecycle_version":know_code_core::protocol::INDEX_LIFECYCLE_VERSION,"index_lifecycle_read_versions":[1,2],"store_read_versions":know_code_core::store::READABLE_FORMATS,"store_migrate_versions":know_code_core::store::MIGRATION_FORMATS,"store_rebuild_versions":know_code_core::store::REBUILD_FORMATS,
         "sqlite":{"version":rusqlite::version(),"bundled":true,"fts5":fts5},"telemetry":"none"}),
     )
 }

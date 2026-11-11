@@ -234,9 +234,9 @@ def old_settings_peer():
   conn,_=old.accept()
   with conn:
    requests.append(request_frame(conn))
-   # Envelope v7: current lifecycle1, old resource1 and settings1.
+   # Envelope v7: current lifecycle2, old resource1 and settings1.
    # Reach the cancellation-contract check instead of failing lifecycle first.
-   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x01\x68\x01')
+   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x01\x68\x02')
 thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
 for client in [node,dotnet]:
  error(client.send('refresh',configuration='Release'),'update_required')

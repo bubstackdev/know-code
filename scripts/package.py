@@ -86,7 +86,7 @@ copy(provenance.record_path(ROOT,PROFILE),OUT/'build-record.json')
 copy(OUT/'build-record.json',RESOURCES/'build-record.json')
 for doc in provenance.PACKAGED_DOCS:copy(ROOT/'docs'/doc,RUNTIME/'docs'/doc)
 copy(ROOT/f'target/{PROFILE}/know-code',RUNTIME/'bin/know-code')
-manifest={'layout_version':1,'version':VERSION,'artifact_kind':'local-candidate','target':'darwin-arm64','minimum_macos':'15.0','worker_protocol':7,'store_format':8,'analysis_settings_version':1,'resource_control_version':3,'index_lifecycle_version':1,'build_profile':PROFILE,'telemetry':'none','prerequisites':{'node':'24.x','dotnet_sdk':'10.x; repository selection/compatible Roslyn required'},'providers':[{'language':lang,'status':status,'entrypoint':entry} for lang,status,entry in [('typescript','required','providers/typescript/worker.mjs'),('csharp','required','providers/dotnet/KnowCode.Provider.DotNet.dll'),('rust','experimental-v0.0.3','providers/rust/worker.mjs'),('swift','experimental-v0.0.3','providers/swift/worker.mjs')]]}
+manifest={'layout_version':1,'version':VERSION,'artifact_kind':'local-candidate','target':'darwin-arm64','minimum_macos':'15.0','worker_protocol':7,'store_format':8,'analysis_settings_version':1,'resource_control_version':3,'index_lifecycle_version':2,'index_lifecycle_read_versions':[1,2],'store_read_versions':[2,3,4,5,6,7,8],'store_migrate_versions':[3,4,5,6,7],'store_rebuild_versions':[1,2],'build_profile':PROFILE,'telemetry':'none','prerequisites':{'node':'24.x','dotnet_sdk':'10.x; repository selection/compatible Roslyn required'},'providers':[{'language':lang,'status':status,'entrypoint':entry} for lang,status,entry in [('typescript','required','providers/typescript/worker.mjs'),('csharp','required','providers/dotnet/KnowCode.Provider.DotNet.dll'),('rust','experimental-v0.0.3','providers/rust/worker.mjs'),('swift','experimental-v0.0.3','providers/swift/worker.mjs')]]}
 (RESOURCES/'runtime.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # Only platform libraries and relative self identities may appear in native load commands.
 native_inputs=[RUNTIME/'bin/know-code',ROOT/f'target/{PROFILE}/libknow_code_node.dylib',ROOT/f'target/{PROFILE}/libknow_code_ffi.dylib',RESOURCES/'providers/swift/indexstore-reader']
@@ -95,7 +95,7 @@ for native in native_inputs:
  for line in run('otool','-L',native).splitlines()[1:]:
   dependency=line.strip().split(' (',1)[0]
   assert dependency.startswith(('@rpath/','/usr/lib/','/System/Library/')) and 'sqlite' not in dependency.lower(),(native,dependency)
-info=json.loads(run(RUNTIME/'bin/know-code','runtime-info'));assert info['layout']=='bundle' and info['sqlite']['fts5'] and info['profile']==PROFILE and info['analysis_settings_version']==manifest['analysis_settings_version'] and info['resource_control_version']==manifest['resource_control_version']
+info=json.loads(run(RUNTIME/'bin/know-code','runtime-info'));assert info['layout']=='bundle' and info['sqlite']['fts5'] and info['profile']==PROFILE and info['analysis_settings_version']==manifest['analysis_settings_version'] and info['resource_control_version']==manifest['resource_control_version'] and all(info[field]==manifest[field] for field in ['worker_protocol','store_format','index_lifecycle_version','index_lifecycle_read_versions','store_read_versions','store_migrate_versions','store_rebuild_versions'])
 
 NODE=STAGE/'node';NODE.mkdir()
 for name in ['index.mjs','index.d.ts','package.json','README.md']:copy(ROOT/'bindings/node'/name,NODE/name)

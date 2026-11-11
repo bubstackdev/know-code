@@ -22,6 +22,7 @@ node tests/csharp_target_grouping.mjs
 python3 tests/e2e.py
 python3 tests/test_classification.py
 python3 tests/recovery.py
+python3 tests/upgrades.py
 python3 tests/mcp.py
 python3 tests/cursors.py
 python3 tests/workspace_api.py

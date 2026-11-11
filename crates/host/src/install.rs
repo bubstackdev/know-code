@@ -25,6 +25,17 @@ struct Settings {
     label: String,
     path: String,
     login: bool,
+    #[serde(skip, default = "current_lifecycle")]
+    control_version: u32,
+}
+fn current_lifecycle() -> u32 {
+    know_code_core::protocol::INDEX_LIFECYCLE_VERSION
+}
+fn install_request(
+    s: &Settings,
+    request: ControlRequest,
+) -> know_code_core::Result<ControlResponse> {
+    control::request_installer(&s.data, request, s.control_version)
 }
 struct Layout {
     prefix: PathBuf,
@@ -228,8 +239,8 @@ fn load(layout: &Layout, s: &Settings) -> Result<()> {
     Ok(())
 }
 fn status(s: &Settings) -> Result<Option<ControlResponse>> {
-    match control::request(
-        &s.data,
+    match install_request(
+        s,
         ControlRequest {
             operation: "status".into(),
             ..Default::default()
@@ -255,17 +266,19 @@ struct Maintenance {
     data: PathBuf,
     token: String,
     owned: bool,
+    control_version: u32,
 }
 impl Drop for Maintenance {
     fn drop(&mut self) {
         if self.owned {
-            let _ = control::request(
+            let _ = control::request_installer(
                 &self.data,
                 ControlRequest {
                     operation: "resume".into(),
                     maintenance_token: self.token.clone(),
                     ..Default::default()
                 },
+                self.control_version,
             );
         }
     }
@@ -281,6 +294,7 @@ fn pause(layout: &Layout, s: &Settings) -> Result<Maintenance> {
                 .as_nanos()
         ),
         owned: false,
+        control_version: s.control_version,
     };
     let Some(response) = status(s)? else {
         return Ok(guard);
@@ -292,8 +306,8 @@ fn pause(layout: &Layout, s: &Settings) -> Result<Maintenance> {
     loop {
         // If the reply is lost after acceptance, still attempt to release our lease.
         guard.owned = true;
-        let response = control::request(
-            &s.data,
+        let response = install_request(
+            s,
             ControlRequest {
                 operation: "maintenance".into(),
                 maintenance_token: guard.token.clone(),
@@ -331,8 +345,8 @@ fn stop(layout: &Layout, s: &Settings) -> Result<()> {
         if !owns(layout, &response) {
             return Err("refusing to stop a coordinator outside this installation".into());
         }
-        control::request(
-            &s.data,
+        install_request(
+            s,
             ControlRequest {
                 operation: "shutdown".into(),
                 ..Default::default()
@@ -391,8 +405,92 @@ fn compatible_info(a: &Value, b: &Value) -> Result<()> {
     if b["resource_control_version"] != know_code_core::resource::CONTROL_VERSION {
         return Err("target runtime lacks the required recorded cancellation boundary; use a compatible runtime".into());
     }
-    if a["worker_protocol"] != b["worker_protocol"] || a["store_format"] != b["store_format"] {
-        return Err("this installer only switches compatible protocol/store contracts; a migration-capable update is required".into());
+    if !matches!(a["index_lifecycle_version"].as_u64(), Some(1) | Some(2))
+        || a["resource_control_version"] != know_code_core::resource::CONTROL_VERSION
+        || a["analysis_settings_version"] != know_code_core::settings::VERSION
+        || a["worker_protocol"] != b["worker_protocol"]
+    {
+        return Err(
+            "source runtime has no supported quiescence/upgrade contract; update required".into(),
+        );
+    }
+    let source = a["store_format"]
+        .as_i64()
+        .ok_or("source runtime lacks store-format evidence")?;
+    let target = b["store_format"]
+        .as_i64()
+        .ok_or("target runtime lacks store-format evidence")?;
+    if target < source || !supports_store(b, source) {
+        return Err("target runtime has no supported forward store transition; update required; runtime selection was left unchanged".into());
+    }
+    Ok(())
+}
+fn contains_version(info: &Value, field: &str, version: i64) -> bool {
+    info[field]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|v| v.as_i64() == Some(version)))
+}
+fn supports_store(info: &Value, version: i64) -> bool {
+    [
+        "store_read_versions",
+        "store_migrate_versions",
+        "store_rebuild_versions",
+    ]
+    .iter()
+    .any(|field| contains_version(info, field, version))
+}
+/// Inspect actual registered contracts under the installer maintenance fence.
+/// Unknown state is never permission to rewrite or reverse an index.
+fn compatible_data(s: &Settings, target: &Value, legacy_fallback: bool) -> Result<()> {
+    let path = s.data.join("registry.db");
+    match fs::metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+        Ok(_) => {}
+    }
+    let registry =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut query = registry.prepare("SELECT database FROM workspaces ORDER BY database")?;
+    let databases = query.query_map([], |r| r.get::<_, String>(0))?;
+    for database in databases {
+        let database = PathBuf::from(database?);
+        if control::root_for_database(&database) != Some(s.data.as_path()) {
+            return Err(
+                "registry contains a workspace outside this installation's data root".into(),
+            );
+        }
+        if let Some(version) = know_code_core::recovery::lifecycle_version(&database)? {
+            let supported =
+                contains_version(target, "index_lifecycle_read_versions", i64::from(version))
+                    || (legacy_fallback && target["index_lifecycle_version"] == 1 && version == 1);
+            if !supported {
+                return Err("target runtime cannot read a registered workspace lifecycle; update required; selections were left unchanged".into());
+            }
+        }
+        let physical = know_code_core::recovery::selected_path(&database)?;
+        if !physical.is_file() {
+            continue;
+        }
+        let connection = rusqlite::Connection::open_with_flags(
+            physical,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let format = match connection.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)) {
+            Ok(format) => format,
+            Err(error)
+                if know_code_core::recovery::sqlite_corruption(&error) && !legacy_fallback =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let supported = supports_store(target, format)
+            || (legacy_fallback
+                && target["index_lifecycle_version"] == 1
+                && (1..=8).contains(&format));
+        if !supported {
+            return Err(format!("target runtime has no supported path for registered index format {format}; update required; selections were left unchanged").into());
+        }
     }
     Ok(())
 }
@@ -423,6 +521,11 @@ fn activate(layout: &Layout, s: &Settings, target: &Path, keep_previous: bool) -
     if let Some(old) = &old {
         same_contract(old, target)?;
     }
+    let target_info = info(target)?;
+    let mut target_settings = s.clone();
+    target_settings.control_version = target_info["index_lifecycle_version"]
+        .as_u64()
+        .ok_or("target lacks lifecycle contract")? as u32;
     let prior_login = layout.settings()?.is_some_and(|s| s.login);
     if old.as_deref() == Some(target) && prior_login == s.login && (!s.login || loaded(s)?) {
         return Ok(());
@@ -430,6 +533,7 @@ fn activate(layout: &Layout, s: &Settings, target: &Path, keep_previous: bool) -
     let _gate = gate(s)?;
     let was_running = status(s)?.is_some();
     let _pause = pause(layout, s)?;
+    compatible_data(s, &target_info, false)?;
     let was_loaded = loaded(s)?;
     let result = (|| -> Result<()> {
         stop(layout, s)?;
@@ -437,7 +541,7 @@ fn activate(layout: &Layout, s: &Settings, target: &Path, keep_previous: bool) -
             atomic_link(&layout.previous, old)?;
         }
         atomic_link(&layout.current, target)?;
-        start(layout, s, s.login, was_running)?;
+        start(layout, &target_settings, s.login, was_running)?;
         Ok(())
     })();
     if let Err(error) = result {
@@ -445,9 +549,15 @@ fn activate(layout: &Layout, s: &Settings, target: &Path, keep_previous: bool) -
         let restored = (|| -> Result<()> {
             // A failed new coordinator may already own the writer fence. Quiesce it
             // before restoring the old selection, just as for a normal update.
-            let _pause = pause(layout, s)?;
-            stop(layout, s)?;
+            let active_settings = if layout.selected(&layout.current)?.as_deref() == Some(target) {
+                &target_settings
+            } else {
+                s
+            };
+            let _pause = pause(layout, active_settings)?;
+            stop(layout, active_settings)?;
             if let Some(old) = &old {
+                compatible_data(s, &info(old)?, true)?;
                 atomic_link(&layout.current, old)?;
                 start(layout, s, was_loaded, was_running)?;
             } else if layout.current.is_symlink() {
@@ -693,8 +803,18 @@ pub fn run(args: &[String]) -> Result<Value> {
                 std::env::var("PATH").unwrap_or_default()
             ),
             login: !no_login,
+            control_version: current_lifecycle(),
         }
     };
+    if let Some(selected) = layout.selected(&layout.current)? {
+        let version = info(&selected)?["index_lifecycle_version"]
+            .as_u64()
+            .ok_or("installed runtime lacks lifecycle evidence")?;
+        if !matches!(version, 1 | 2) {
+            return Err("installed lifecycle is unsupported; use a compatible installer".into());
+        }
+        s.control_version = version as u32;
+    }
     private_dir(&s.data)?;
     s.data = s.data.canonicalize()?;
     if s.data.starts_with(&layout.base) {
@@ -789,17 +909,25 @@ pub fn run(args: &[String]) -> Result<Value> {
 mod contract_tests {
     use super::*;
 
-    #[test]
-    fn runtime_switch_requires_explicit_lifecycle_safety() {
-        let supported = json!({
+    fn supported() -> Value {
+        json!({
             "index_lifecycle_version": know_code_core::protocol::INDEX_LIFECYCLE_VERSION,
             "analysis_settings_version": know_code_core::settings::VERSION,
             "resource_control_version": know_code_core::resource::CONTROL_VERSION,
             "worker_protocol": know_code_core::protocol::VERSION,
-            "store_format": 8
-        });
+            "store_format": 8,
+            "index_lifecycle_read_versions": [1,2],
+            "store_read_versions": [2,3,4,5,6,7,8],
+            "store_migrate_versions": [3,4,5,6,7],
+            "store_rebuild_versions": [1,2]
+        })
+    }
+
+    #[test]
+    fn runtime_switch_requires_explicit_lifecycle_safety() {
+        let supported = supported();
         assert!(compatible_info(&supported, &supported).is_ok());
-        for value in [Value::Null, json!(0), json!(2)] {
+        for value in [Value::Null, json!(0), json!(3)] {
             let mut target = supported.clone();
             target["index_lifecycle_version"] = value;
             assert!(
@@ -809,8 +937,94 @@ mod contract_tests {
                     .contains("index-lifecycle")
             );
         }
+        let mut old = supported.clone();
+        old["index_lifecycle_version"] = json!(1);
+        assert!(compatible_info(&old, &supported).is_ok());
+        assert!(compatible_info(&supported, &old).is_err());
+        let mut missing_catalog = supported.clone();
+        for field in [
+            "store_read_versions",
+            "store_migrate_versions",
+            "store_rebuild_versions",
+        ] {
+            missing_catalog.as_object_mut().unwrap().remove(field);
+        }
+        assert!(compatible_info(&old, &missing_catalog).is_err());
+        old["store_format"] = json!(9);
+        assert!(compatible_info(&old, &supported).is_err());
         let mut mismatch = supported.clone();
         mismatch["store_format"] = json!(7);
         assert!(compatible_info(&supported, &mismatch).is_err());
+    }
+    #[test]
+    fn registered_store_and_lifecycle_evidence_block_unsafe_switches_without_rewrites() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/ig")
+            .join(format!(
+                "{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        let database = root
+            .join("d/workspaces")
+            .join("a".repeat(24))
+            .join("index.db");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .execute_batch(include_str!("../../../tests/fixtures/schema-v2.sql"))
+            .unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO generations VALUES(42); UPDATE state SET current_generation=42;",
+            )
+            .unwrap();
+        drop(connection);
+        know_code_core::recovery::adopt(&database, 0).unwrap();
+        let s = Settings {
+            format: 1,
+            prefix: root.join("p"),
+            home: root.join("h"),
+            data: root.join("d"),
+            label: "unused-test".into(),
+            path: String::new(),
+            login: false,
+            control_version: current_lifecycle(),
+        };
+        let registry = rusqlite::Connection::open(s.data.join("registry.db")).unwrap();
+        registry
+            .execute_batch("CREATE TABLE workspaces(database TEXT);")
+            .unwrap();
+        registry
+            .execute(
+                "INSERT INTO workspaces VALUES(?)",
+                [database.to_str().unwrap()],
+            )
+            .unwrap();
+        drop(registry);
+        let target = supported();
+        assert!(compatible_data(&s, &target, false).is_ok());
+        let selector = database.with_extension("lifecycle.json");
+        let receipt = fs::read(&selector).unwrap();
+        let mut legacy = target.clone();
+        legacy["index_lifecycle_version"] = json!(1);
+        legacy["index_lifecycle_read_versions"] = json!([1]);
+        assert!(compatible_data(&s, &legacy, true).is_err());
+        assert_eq!(fs::read(&selector).unwrap(), receipt);
+        let physical = know_code_core::recovery::selected_path(&database).unwrap();
+        let connection = rusqlite::Connection::open(&physical).unwrap();
+        connection
+            .execute_batch("PRAGMA user_version=999;")
+            .unwrap();
+        drop(connection);
+        let bytes = fs::read(&physical).unwrap();
+        assert!(compatible_data(&s, &target, false).is_err());
+        assert_eq!(fs::read(&physical).unwrap(), bytes);
+        assert_eq!(fs::read(&selector).unwrap(), receipt);
     }
 }

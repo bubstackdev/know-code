@@ -51,7 +51,7 @@ def stop():
  while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
  assert not (DATA/'c.sock').exists(),'owned coordinator did not stop'
 def invariant(root):
- d=state(root);assert d['version']==1 and not d.get('initializing',False),d
+ d=state(root);assert d['version']==2 and not d.get('initializing',False),d
  assert isinstance(d['high_water'],int);return d
 try:
  defaults=value('resources');assert defaults['rebuild_disk_mib']==2048 and defaults['min_free_disk_mib']==512,defaults

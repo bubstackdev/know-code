@@ -50,6 +50,7 @@ struct Entry {
     recovery_blocked: bool,
     recovery_explicit: bool,
     recovering: bool,
+    upgrade_format: Option<i32>,
 }
 struct LiveStatus {
     value: WorkspaceStatus,
@@ -125,6 +126,7 @@ struct Job {
     cancel_baseline: bool,
     recovering: bool,
     recovery_explicit: bool,
+    upgrade_format: Option<i32>,
 }
 enum JobOutput {
     Indexed(u64, Snapshot, Vec<PathBuf>),
@@ -164,10 +166,45 @@ fn selected_readiness(database: &Path) -> know_code_core::Result<(u64, bool)> {
     }
 }
 
+fn selected_upgrade(database: &Path) -> know_code_core::Result<Option<(i32, u64)>> {
+    let Some((format, generation)) = recovery::selected_format(database)? else {
+        return Ok(None);
+    };
+    match know_code_core::store::upgrade_action(format) {
+        know_code_core::store::UpgradeAction::Rebuild { .. } => Ok(Some((format, generation))),
+        know_code_core::store::UpgradeAction::Current
+        | know_code_core::store::UpgradeAction::Migrate => Ok(None),
+        know_code_core::store::UpgradeAction::Unsupported => {
+            Err(know_code_core::Error::UpdateRequired(format!(
+                "index format {format} has no supported upgrade path; install a compatible runtime; this index was left unchanged"
+            )))
+        }
+    }
+}
+fn upgrade_failure(database: &Path) -> know_code_core::Result<bool> {
+    Ok(matches!(
+        recovery::failure_reason(database)?,
+        Some(recovery::RebuildReason::Upgrade { .. })
+    ))
+}
+
 fn restore_recovery(entry: &mut Entry) -> AnyResult<()> {
     let database = PathBuf::from(&entry.status.database);
     recovery::adopt(&database, entry.status.generation)?;
     recovery::reconcile(&database)?;
+    if !recovery::is_bad(&database)? {
+        match selected_upgrade(&database) {
+            Ok(upgrade) => {
+                entry.upgrade_format = upgrade.map(|(format, generation)| {
+                    entry.status.generation = entry.status.generation.max(generation);
+                    format
+                })
+            }
+            Err(know_code_core::Error::IndexCorrupt { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+
     if let Some(generation) = recovery::selected_replacement_generation(&database)? {
         entry.status.generation = entry.status.generation.max(generation);
     }
@@ -181,10 +218,17 @@ fn restore_recovery(entry: &mut Entry) -> AnyResult<()> {
             entry.status.outcome_code.as_str(),
             "resource_limited" | "cancelled"
         ) {
-            entry.status.outcome_code = "index_recovering".into();
+            entry.status.outcome_code = if upgrade_failure(&database)? {
+                "index_upgrade_failed"
+            } else {
+                "index_recovering"
+            }
+            .into();
         }
         entry.status.phase = if entry.status.outcome_code == "resource_limited" {
             "resource_limited"
+        } else if upgrade_failure(&database)? {
+            "upgrade_failed"
         } else {
             "recovery_failed"
         }
@@ -478,6 +522,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     recovery_blocked: false,
                     recovery_explicit: false,
                     recovering: false,
+                    upgrade_format: None,
                     queued: Instant::now(),
                     active: Instant::now() - Duration::from_secs(60),
                 },
@@ -706,25 +751,51 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                             return Ok(None);
                         }
                     };
+                    if !bad {
+                        match selected_upgrade(Path::new(&database)) {
+                            Ok(upgrade) => {
+                                entry.upgrade_format = upgrade.map(|(format, generation)| {
+                                    entry.status.generation =
+                                        entry.status.generation.max(generation);
+                                    format
+                                });
+                            }
+                            Err(know_code_core::Error::IndexCorrupt { incarnation, .. }) => {
+                                if let Err(error) = observe_bad(&shared, entry, &incarnation) {
+                                    block_lifecycle_error(entry, error.as_ref());
+                                }
+                                persist(&shared, entry, None)?;
+                                return Ok(None);
+                            }
+                            Err(error) => {
+                                block_lifecycle_error(entry, &error);
+                                persist(&shared, entry, None)?;
+                                return Ok(None);
+                            }
+                        }
+                    }
                     let session = shared.resources.start()?;
                     *shared.active_job.lock().unwrap() =
                         Some((database.clone(), session.control()));
                     shared.analysis_running.store(true, Ordering::Release);
                     let entry = entries.get_mut(&database).unwrap();
                     entry.pending = false;
-                    entry.recovering = bad
+                    entry.recovering = (bad || entry.upgrade_format.is_some())
                         && !entry.cancel_pending
                         && !(entry.status.outcome_code == "cancelled" && !entry.force);
-                    entry.status.phase = if entry.recovering {
-                        "recovering"
-                    } else if entry.cancel_pending {
-                        "cancelling"
-                    } else if entry.status.outcome_code == "cancelled" && !entry.force {
-                        "cancelled"
-                    } else {
-                        "analyzing"
-                    }
-                    .into();
+                    entry.status.phase =
+                        if entry.recovering && entry.upgrade_format.is_some() && !bad {
+                            "upgrading"
+                        } else if entry.recovering {
+                            "recovering"
+                        } else if entry.cancel_pending {
+                            "cancelling"
+                        } else if entry.status.outcome_code == "cancelled" && !entry.force {
+                            "cancelled"
+                        } else {
+                            "analyzing"
+                        }
+                        .into();
                     entry.status.requested_settings = settings::resolve(
                         Path::new(&entry.status.workspace_root),
                         data,
@@ -754,6 +825,11 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                         previous_failed_input_hash: entry.failed_input_hash.clone(),
                         cancel_baseline: entry.cancel_pending,
                         recovering: entry.recovering,
+                        upgrade_format: if entry.recovering && !bad {
+                            entry.upgrade_format
+                        } else {
+                            None
+                        },
                         recovery_explicit: std::mem::take(&mut entry.recovery_explicit),
                     };
                     Ok(Some(job))
@@ -772,6 +848,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                     let registration = job.registration;
                     let cancel_baseline = job.cancel_baseline;
                     let recovering = job.recovering;
+                    let upgrading = job.upgrade_format.is_some();
                     let mut input_hash = String::new();
                     let result = execute(
                         job,
@@ -787,7 +864,9 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                     return;
                                 }
                                 if progress.stage == "analyzing" {
-                                    entry.status.phase = if recovering {
+                                    entry.status.phase = if upgrading {
+                                        "upgrading"
+                                    } else if recovering {
                                         "recovering"
                                     } else {
                                         "analyzing"
@@ -900,6 +979,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                             }
                             Ok(JobOutput::Indexed(generation, inputs, newer)) => {
                                 entry.recovery_blocked = false;
+                                entry.upgrade_format = None;
                                 entry.status.generation = generation;
                                 entry.status.published_epoch = done.epoch;
                                 entry.special_inputs =
@@ -981,6 +1061,10 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
                                         "resource_limited"
                                     } else if error.code == "cancelled" {
                                         "cancelled"
+                                    } else if upgrade_failure(Path::new(&done.database))
+                                        .unwrap_or(false)
+                                    {
+                                        "upgrade_failed"
                                     } else {
                                         "recovery_failed"
                                     }
@@ -1064,20 +1148,35 @@ fn execute(
             .ok_or("workspace database has no central data root")?;
         let settings_paths = settings::paths(&job.root, data);
         if job.recovering {
-            candidate = Some(recovery::begin_rebuild(
-                database,
-                job.recovery_explicit,
-                job.previous_generation,
-            )?);
+            candidate = Some(if let Some(format) = job.upgrade_format {
+                recovery::begin_upgrade(
+                    database,
+                    job.recovery_explicit,
+                    job.previous_generation,
+                    format,
+                )?
+            } else {
+                recovery::begin_rebuild(database, job.recovery_explicit, job.previous_generation)?
+            });
             let guard = Arc::new(recovery::DiskBudget::new(database, data)?);
             guard.check(&job.session.limits(), false)?;
             let sampled = Arc::clone(&guard);
             control.guard_disk(move |limits| sampled.check(limits, false));
             disk = Some(guard);
             progress(Progress {
-                stage: "recovering".into(),
+                stage: if job.upgrade_format.is_some() {
+                    "upgrading"
+                } else {
+                    "recovering"
+                }
+                .into(),
                 project_path: String::new(),
-                message: "Rebuilding a fenced derived index from saved inputs".into(),
+                message: if job.upgrade_format.is_some() {
+                    "Building an upgraded index alongside the prior saved graph"
+                } else {
+                    "Rebuilding a fenced derived index from saved inputs"
+                }
+                .into(),
             });
         }
         let mut extras =
@@ -1220,17 +1319,27 @@ fn execute(
         // Newly discovered immutable inputs can safely enter the acknowledged manifest only
         // after a follow-up reconciliation; saves during analysis cannot disappear.
         let generation = if let Some(candidate) = &candidate {
-            recovery::finish_rebuild(candidate, &control, || {
-                control.check()?;
-                if workspace::identity(&job.root)? != job.identity {
-                    return Err(know_code_core::Error::Provider(
-                        "workspace identity changed before replacement cutover".into(),
-                    ));
-                }
-                disk.as_ref()
-                    .expect("candidate disk guard")
-                    .check(&job.session.limits(), true)
-            })?
+            let prepared = recovery::prepare_rebuild(candidate, &control)?;
+            let cutover = || {
+                recovery::finish_prepared_rebuild(&prepared, &control, || {
+                    control.check()?;
+                    if workspace::identity(&job.root)? != job.identity {
+                        return Err(know_code_core::Error::Provider(
+                            "workspace identity changed before replacement cutover".into(),
+                        ));
+                    }
+                    disk.as_ref()
+                        .expect("candidate disk guard")
+                        .check(&job.session.limits(), true)
+                })
+            };
+            if job.upgrade_format.is_some()
+                && let Some(cursors) = cursors
+            {
+                cursors.publish_replacement(database, &control, cutover)?
+            } else {
+                cutover()?
+            }
         } else {
             generation
         };
@@ -1238,6 +1347,7 @@ fn execute(
     })();
     if let Err(error) = &result
         && job.recovering
+        && candidate.is_some()
     {
         // A rename can become visible before its directory fsync reports an
         // error. Re-observe selection: never reclassify a verified selected
@@ -1253,7 +1363,10 @@ fn execute(
             && let Err(recording) =
                 recovery::fail_rebuild(Path::new(&job.database), &error.to_string())
         {
-            return Err(know_code_core::Error::IndexRecovering(format!("recovery failed: {error}; failure receipt could not be recorded: {recording}; explicit refresh is required")).into());
+            if matches!(recording, know_code_core::Error::UpdateRequired(_)) {
+                return Err(recording.into());
+            }
+            return Err(know_code_core::Error::IndexRecovering(format!("replacement failed: {error}; failure receipt could not be recorded: {recording}; explicit refresh is required")).into());
         }
     }
     result
@@ -1280,7 +1393,7 @@ fn begin_cancellation(entry: &mut Entry) {
         entry.recovery_blocked = true;
         entry.status.phase = "cancelling".into();
         entry.status.error =
-            "recovery cancellation requested; explicit refresh will be required".into();
+            "index replacement cancellation requested; explicit refresh will be required".into();
         return;
     }
     entry.cancel_pending = true;
@@ -1315,7 +1428,10 @@ fn queue(entry: &mut Entry, paths: Option<Vec<PathBuf>>, force: bool) {
     } else {
         entry.rehash = true;
     }
-    if !matches!(entry.status.phase.as_str(), "analyzing" | "recovering") && entry.status.available
+    if !matches!(
+        entry.status.phase.as_str(),
+        "analyzing" | "recovering" | "upgrading"
+    ) && entry.status.available
     {
         entry.status.phase = if entry.cancel_pending {
             "cancelling"
@@ -1495,6 +1611,7 @@ fn register_workspace(
             recovery_blocked: false,
             recovery_explicit: false,
             recovering: false,
+            upgrade_format: None,
             queued: Instant::now(),
             active: Instant::now(),
         });
@@ -2009,6 +2126,7 @@ mod live_lifetime_tests {
             session: Governor::new(Limits::default()).unwrap().start().unwrap(),
             cancel_baseline: true,
             recovering: false,
+            upgrade_format: None,
             recovery_explicit: false,
         }
     }
@@ -2208,6 +2326,7 @@ mod live_lifetime_tests {
             recovery_blocked: true,
             recovery_explicit: false,
             recovering: false,
+            upgrade_format: None,
         };
         let shared = Shared {
             entries: Mutex::new(BTreeMap::new()),
@@ -2572,6 +2691,7 @@ mod live_lifetime_tests {
                 recovery_blocked: false,
                 recovery_explicit: false,
                 recovering: false,
+                upgrade_format: None,
             },
         )]);
         let shared = Arc::new(Shared {
@@ -2676,5 +2796,69 @@ mod live_lifetime_tests {
             .unwrap()
             .try_lock()
             .unwrap();
+    }
+    #[test]
+    fn refused_upgrade_before_attempt_preserves_source_and_previous_failure() {
+        for previous_failure in [false, true] {
+            let mut job = cancellation_job();
+            job.cancel_baseline = false;
+            job.recovering = true;
+            job.upgrade_format = Some(2);
+            job.recovery_explicit = previous_failure;
+            job.previous_error.clear();
+            job.previous_error_code.clear();
+            let database = PathBuf::from(&job.database);
+            std::fs::create_dir_all(database.parent().unwrap()).unwrap();
+            let connection = Connection::open(&database).unwrap();
+            connection
+                .execute_batch(include_str!("../../../tests/fixtures/schema-v2.sql"))
+                .unwrap();
+            connection
+                .execute_batch(
+                    "INSERT INTO generations VALUES(42); UPDATE state SET current_generation=42;",
+                )
+                .unwrap();
+            drop(connection);
+            recovery::adopt(&database, 0).unwrap();
+            assert_eq!(selected_upgrade(&database).unwrap(), Some((2, 42)));
+            if previous_failure {
+                recovery::begin_upgrade(&database, false, 0, 2).unwrap();
+                recovery::fail_rebuild(&database, "prior failed upgrade").unwrap();
+            }
+            let physical = recovery::selected_path(&database).unwrap();
+            let connection = Connection::open(&physical).unwrap();
+            connection
+                .execute_batch("PRAGMA user_version=999;")
+                .unwrap();
+            drop(connection);
+            let receipt = std::fs::read(database.with_extension("lifecycle.json")).unwrap();
+            let source = std::fs::read(&physical).unwrap();
+            let error = execute(
+                job,
+                Path::new("/missing-provider-fixture"),
+                &mut String::new(),
+                &mut |_| {},
+                None,
+            )
+            .err()
+            .expect("future format refusal");
+            assert!(
+                matches!(
+                    error.downcast_ref::<know_code_core::Error>(),
+                    Some(know_code_core::Error::UpdateRequired(_))
+                ),
+                "{error}"
+            );
+            assert_eq!(std::fs::read(&physical).unwrap(), source);
+            assert_eq!(
+                std::fs::read(database.with_extension("lifecycle.json")).unwrap(),
+                receipt
+            );
+            assert_eq!(
+                recovery::failure(&database).unwrap().is_some(),
+                previous_failure
+            );
+            assert!(!recovery::is_bad(&database).unwrap());
+        }
     }
 }

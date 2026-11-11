@@ -35,6 +35,38 @@ pub fn request(root: &Path, request: ControlRequest) -> Result<ControlResponse> 
     let timeout = request.wait_ms.saturating_add(500);
     request_with_timeout(root, request, timeout)
 }
+/// Installer-only bridge for quiescing the known previous lifecycle peer.
+/// Ordinary consumers always require the current lifecycle capability.
+pub fn request_installer(
+    root: &Path,
+    mut request: ControlRequest,
+    lifecycle_version: u32,
+) -> Result<ControlResponse> {
+    if !matches!(lifecycle_version, 1 | protocol::INDEX_LIFECYCLE_VERSION)
+        || !matches!(
+            request.operation.as_str(),
+            "status" | "maintenance" | "resume" | "shutdown"
+        )
+    {
+        return Err(Error::UpdateRequired(
+            "installer control supports only known lifecycle status/quiescence operations".into(),
+        ));
+    }
+    request.index_lifecycle_version = lifecycle_version;
+    let timeout = request.wait_ms.saturating_add(500).max(1);
+    let mut socket = UnixStream::connect(socket_path(root))?;
+    socket.set_write_timeout(Some(Duration::from_millis(u64::from(timeout))))?;
+    socket.set_read_timeout(Some(Duration::from_millis(u64::from(timeout))))?;
+    let response = exchange_raw(&mut socket, request)?;
+    if response.index_lifecycle_version != lifecycle_version
+        || response.resource_control_version != crate::resource::CONTROL_VERSION
+        || response.analysis_settings_version != crate::settings::VERSION
+    {
+        return Err(Error::UpdateRequired("installed coordinator does not match its declared lifecycle/resource/settings contract".into()));
+    }
+    checked_error(response)
+}
+
 /// Read-only client control sharing the query cancellation/deadline path.
 pub fn request_cancellable(
     root: &Path,
@@ -104,6 +136,9 @@ pub(crate) fn checked_response(response: ControlResponse) -> Result<ControlRespo
     if response.index_lifecycle_version != protocol::INDEX_LIFECYCLE_VERSION {
         return Err(Error::UpdateRequired("update the running coordinator and native libraries together; index lifecycle safety is unavailable or incompatible".into()));
     }
+    checked_error(response)
+}
+fn checked_error(response: ControlResponse) -> Result<ControlResponse> {
     if response.error_code.is_empty() {
         Ok(response)
     } else if response.error_code == "update_required" {
@@ -946,5 +981,82 @@ mod activity_tests {
         listener.set_nonblocking(true).unwrap();
         assert!(checkpoint_live(&root, &database, true));
         assert!(listener.accept().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod installer_bridge_tests {
+    use super::*;
+    #[test]
+    fn prior_peer_bridge_preserves_strict_consumers_and_rejects_other_operations() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/ib")
+            .join(format!(
+                "{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&root).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(socket_path(&root)).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
+            let Some(envelope::Payload::ControlRequest(request)) = frame.payload else {
+                panic!("control request")
+            };
+            assert_eq!(request.index_lifecycle_version, 1);
+            assert_eq!(request.operation, "status");
+            protocol::write_frame(
+                &mut stream,
+                &Envelope {
+                    protocol_version: VERSION,
+                    payload: Some(envelope::Payload::ControlResponse(ControlResponse {
+                        index_lifecycle_version: 1,
+                        resource_control_version: crate::resource::CONTROL_VERSION,
+                        analysis_settings_version: crate::settings::VERSION,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        });
+        let response = request_installer(
+            &root,
+            ControlRequest {
+                operation: "status".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert!(matches!(
+            checked_response(response),
+            Err(Error::UpdateRequired(_))
+        ));
+        for (operation, version) in [
+            ("refresh", 1),
+            ("index-corrupt", 1),
+            ("status", 0),
+            ("status", 3),
+        ] {
+            assert!(matches!(
+                request_installer(
+                    &root,
+                    ControlRequest {
+                        operation: operation.into(),
+                        ..Default::default()
+                    },
+                    version
+                ),
+                Err(Error::UpdateRequired(_))
+            ));
+        }
     }
 }

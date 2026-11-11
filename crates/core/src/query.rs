@@ -384,7 +384,10 @@ impl ReadView {
         connection.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, true)?;
         connection.execute_batch("PRAGMA cache_size=-2048; BEGIN DEFERRED;")?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if ![2, 3, 4, 5, 6, 7, SCHEMA_VERSION].contains(&version) {
+        if version == 1 && !health.incarnation().is_empty() {
+            return Err(Error::NotReady);
+        }
+        if !crate::store::READABLE_FORMATS.contains(&version) {
             return Err(Error::UpdateRequired(format!(
                 "index format {version} is unsupported; update required (readable: 2 through {SCHEMA_VERSION})"
             )));
