@@ -94,8 +94,8 @@ def owners():
                                        'WHERE generation=(SELECT current_generation FROM state)'))
 
 
-def check_ranges(name, provider):
-    symbols = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True)['symbols']
+def check_ranges(name, provider, target=None):
+    symbols = [symbol for symbol in query({'op': 'symbols', 'name': name, 'target': target}, equivalent=True)['symbols']
                if symbol['compilation_id'].startswith(provider + ':')]
     assert symbols, name
     count = 0
@@ -114,15 +114,35 @@ def check_ranges(name, provider):
 generation = wait()
 # Request workspace coverage explicitly; symbol inventory size must not turn
 # this cross-provider coverage/parity check into an oversized response.
-coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full'}, equivalent=True)['coverage']
+coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full', 'detail_max_bytes': 65536}, equivalent=True)['coverage']
 assert {item['language'] for item in coverage} == {'typescript', 'csharp', 'rust', 'swift'}, coverage
 assert all(item['status'] == 'partial' for item in coverage if item['language'] == 'rust'), coverage
 assert all(item['status'] == 'complete' for item in coverage if item['language'] != 'rust'), coverage
-checked = check_ranges('café', 'rust') + check_ranges('message', 'swift') + check_ranges('packageLocal', 'swift')
+rust_contexts = [item for item in coverage if item['language'] == 'rust']
+# This fixture declares a single library with its ordinary and test compiler
+# units. Tooling/build-script units supply preparation, not duplicate bodies.
+assert len(rust_contexts) == 2, rust_contexts
+assert {item['target'] for item in rust_contexts} == {
+    'lib:know_code_rust_fixture:normal@host', 'lib:know_code_rust_fixture:test@host'}, rust_contexts
+assert all(item['analysis_options']['context']['target']['kind'] == ['lib'] for item in rust_contexts), rust_contexts
+assert {item['analysis_options']['context']['profile']['test'] for item in rust_contexts} == {False, True}, rust_contexts
+normal_rust = next(item for item in rust_contexts if not item['analysis_options']['context']['profile']['test'])
+normal_rust_target = normal_rust['target']
+with sqlite3.connect(physical_database(DATABASE)) as connection:
+    rust_sources = connection.execute(
+        'SELECT a.path,count(DISTINCT u.compilation_id),count(DISTINCT a.rowid),count(DISTINCT a.content_hash) '
+        'FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id '
+        'JOIN unit_artifacts ua ON ua.owner_generation=u.owner_generation AND ua.compilation_id=u.compilation_id '
+        'JOIN artifacts a ON a.generation=ua.owner_generation AND a.id=ua.artifact_id '
+        'WHERE u.generation=(SELECT current_generation FROM state) AND c.language=\'rust\' GROUP BY a.path').fetchall()
+assert {row[0] for row in rust_sources} == {'rust/src/lib.rs', 'rust/src/helper.rs'}, rust_sources
+assert all(row[1:] == (2, 1, 1) for row in rust_sources), 'Rust contexts must share retained source artifacts/bytes'
+checked = check_ranges('café', 'rust', normal_rust_target) + check_ranges('message', 'swift') + check_ranges('packageLocal', 'swift')
 assert sum(item['language'] == 'swift' and item['project_path'] == 'swift-package/Package.swift'
            for item in coverage) == 2, coverage
 for language, name, expected in [('rust','Greeter','included'),('swift','message','extent_unavailable')]:
-    symbol = next(s for s in query({'op':'symbols','name':name})['symbols'] if s['compilation_id'].startswith(language+':'))
+    symbol = next(s for s in query({'op':'symbols','name':name, 'target': normal_rust_target if language == 'rust' else None})['symbols']
+                  if s['compilation_id'].startswith(language+':'))
     context = query({'op':'symbol_context','symbol_id':symbol['id']}, equivalent=True)['contexts'][0]
     assert context['declarations'] and any(d['source_status']==expected for d in context['declarations']), context
 print('languages: four-provider native parity and exact retained UTF-8 ranges passed', flush=True)
@@ -135,7 +155,8 @@ for language, leaf_name, direct_name, reference_name in [
     selected = {}
     for name in (leaf_name, direct_name, reference_name):
         matches = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True).get('symbols', [])
-                   if symbol['name'] == name and symbol['compilation_id'].startswith(language + ':')]
+                   if symbol['name'] == name and symbol['compilation_id'].startswith(language + ':')
+                   and (language != 'rust' or symbol['compilation_id'] == normal_rust['compilation_id'])]
         assert len(matches) == 1, (language, name, matches)
         selected[name] = matches[0]['id']
     leaf_id, direct_id, reference_id = (selected[name] for name in (leaf_name, direct_name, reference_name))
@@ -163,7 +184,7 @@ for language, leaf_name, direct_name, reference_name in [
     if language == 'rust':
         assert all(report['status'] == 'partial' for report in reports), reports
         constants = [symbol for symbol in query({'op': 'symbols', 'name': 'GRAPH_VALUE'}, equivalent=True).get('symbols', [])
-                     if symbol['name'] == 'GRAPH_VALUE' and symbol['compilation_id'].startswith('rust:')]
+                     if symbol['name'] == 'GRAPH_VALUE' and symbol['compilation_id'] == normal_rust['compilation_id']]
         assert len(constants) == 1, constants
         constant_impact = query({'op': 'impact', 'symbol_id': constants[0]['id'], 'kinds': ['reference']}, equivalent=True)['graph']
         for identifier in (leaf_id, direct_id):
@@ -184,7 +205,9 @@ rust = WORKSPACE / 'rust/src/lib.rs'
 rust.write_text(rust.read_text() + '\n// saved Rust change\n')
 generation = wait(generation)
 after = owners()
-assert after['rust:rust/Cargo.toml'] != before['rust:rust/Cargo.toml']
+rust_units = {key for key in before if key.startswith('rust:')}
+assert len(rust_units) == 2 and {key for key in after if key.startswith('rust:')} == rust_units
+assert all(after[key] != before[key] for key in rust_units)
 assert all(after[key] == value for key, value in before.items() if not key.startswith('rust:'))
 
 # Legacy Cargo configuration is extensionless; discovery must notice its creation.
@@ -192,7 +215,9 @@ config = WORKSPACE / 'rust/.cargo/config'
 config.parent.mkdir()
 config.write_text('# saved Cargo configuration input\n')
 generation = wait(generation)
-assert owners()['rust:rust/Cargo.toml'] != after['rust:rust/Cargo.toml']
+changed = owners()
+assert {key for key in changed if key.startswith('rust:')} == rust_units
+assert all(changed[key] != after[key] for key in rust_units)
 after = owners()
 
 before = after
@@ -327,7 +352,8 @@ summary = {'result': 'passed', 'profile': PROFILE, 'database': DATABASE,
            'checked_utf8_ranges': checked, 'rust_coverage': 'explicitly partial',
            'checks': ['four_provider_publication', 'native_parity', 'UTF8_source_ranges', 'build_cache_and_worktree_exclusions',
                       'Swift_Rust_stored_call_and_impact_native_parity', 'compiler_bound_paths_and_value_reference_separation',
-                      'Rust_constant_dependency_impact', 'Swift_value_initializers_do_not_invent_calls',
+                      'Rust_constant_dependency_impact', 'Rust_normal_and_test_compiler_contexts_share_source_storage',
+                      'Swift_value_initializers_do_not_invent_calls',
                       'Rust_scoped_save', 'extensionless_Cargo_config', 'Swift_scoped_save', 'SwiftPM_target_save',
                       'Swift_pin_failure_repair_and_removal', 'new_Swift_group',
                       'last_Swift_file_deletion_without_sibling_reanalysis', 'Swift_partial_and_repair',
