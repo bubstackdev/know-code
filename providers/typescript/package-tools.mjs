@@ -30,7 +30,22 @@ export function typescriptInstallation(directory, root) {
         // Resolve the current filesystem origin before Node's module resolver:
         // its path cache can retain a previous target of this lexical symlink.
         const target = fs.realpathSync(entry);
-        return {entry, filename: fs.realpathSync(ownRequire.resolve(target))};
+        const manifestPath = path.join(target, 'package.json');
+        const content = readSetupInput(manifestPath);
+        const manifest = content === undefined ? undefined : JSON.parse(content.toString('utf8'));
+        let filename;
+        if (manifest && Object.hasOwn(manifest, 'exports')) {
+          // Absolute-directory resolution ignores package exports. Resolve the
+          // selected package's self-reference instead (native TS7 has no main).
+          // A differently named package must not fall through to an ancestor.
+          if (manifest.name !== 'typescript') throw new Error('Selected compiler exports belong to a package not named typescript');
+          filename = createRequire(manifestPath).resolve('typescript');
+        } else filename = ownRequire.resolve(target);
+        filename = fs.realpathSync(filename);
+        const within = path.relative(target, filename);
+        if (within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within))
+          throw new Error('Selected compiler entry resolves outside its package origin; no ancestor compiler was substituted');
+        return {entry, filename};
       }
       catch (error) {
         return {entry, error: new ProjectSetupError('compiler_unavailable', `Cannot resolve repository TypeScript installation ${entry}: ${error.message}`)};
