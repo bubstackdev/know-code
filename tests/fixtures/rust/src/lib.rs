@@ -33,9 +33,10 @@ mod tests {
 }
 
 const GRAPH_VALUE: i32 = 7;
+static GRAPH_STATIC: i32 = 3;
 
 pub fn graph_leaf(value: i32) -> i32 {
-    value + GRAPH_VALUE
+    value + GRAPH_VALUE + GRAPH_STATIC
 }
 
 pub fn graph_entry() -> i32 {

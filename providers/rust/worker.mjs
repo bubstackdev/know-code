@@ -10,7 +10,7 @@ import {orderedDefinitions,ExternalSources} from './navigation.mjs';
 import {syntaxGraph, outgoingCalls} from './graph.mjs';
 
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
-const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
+const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'const', 'static', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
 
 function command(tool, args, cwd) {
   const result = spawnSync(tool, args, {cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: compilerEnvironment()});

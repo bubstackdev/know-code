@@ -110,6 +110,7 @@ def edges(source, target, kind):
 
 assert edges('graph_entry', 'graph_leaf', 'call'), 'direct call missing'
 assert edges('graph_leaf', 'GRAPH_VALUE', 'reference'), 'constant read missing'
+assert edges('graph_leaf', 'GRAPH_STATIC', 'reference'), 'static read missing'
 assert edges('graph_value_only', 'graph_leaf', 'reference'), 'function value dependency missing'
 assert not edges('graph_value_only', 'graph_leaf', 'call'), 'function value fabricated a call'
 assert edges('graph_inner', 'graph_leaf', 'call'), 'nested function lost its call'
