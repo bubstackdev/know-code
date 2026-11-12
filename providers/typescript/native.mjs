@@ -79,10 +79,20 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
     const files=[];
     let omitted=0;
     for(const filename of program.getSourceFileNames()) {
-      const file=program.getSourceFile(filename);
-      if(!file||program.isSourceFileDefaultLibrary(file)||program.isSourceFileFromExternalLibrary(file))continue;
-      const origin=sourceBoundary(root,file.fileName);
+      // Program metadata can exclude dependency/default-library bodies before
+      // an AST round trip materializes them in the Node client. An individual
+      // external declaration may still be resolved below when a fact needs it.
+      const metadata=program.getSourceFileMetadata(filename);
+      if(!metadata) {
+        if(diagnostics.length<100)diagnostics.push({code:'native_source_metadata_unavailable',severity:'warning',path:boundedText(relative(root,filename)),
+          message:'The selected compiler supplied no source ownership metadata; this artifact and its facts are omitted.'});
+        omitted++;continue;
+      }
+      if(metadata.isDefaultLibrary||metadata.isFromExternalLibrary)continue;
+      const origin=sourceBoundary(root,filename);
       if(origin) {if(diagnostics.length<100)diagnostics.push(origin);omitted++;continue;}
+      const file=program.getSourceFile(filename);
+      if(!file){omitted++;continue;}
       const utf8=Buffer.from(file.text,'utf8'),sourcePath=relative(root,file.fileName);
       if(!canSend('source',{id:`${sourcePath}@${'0'.repeat(64)}`,path:sourcePath,utf8,sha256:'0'.repeat(64),generated:false,compilationId:id,
         ...(testPolicy?{testClassification:sourceClassification(sourcePath,testPolicy)}:{})})) {
