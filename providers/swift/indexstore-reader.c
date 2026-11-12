@@ -37,6 +37,7 @@ API(handle, indexstore_symbol_relation_get_symbol, (handle));
 API(text_ref, indexstore_symbol_get_name, (handle));
 API(text_ref, indexstore_symbol_get_usr, (handle));
 API(unsigned, indexstore_symbol_get_kind, (handle));
+API(unsigned, indexstore_symbol_get_subkind, (handle));
 static handle store;
 static bool failed;
 static char **records;
@@ -62,28 +63,39 @@ static void json(text_ref s) {
   }
   putchar('"');
 }
+typedef struct { text_ref enclosing; bool first; } relation_context;
 static bool relation(void *ctx, handle rel) {
+  relation_context *context = ctx;
   uint64_t roles = indexstore_symbol_relation_get_roles(rel);
-  // A compiler's containment relation supplies context, not a guessed call edge.
+  handle symbol = indexstore_symbol_relation_get_symbol(rel);
+  // Preserve every actual compiler relation, not just containment. The adapter
+  // distinguishes CALLEDBY from references and never guesses a call from a USR.
+  if (!context->first) putchar(',');
+  context->first = false;
+  printf("{\"usr\":"); json(indexstore_symbol_get_usr(symbol));
+  printf(",\"name\":"); json(indexstore_symbol_get_name(symbol));
+  printf(",\"kind\":%u,\"subkind\":%u,\"roles\":%llu}",
+         indexstore_symbol_get_kind(symbol), indexstore_symbol_get_subkind(symbol),
+         (unsigned long long)roles);
   if (roles & ((1ull << 9) | (1ull << 16))) {
-    text_ref *enclosing = ctx;
-    *enclosing = indexstore_symbol_get_usr(indexstore_symbol_relation_get_symbol(rel));
+    context->enclosing = indexstore_symbol_get_usr(symbol);
   }
-  return true;
+  return !ferror(stdout);
 }
 static bool occurrence(void *ctx, handle occ) {
   handle symbol = indexstore_occurrence_get_symbol(occ);
   unsigned line, col;
   indexstore_occurrence_get_line_col(occ, &line, &col);
-  text_ref enclosing = {"", 0};
-  indexstore_occurrence_relations_apply_f(occ, &enclosing, relation);
   printf("{\"path\":"); json(*(text_ref *)ctx);
   printf(",\"usr\":"); json(indexstore_symbol_get_usr(symbol));
   printf(",\"name\":"); json(indexstore_symbol_get_name(symbol));
-  printf(",\"enclosing\":"); json(enclosing);
-  printf(",\"kind\":%u,\"roles\":%llu,\"line\":%u,\"column\":%u}\n",
+  printf(",\"kind\":%u,\"subkind\":%u,\"roles\":%llu,\"line\":%u,\"column\":%u,\"relations\":[",
          indexstore_symbol_get_kind(symbol),
+         indexstore_symbol_get_subkind(symbol),
          (unsigned long long)indexstore_occurrence_get_roles(occ), line, col);
+  relation_context context = {{"", 0}, true};
+  if (!indexstore_occurrence_relations_apply_f(occ, &context, relation)) return false;
+  printf("],\"enclosing\":"); json(context.enclosing); puts("}");
   return !ferror(stdout);
 }
 static bool wanted(text_ref path) {
@@ -157,7 +169,7 @@ int main(int argc, char **argv) {
   LOAD(indexstore_occurrence_get_symbol); LOAD(indexstore_occurrence_get_roles);
   LOAD(indexstore_occurrence_get_line_col); LOAD(indexstore_occurrence_relations_apply_f);
   LOAD(indexstore_symbol_relation_get_roles); LOAD(indexstore_symbol_relation_get_symbol);
-  LOAD(indexstore_symbol_get_name); LOAD(indexstore_symbol_get_usr); LOAD(indexstore_symbol_get_kind);
+  LOAD(indexstore_symbol_get_name); LOAD(indexstore_symbol_get_usr); LOAD(indexstore_symbol_get_kind); LOAD(indexstore_symbol_get_subkind);
   handle err = NULL;
   store = indexstore_store_create(argv[2], &err);
   if (!store) { error(err); dlclose(library); return 1; }
