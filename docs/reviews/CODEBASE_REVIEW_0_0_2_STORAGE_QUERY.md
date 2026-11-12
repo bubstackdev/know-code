@@ -38,6 +38,25 @@ cargo test -p know-code-core --locked --lib query::tests::references_project_joi
 cargo test -p know-code-core --locked --test testing
 ```
 
+**M25 — repeated indexed-source prefix scans.** Declaration line projection now
+keeps at most 128 hash/byte-offset checkpoints during one query. Later offsets
+resume from the nearest earlier checkpoint, repeated offsets reuse their exact
+line, and earlier offsets still scan from a valid earlier position. Checkpoints
+contain line/CR state rather than source payloads and are cleared at both request
+boundaries. Cancellation and index-health checks also run on cache hits. This
+does not add a source-history cache or use current disk text. The regression
+covers CRLF across the blob chunk boundary, embedded NUL, multibyte text,
+backward offsets, bounded hints and request cleanup. The original report's
+suggestion of two unconditional scans per declaration is inaccurate: released
+code asks for the declaration line, not a separate extent line.
+
+Root validation requested:
+
+```sh
+cargo test -p know-code-core --locked --lib query::tests::indexed_line_checkpoints_preserve_crlf_nul_utf8_and_request_bounds -- --exact
+cargo test -p know-code-core --locked --lib query::tests::declaration_source_selects_exact_owner_origin_and_hash_before_limit -- --exact
+```
+
 ## Current-source baseline
 
 | IDs | Released-source disposition |

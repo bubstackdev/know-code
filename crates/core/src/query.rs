@@ -3,9 +3,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, config::DbConfig, param
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -13,6 +13,13 @@ use std::{
 
 pub const DEFAULT_SOURCE_BYTES: u32 = 16 * 1024;
 pub const MAX_SOURCE_BYTES: u32 = 256 * 1024;
+const MAX_LINE_CHECKPOINTS: usize = 128;
+
+#[derive(Clone, Copy)]
+struct LineCheckpoint {
+    line: u64,
+    previous_cr: bool,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -315,6 +322,9 @@ pub struct ReadView {
     execution: Arc<Mutex<Option<crate::execution::Execution>>>,
     stopped: Cell<Option<Stopped>>,
     projection_maximum: Cell<Option<usize>>,
+    // Request-local, bounded hints into immutable indexed content. The hash
+    // keeps compilation owners sharing bytes safe without conflating sources.
+    line_checkpoints: RefCell<BTreeMap<(String, u64), LineCheckpoint>>,
     pub(crate) health: crate::recovery::IndexReadGuard,
     logical_identity: Option<Vec<u8>>,
     // Public views retain their slot even while idle; controlled nested views
@@ -522,6 +532,7 @@ impl ReadView {
             execution,
             stopped: Cell::new(None),
             projection_maximum: Cell::new(None),
+            line_checkpoints: RefCell::new(BTreeMap::new()),
             health: health.clone(),
             logical_identity,
             _permit: permit,
@@ -583,11 +594,13 @@ impl ReadView {
             return Err(stopped.error());
         }
         *self.execution.lock().unwrap() = Some(execution.clone());
+        self.line_checkpoints.borrow_mut().clear();
         let result = crate::index_result(
             &self.health,
             self.check().and_then(|_| self.query_inner(request)),
         );
         let elapsed = execution.check();
+        self.line_checkpoints.borrow_mut().clear();
         *self.execution.lock().unwrap() = None;
         if let Err(error) = elapsed {
             self.expire(&error)?;
@@ -1208,17 +1221,34 @@ impl ReadView {
     // Streaming the indexed blob avoids loading an entire file or relying on
     // SQLite TEXT operations (which stop at embedded NULs) for line positions.
     fn source_line(&self, hash: &str, offset: u64) -> Result<u64> {
-        let rowid =
-            self.connection
-                .query_row("SELECT rowid FROM contents WHERE hash=?", [hash], |r| {
-                    r.get(0)
-                })?;
+        self.check()?;
+        let (start, checkpoint) = self
+            .line_checkpoints
+            .borrow()
+            .range((hash.to_owned(), 0)..=(hash.to_owned(), offset))
+            .next_back()
+            .map(|((_, start), checkpoint)| (*start, *checkpoint))
+            .unwrap_or((
+                0,
+                LineCheckpoint {
+                    line: 1,
+                    previous_cr: false,
+                },
+            ));
+        if start == offset {
+            return Ok(checkpoint.line);
+        }
+        let rowid = self
+            .connection
+            .prepare_cached("SELECT rowid FROM contents WHERE hash=?")?
+            .query_row([hash], |r| r.get(0))?;
         let mut blob = self
             .connection
             .blob_open("main", "contents", "utf8", rowid, true)?;
-        let mut remaining = offset;
-        let mut line = 1;
-        let mut previous_cr = false;
+        blob.seek(SeekFrom::Start(start))?;
+        let mut remaining = offset - start;
+        let mut line = checkpoint.line;
+        let mut previous_cr = checkpoint.previous_cr;
         let mut chunk = [0u8; 8192];
         while remaining > 0 {
             self.check()?;
@@ -1232,6 +1262,14 @@ impl ReadView {
             }
             remaining -= count as u64;
         }
+        let mut checkpoints = self.line_checkpoints.borrow_mut();
+        if checkpoints.len() == MAX_LINE_CHECKPOINTS {
+            checkpoints.clear();
+        }
+        checkpoints.insert(
+            (hash.to_owned(), offset),
+            LineCheckpoint { line, previous_cr },
+        );
         Ok(line)
     }
 
@@ -1850,6 +1888,63 @@ mod tests {
             assert_eq!(evidence.source_path, occurrence.location.path);
             assert_eq!(evidence.evidence[0].value, occurrence.compilation_id);
         }
+    }
+    #[test]
+    fn indexed_line_checkpoints_preserve_crlf_nul_utf8_and_request_bounds() {
+        let (path, _) = declaration_fixture();
+        let mut text = vec![b'x'; 8191];
+        text.extend_from_slice("\r\n\0π😀\r\nz\n".as_bytes());
+        text.extend_from_slice(&b"a\r\nb\nc\rd".repeat(160));
+        let hash = format!("{:x}", Sha256::digest(&text));
+        let mut writer = Writer::open_incremental(&path, &["lines".into()]).unwrap();
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: "lines".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Source(crate::protocol::SourceArtifact {
+                id: "lines".into(),
+                compilation_id: "lines".into(),
+                path: "lines.ts".into(),
+                utf8: text.clone(),
+                sha256: hash.clone(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: "lines".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer.publish().unwrap();
+        let view = crate::query::fixture_view(path).unwrap();
+        // Include a CRLF crossing the blob chunk boundary, offsets inside
+        // multibyte text and backward seeks after later checkpoints exist.
+        let offsets = (0..text.len())
+            .step_by(7)
+            .chain(8189..8210)
+            .chain((8189..8210).rev());
+        for offset in offsets {
+            let prefix = &text[..offset];
+            let breaks = prefix.iter().filter(|&&b| b == b'\r' || b == b'\n').count()
+                - prefix.windows(2).filter(|pair| *pair == b"\r\n").count();
+            assert_eq!(
+                view.source_line(&hash, offset as u64).unwrap(),
+                breaks as u64 + 1,
+                "offset {offset}"
+            );
+            assert!(view.line_checkpoints.borrow().len() <= MAX_LINE_CHECKPOINTS);
+        }
+        view.query(
+            serde_json::from_value(serde_json::json!({"op":"symbol_context","symbol_id":"opaque"}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(view.line_checkpoints.borrow().is_empty());
     }
     #[test]
     fn declaration_source_selects_exact_owner_origin_and_hash_before_limit() {
