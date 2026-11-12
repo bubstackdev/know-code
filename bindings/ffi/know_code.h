@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 uint32_t kc_abi_version(void);
-/* Shared fail-fast admission before host dispatch; compare the returned version. */
+/* Shared fail-fast admission and compact status; compare the returned version. */
 uint32_t kc_query_contract_version(void);
 /* NUL-terminated inputs checked for UTF-8. Query requests are scanned only up
  * to kc_query_max_request_bytes()+1 after admission. One owned UTF-8 JSON

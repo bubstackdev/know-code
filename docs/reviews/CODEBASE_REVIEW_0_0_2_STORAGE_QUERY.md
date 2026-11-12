@@ -196,6 +196,23 @@ cargo test -p know-code-core --locked --lib cursor::pages::tests
 cargo test -p know-code-core --locked --lib cursor::client::tests::incompatible_page_producer_peer_requires_update_before_reading_pages -- --exact
 ```
 
+Node query types and the .NET compact-status record describe this DTO; full
+WorkspaceStatus types stay unchanged. Both SDKs require native query contract 9
+and retain typed `update_required` for mismatched natives. The C header documents
+the same contract. Matching admission/cancellation/native-execution expectations
+are updated without changing those policies. The response-budget integration
+harness now calls the real C ABI with an explicit isolated reservation as well
+as CLI, Node and .NET. It checks the exact compact key set in ordinary replies
+and replays one C-ABI-created cursor through all four entry points, comparing
+complete responses and preserving coverage.
+
+```sh
+KNOW_CODE_BUILD_PROFILE=debug python3 tests/response_budget.py
+KNOW_CODE_BUILD_PROFILE=debug python3 tests/cursors.py
+KNOW_CODE_BUILD_PROFILE=debug python3 tests/query_admission.py
+KNOW_CODE_BUILD_PROFILE=debug python3 tests/query_cancellation.py
+```
+
 ## Static checks and broader handoff
 
 All owned Rust files pass standalone `rustfmt --edition 2024 --check`; all diffs

@@ -112,9 +112,18 @@ export interface QueryPage {
   page_size: number;
   sections: Partial<Record<'symbols' | 'occurrences' | 'contexts' | 'coverage' | 'findings' | 'boundaries', PageSection>>;
 }
+/** Bounded freshness/status evidence. Full configuration, progress and error detail: Workspace.status(). */
+export interface QueryCoordination {
+  /** Exact creation-time identities on cursor pages; empty if unavailable at creation. */
+  workspace_root: string; database: string;
+  phase: string; observed_epoch: number; published_epoch: number; generation: number;
+  available: boolean; has_error: boolean; outcome_code: string;
+  /** An unrecognized/overlong phase or outcome was projected to unknown. */
+  status_limited: boolean;
+}
 export interface QueryResult {
   generation: number; snapshot?: string; freshness: 'current' | 'stale' | 'unverified'; truncated: boolean;
-  coordination?: WorkspaceStatus;
+  coordination?: QueryCoordination;
   page?: QueryPage;
   workspace_coverage: { target_equivalence: Record<string, number>; test_classification: Record<string, number>;compilations: number; statuses: Record<string, number>; diagnostic_counts: Record<string, number>};
   coverage_scope: 'workspace' | 'relevant' | 'compilation';

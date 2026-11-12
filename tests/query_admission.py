@@ -46,7 +46,7 @@ def error(response,code):assert response.get('error',{}).get('code')==code,respo
 def node(mode,*,db=None,scope=None,payload=None,env=None):
  result=json.loads(run(['node',ROOT/'tests/query_admission.mjs',ADDON,scope or SCOPE,db or MISSING,
                         mode,json.dumps(payload) if payload is not None else ''],env=env).stdout)
- assert result['passed'] and result['contract']==8,result
+ assert result['passed'] and result['contract']==9,result
  return result
 
 def dotnet(*args,**kwargs):return json.loads(run(['dotnet',SMOKE,*args],**kwargs).stdout)
@@ -97,7 +97,7 @@ def holder():
  CHILDREN.append((child,stderr));selector=selectors.DefaultSelector();selector.register(child.stdout,selectors.EVENT_READ)
  try:
   assert selector.select(10),('Node holder did not report ready',child.poll())
-  line=child.stdout.readline();receipt=json.loads(line);assert receipt['ready'] and receipt['contract']==8,receipt
+  line=child.stdout.readline();receipt=json.loads(line);assert receipt['ready'] and receipt['contract']==9,receipt
   (RUN/'node-holder-ready.json').write_text(json.dumps(receipt,indent=2)+'\n')
   log({'args':child.args,'pid':child.pid,'ready':receipt})
   return child
@@ -149,7 +149,7 @@ try:
  ffi.kc_query_cancel_free.argtypes=[ctypes.c_void_p];ffi.kc_query_cancel_free.restype=None
  ffi.kc_workspace_json.argtypes=[ctypes.c_char_p];ffi.kc_workspace_json.restype=ctypes.c_void_p
  ffi.kc_string_free.argtypes=[ctypes.c_void_p];ffi.kc_string_free.restype=None
- assert ffi.kc_query_contract_version()==8 and ffi.kc_query_max_request_bytes()==262144
+ assert ffi.kc_query_contract_version()==9 and ffi.kc_query_max_request_bytes()==262144
  policy=value('queries')['result'];assert policy=={'version':1,'max_active_queries':4},policy
  assert value('queries','--scope',SCOPE)['result']==policy
  guard_and_slots=[SCOPE/'policy.lock',*[SCOPE/f'slot-{i:02}.lock' for i in range(4)]]

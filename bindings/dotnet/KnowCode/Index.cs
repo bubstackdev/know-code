@@ -8,6 +8,13 @@ namespace KnowCode;
 /// <summary>One shared embedding/server-host scope. Omit to use the account-wide scope.</summary>
 public sealed record QueryLimitScope(string Directory);
 
+/// <summary>Compact query freshness evidence. Full detail remains in Workspace.StatusAsync.
+/// Cursor identities are frozen with indexed locations; empty means unavailable at creation.
+/// StatusLimited marks phase/outcome tokens projected to unknown.</summary>
+public sealed record QueryCoordination(string WorkspaceRoot, string Database, string Phase,
+    ulong ObservedEpoch, ulong PublishedEpoch, ulong Generation, bool Available,
+    bool HasError, string OutcomeCode, bool StatusLimited);
+
 public sealed class Index
 {
     private readonly string database;
@@ -141,8 +148,8 @@ internal static partial class Native
     {
         try
         {
-            if (AbiVersion() != 1 || QueryContractVersion() != 8)
-                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; project execution trust or shared query admission is missing or incompatible.");
+            if (AbiVersion() != 1 || QueryContractVersion() != 9)
+                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; compact query status, frozen-page headroom or shared query admission is missing or incompatible.");
         }
         catch (EntryPointNotFoundException error) { throw new KnowCodeException("update_required", $"Update the Know Code managed/native packages together: {error.Message}"); }
         catch (DllNotFoundException error) { throw new KnowCodeException("native_library_unavailable", $"Install the matching Know Code native library: {error.Message}"); }

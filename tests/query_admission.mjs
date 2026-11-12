@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 const [addon,scope,database,mode,encoded] = process.argv.slice(2);
 const native = createRequire(pathToFileURL(addon))('./know_code.node');
 const {Index,Workspace,QueryLimitScope} = await import(pathToFileURL(addon));
-assert.equal(native.queryContractVersion(),8);
+assert.equal(native.queryContractVersion(),9);
 assert.equal(native.queryMaxRequestBytes(),262144);
 const index = new Index(database,new QueryLimitScope(scope));
 const request = {op:'symbols',name:'admissionTarget'};
@@ -30,7 +30,7 @@ if(mode==='hold') {
   const reservation=new native.QueryReservation(scope);
   try {
     assert.equal(reservation.errorJson,null);
-    console.log(JSON.stringify({ready:true,pid:process.pid,contract:8}));
+    console.log(JSON.stringify({ready:true,pid:process.pid,contract:9}));
     const lines=createInterface({input:process.stdin});
     for await(const line of lines) { if(line==='release') {lines.close();break;} }
   } finally {reservation.release();}
@@ -122,4 +122,4 @@ if(mode==='hold') {
   const response=await index.query(encoded?decode(encoded):request);
   details={response};
 } else {throw new Error('unknown admission fixture mode: '+mode);}
-if(mode!=='hold') console.log(JSON.stringify({passed:true,contract:8,mode,...details}));
+if(mode!=='hold') console.log(JSON.stringify({passed:true,contract:9,mode,...details}));
