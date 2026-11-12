@@ -64,6 +64,28 @@ Saved dependency inputs come from BSP target/dependency-closure source membershi
 
 ## Exact source evidence and bounded ingestion
 
+The shared [compiler argument helper](../providers/swift/compiler.mjs) redirects
+output/action slots for per-file IndexStore work and removes exactly three
+paired `-Xfrontend` module-preparation shortcuts: lazy typechecking,
+skip-non-exportable declarations, and allow-module-with-compiler-errors. Selected
+SDK/target, language version, defines, library evolution, imports and plugins
+remain intact. Fast module preparation does not use this helper and stays
+unchanged; readiness is separate from semantic completeness.
+
+The owned Xcode library-evolution fixture established this boundary: preserving
+the active shortcuts retained private/local declarations but lost required body
+calls; explicitly removing the three pairs recovered those calls/value-reference
+evidence in both device and simulator contexts. Independent body-error checks
+then reported partial coverage and the actual unresolved-value diagnostic,
+without inventing its symbol. Earlier non-evolution successes had explicitly
+ignored lazy/skip flags and did not cover that active case. These are finite
+compiler/IndexStore results, not complete Swift coverage or production Xcode
+bridge adoption. Retained receipts preserve the [failed active baseline](../.artifacts/implementation-0.0.3/xcode-evolution-graph-preserve-01/result.json),
+[full-body facts](../.artifacts/implementation-0.0.3/xcode-evolution-graph-full-body-01/result.json)
+and [body-error result](../.artifacts/implementation-0.0.3/xcode-evolution-body-error-full-01/result.json).
+The helper still requires the matching SwiftPM/native validation batch after
+integration.
+
 Source bytes retain SHA-256 identity and half-open UTF-8 ranges. IndexStore gives one-based UTF-8 line/column starts. The adapter scans only the token beginning at that compiler position; it never searches by symbol name or infers a binding. LF, CRLF, CR, UTF-8 BOMs, ordinary Unicode identifiers, escaped identifiers, and operators are covered by fixtures. Source bytes are rechecked after compiler analysis, preventing ranges from attaching to different saved text.
 
 Compiler anchors include punctuation: a subscript or array-type initializer can point at `[`, and an implicit computed getter's definition can point at `{` even without IndexStore's Implicit bit. Range operators begin with `.`. These are exact source tokens attached to compiler-provided identities/roles, not guessed identifier locations. Dot characters are accepted inside an operator only when its first character is a dot; a valid adjacent postfix `+` and `..<` remain separate tokens. Genuinely unsupported positions still mark coverage partial. Compiler-marked implicit occurrences without an independent token are omitted.
