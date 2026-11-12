@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {boundedRead} from './preparation.mjs';
+import {boundedRead, writeDerivedFile} from './preparation.mjs';
 import {compilerEnvironment} from './lsp.mjs';
 import {cargoSelection} from './policy.mjs';
 import {cargoArtifactIdentity, capturedUnit, capturedUnitCurrent, compilerCfg, compilerInputs,
@@ -19,7 +19,7 @@ const warning = (code, message) => ({code, message: message.slice(-4096), severi
 function jsonFile(filename, value, limit = LIMIT) {
   const encoded = JSON.stringify(value);
   if (Buffer.byteLength(encoded) > limit) unavailable(`derived state exceeds ${limit} bytes`);
-  fs.writeFileSync(filename, encoded);
+  writeDerivedFile(filename, encoded);
   return hash(encoded);
 }
 
@@ -119,7 +119,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
   const implementation = [wrapper, fileURLToPath(import.meta.url), fileURLToPath(new URL('./contexts.mjs', import.meta.url))];
   const setupEvidence = fileEvidence([...implementation, ...setupInputs.filter(item => !item.endsWith('.rs')), ...configurationInputs]);
   const fingerprint = hash(JSON.stringify([setupEvidence,
-    policy.features, policy.defaultFeatures, target ?? null,
+    policy.features, policy.defaultFeatures, target ?? null, process.env.PATH,
     Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(?:CARGO|RUST)/.test(name)))]));
   const state = path.join(policy.cacheDirectory, 'contexts', hash(JSON.stringify([manifest, target ?? null, policy.features, policy.defaultFeatures])));
   fs.mkdirSync(state, {recursive: true});
@@ -167,6 +167,8 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       artifacts = messages.filter(item => item.reason === 'compiler-artifact');
       buildScripts = messages.filter(item => item.reason === 'build-script-executed').map(item => ({packageId: item.package_id, outDir: item.out_dir}));
       const records = capturedRecords(directory), current = [], recapture = new Set(), unproven = [];
+      const selectedCompilers = new Set(records.filter(record => record.status === 0 && !record.error && !record.beforeInputs)
+        .map(record => fs.realpathSync(record.compiler)));
       capturedCount += records.filter(record => record.beforeInputs && record.status === 0 && !record.error).length;
       for (const item of messages.filter(item => item.reason === 'compiler-message')) {
         if (diagnostics.length < 100) diagnostics.push({code: item.message?.code?.code ?? 'rustc',
@@ -188,7 +190,8 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
           else if (candidates.length > 1) unavailable('multiple compiler captures match one Cargo artifact');
           else if (artifact.fresh) {
             const saved = previous.filter(item => capturedUnitCurrent(item, artifact));
-            if (saved.length === 1 && JSON.stringify(compilerCfg(saved[0].record, query)) === JSON.stringify(saved[0].cfg)) unit = saved[0];
+            if (saved.length === 1 && selectedCompilers.size === 1 && selectedCompilers.has(fs.realpathSync(saved[0].record.compiler)) &&
+                JSON.stringify(compilerCfg(saved[0].record, query)) === JSON.stringify(saved[0].cfg)) unit = saved[0];
           }
           if (!unit) unavailable('no matching successful compiler/input/artifact proof');
           // Store only the consumed subset of the pre-Cargo package snapshot.

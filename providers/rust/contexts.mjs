@@ -99,7 +99,7 @@ export function compilerInputs(record) {
 }
 
 function fileDigest(filename, limit) {
-  const descriptor = fs.openSync(filename, 'r');
+  const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   try {
     const initial = fs.fstatSync(descriptor);
     if (!initial.isFile() || initial.size > limit) gap(`file exceeds bounded hashing allowance: ${filename}`);
@@ -209,7 +209,7 @@ export function selectedProject(units, selected, metadata) {
   const crates = reachable.map(index => {
     const unit = units[index], member = metadata.workspace_members.includes(unit.cargo.package_id);
     const procMacro = unit.cargo.target.kind.includes('proc-macro');
-    if (procMacro) gap('captured procedural-macro replay requires an exact dylib mapping');
+    if (procMacro) gap('captured procedural-macro replay requires proven expansion-origin identities');
     return {display_name: unit.cfg.name, root_module: unit.cfg.root, edition: unit.cfg.edition,
       cfg: unit.cfg.effective, env: unit.record.environment, is_workspace_member: member,
       ...(unit.cfg.target ? {target: unit.cfg.target} : {}),

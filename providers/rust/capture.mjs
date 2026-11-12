@@ -4,14 +4,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
-import {boundedRead} from './preparation.mjs';
+import {boundedRead, writeDerivedFile} from './preparation.mjs';
 import {contextArguments, fileEvidence, flagValues} from './contexts.mjs';
 
 const LIMIT = 8 * 1024 * 1024;
 const [compiler, ...args] = process.argv.slice(2);
 const record = {compiler, args, cwd: process.cwd(), environment: {}, absentEnvironment: [], artifacts: [], status: null};
 function compilerStdio() {
-  const descriptors = [...(process.env.CARGO_MAKEFLAGS ?? '').matchAll(/--jobserver-(?:auth|fds)=(\d+),(\d+)(?=\s|$)/g)]
+  const tokens = (process.env.CARGO_MAKEFLAGS ?? '').match(/--jobserver-(?:auth|fds)(?:=[^\s]*)?/g) ?? [];
+  if (tokens.some(token => !/^--jobserver-(?:auth|fds)=\d+,\d+$/.test(token)))
+    throw new Error('Rust context unavailable: unsupported Cargo jobserver coordination format');
+  const descriptors = [...tokens.join(' ').matchAll(/--jobserver-(?:auth|fds)=(\d+),(\d+)(?=\s|$)/g)]
     .flatMap(match => [Number(match[1]), Number(match[2])]);
   const stdio = ['pipe', 'pipe', 'pipe'];
   for (const descriptor of new Set(descriptors)) {
@@ -78,6 +81,6 @@ if (configuration?.directory) {
   let encoded = JSON.stringify(record);
   if (Buffer.byteLength(encoded) > LIMIT) encoded = JSON.stringify({compiler, args, cwd: record.cwd, status: null,
     error: 'resource-limited: compiler capture exceeds 8 MiB'});
-  fs.writeFileSync(path.join(configuration.directory, `${process.pid}.json`), encoded);
+  writeDerivedFile(path.join(configuration.directory, `${process.pid}.json`), encoded);
 }
 process.exitCode = record.status === 0 && !record.error ? 0 : record.status || 1;

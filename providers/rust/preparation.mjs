@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {cargoSelection} from './policy.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -10,7 +10,7 @@ const exists = filename => { try { return fs.statSync(filename).isFile(); } catc
 const SETUP_FILE_BYTES = 8 * 1024 * 1024;
 const PLAN_BYTES = 8 * 1024 * 1024;
 export function boundedRead(filename, limit) {
-  const descriptor = fs.openSync(filename, 'r');
+  const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   try {
     const stat = fs.fstatSync(descriptor);
     if (!stat.isFile() || stat.size > limit) throw new Error(`resource-limited: Rust setup input exceeds ${limit} bytes: ${filename}`);
@@ -24,6 +24,19 @@ export function boundedRead(filename, limit) {
     if (length !== stat.size) throw new Error(`Rust setup input changed while reading: ${filename}`);
     return buffer.subarray(0, length);
   } finally { fs.closeSync(descriptor); }
+}
+
+export function writeDerivedFile(filename, bytes) {
+  const temporary = `${filename}.${process.pid}.${randomUUID()}.next`;
+  let retained = false;
+  try {
+    // Exclusive creation cannot open a pre-existing FIFO/symlink. Replacing the
+    // derived target atomically also avoids opening corrupt target file types.
+    fs.writeFileSync(temporary, bytes, {flag: 'wx', mode: 0o600});
+    retained = true;
+    fs.renameSync(temporary, filename);
+    retained = false;
+  } finally { if (retained) fs.unlinkSync(temporary); }
 }
 function readPlan(filename, fingerprint) {
   try {
@@ -90,7 +103,7 @@ export function prepareCargo({request, root, manifest, metadata, policy, identit
     fs.mkdirSync(state, {recursive: true});
     const encoded = JSON.stringify(plan);
     if (Buffer.byteLength(encoded) > PLAN_BYTES) throw new Error(`resource-limited: Cargo dependency plan exceeds ${PLAN_BYTES} bytes`);
-    fs.writeFileSync(planFile, encoded);
+    writeDerivedFile(planFile, encoded);
   } catch (cause) { error = cause.message.slice(-4096); }
   send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
   if (error) throw new Error(`Cargo dependency preparation failed: ${error}`);
