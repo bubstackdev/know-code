@@ -1,0 +1,50 @@
+# v0.0.2 Snow Leopard runtime review
+
+Base: released `e20da5db9f359311b0bc6b2be30ff9db94ac99c3`. This lane is stabilization only; planned new features remain later work. The original CODEBASE-REVIEW.md and pre-tag triage describe an older changing tree. Current functions and regression names take precedence over old line numbers and severity labels.
+
+No compiler, native build, cargo test/clippy, integration script, live service, VM or original corpus operation has run in this lane. Rustfmt parsing/formatting, Python AST parsing and `git diff --check` are static checks. Added tests below need root's serial validation.
+
+## Current dispositions
+
+| ID | Released-code finding and current action |
+| --- | --- |
+| H2 | Already fixed: `wait_for_workspace` captures enrollment identity, uses checked lookups after wake, rejects re-enrollment, and unregister notifies. Existing `queued_wait_is_safe_when_enrollment_is_removed_or_replaced` tests both transitions. Extracted unchanged function/test into `coordinator/wait.rs`. |
+| H3 | Already fixed: `finish_job` converts unwind to a terminal `JobPanicked`; host retires the coordinator rather than trusting poisoned invariants. Cursor `Publication` drop drains its pending ownership during unwind. Existing `job_unwind_has_a_terminal_owner_event` and `publication_unwind_drains_ownership_without_reusing_poisoned_state` remain. Extracted unchanged host boundary/test into `coordinator/jobs.rs`. |
+| H7 | Already fixed: `CursorRegistry::retire` is idempotent for a preceding BAD sweep. The remaining expect follows exclusive registry ownership. Existing `removed_initial_borrow_cleanup_is_idempotent_after_bad_sweep`. |
+| H8 | Already fixed: sweep continues after healthy retirement failures, retains entries/debt, exposes warning and retries. Existing `healthy_cleanup_failure_keeps_debt_and_allows_sibling_read_and_publish` and failed-file/BAD tests. No zeroing liabilities. |
+| M5 | Already fixed: CPU throttling is honored before taking the cursor fence; the publication control clone keeps cancellation but does not CPU-park there. Existing paused-publication/fence regressions. Commit/cancel linearization stays unchanged. |
+| M6 | Confirmed remaining lock coupling: cancel in `serve` holds entries/active_job while waiting on `Control::cancel/committed`; `Control::publish` must retain its commit-wins lock. Next bounded seam must snapshot the actual job, perform its potentially blocking control operation without entries, then revalidate enrollment/job ownership before changing status. Simply moving locks can cancel a replacement job; not done in this batch. |
+| M7 | Already fixed: nonblocking `WorkerPipe` checks cancellation and owned leader terminal status; stdout/stderr drain is finite even with escaped descendants. Terminal classification excludes CLD_STOPPED. Existing update pipe, cancellation and natural-exit regressions cover the released correction. No cause inferred for earlier uncaptured process status. |
+| M8 | Confirmed residual entries-held settings/lifecycle/registry I/O in registration and observation paths. Requires short preparation/apply seams with enrollment/incarnation revalidation, coordinated with registry/recovery owners. No broad registry rewrite or swallowed durable errors in this batch. |
+| M18 | Existing page borrows do not allocate retention or run global budget measurement; H8 isolates known charged cleanup failure. Publication/admission still refuses if retained debt truly cannot be measured. That conservative refusal is required; counting unknown bytes as zero would violate the shared pool. No evidence justifies bypassing it. |
+| M19 | Deadline-insensitive cursor mutex waits, CPU parking and writer-drop/checkpoint-under-fence claims were already corrected. `lock_controlled` observes deadline while waiting. Commit, bounded retention SQL and result verification still serialize under the fence; this batch does not claim measured tail latency or remove the publication/admission starvation guard. Existing delayed-lock and paused-publication tests remain the focused gates. |
+| M20 | Explicit bounded failure, not silent generation/source switching. Added maximum-response-cap metadata-growth regression: return `response_limit_exceeded` and leave frozen findings unchanged. At the maximum cap the caller must restart with a smaller requested projection/result where possible; no larger-cap retry is available. Do not strip mandatory currentness/evidence or invent an unlimited replay guarantee. |
+| L1 | Residual same-user truncation/SIGBUS hardening risk for memory-mapped live/health pages. Length rechecks cannot close a concurrent truncation race; replacing atomic mapped-state access is not a safe one-line fix. Owner-only local-state trust and the existing corruption boundaries remain explicit. Coordinate any health-page change with the recovery owner; no cross-file rewrite here. |
+| L2 | Residual macOS socket-to-FD_CLOEXEC window. Both paths promptly set CLOEXEC and close on setup failure; a process-wide fork mutex cannot control embedding-host forks. Do not add unsupported SOCK_CLOEXEC flags on Darwin or falsely claim fcntl is atomic with other threads' fork. Platform-level solution needs a separately reviewed compatible mechanism. |
+| L7 | Existing private directory creation and mode0600 socket remain. Blind chmod on a user-supplied data root can alter unrelated caller-owned directories. Same-user peer validation and existing-directory policy need a focused security seam/negative proof; no blanket chmod or new root-path restriction imposed here. |
+| L8 | Same remaining per-workspace I/O/entries coupling as M8, not an independently measured hundreds-workspace regression. Preserve bounded scheduling and original identity/input reconciliation while separating blocking preparation. |
+| L9 | Safe daemon exit on failed durable registry/control persistence is intentional. Live-owner/fence invalidation and restart reconciliation must remain; do not replace `?` with ignored errors to call a full disk recoverable. Workspace-local derived errors remain separate. |
+| L10 | Existing64 serve-thread bound and <=120s waits are finite overload behavior, not an unbounded thread leak. A focused saturated-ingress/status/cancel gate is still useful before selecting a reserved path; no new queue/admission policy introduced on source inspection alone. |
+| L11 | Fixed in lane: a dedicated configuration mutex serializes durable settings replacements, while the sampled effective-limits mutex is held only for comparison/replacement. Failed save leaves old effective limits; unchanged input avoids save. Deterministic barrier test checks readable limits during a blocked failed save and later successful replacement. |
+| L12 | Fixed in lane: out-of-range position on a validated result descriptor returns `invalid_request`, preserving the shared token. Corrupt bytes/owner/generation/header still invalidate. Unit replay plus CLI/Node/.NET shared-token replay regression added. |
+| L13 | Fixed in lane: maintenance retries the same bounded safe startup reset only when there is no result-store ownership or cursor entry. Foreign/unsafe files still fail closed and remain untouched. Explicit owner repair can restore pagination without a coordinator restart; test covers foreign metadata preservation, manual repair, admission and replay. The4096-entry bound is unchanged. |
+| L14 | Tokenless completion after a late deadline remains bounded by the same count/shared-byte/idle/absolute leases. Repeated completion does not remove those bounds; post-finish shared ownership cannot be discarded using a stale creator claim. No unbounded leak proved or stronger zero-orphan guarantee adopted. Keep cancellation cleanup/absolute expiry regressions. |
+| L15 | Several bounded materialization/encoding/parsing copies remain possible; four shared query slots and16MiB per-result bounds are not a hard process-RSS guarantee. Reducing copies needs measured representative peaks, preserving exact page/header/evidence semantics; no invented memory SLO or second query engine. |
+
+## Architecture3 scope
+
+Only two existing tested seams are extracted: enrollment-bound waiting and terminal job completion. `Entry`, registry persistence, scheduler transitions and recovery policy stay in the coordinator; no replacement state machine or generic service framework is introduced. Architecture4/5 durable schema/accounting/recovery edits require coordination with root/query owners. The remaining M6/M8 work is explicitly unresolved, not hidden by moving files.
+
+## Root validation needed
+
+Run on this lane or the assembled matching source in the single heavy slot:
+
+```sh
+cargo test -p know-code-core --locked configuration_io_keeps_limits_readable_and_failed_save_keeps_effective_value
+cargo test -p know-code-core --locked out_of_range_position_is_request_error_and_valid_page_remains_replayable
+cargo test -p know-code-core --locked repaired_startup_result_cache_recovers_without_deleting_foreign_entries
+cargo test -p know-code-core --locked maximum_cap_metadata_growth_is_explicit_and_never_changes_frozen_findings
+cargo test -p know-code --locked coordinator::
+```
+
+Then matching build + `KNOW_CODE_BUILD_PROFILE=debug python3 tests/cursors.py`, affected resource/coordinator/WAL checks, and ordinary fmt/clippy. The three-binding cursor regression requires matching new native artifacts; old installed0.0.1 binaries must not be used to judge the changed error contract. Root should test both profiles before final certification. None of these commands is claimed executed here.
