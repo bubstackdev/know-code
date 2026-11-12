@@ -227,7 +227,7 @@ try {
 const reference = await packageTool(selection('npm@11.21.2'), cache, () => {});
 const simulated = path.join(run, 'cache-race');
 fs.mkdirSync(simulated);
-fs.cpSync(reference.cacheDirectory, path.join(simulated, 'package'), {recursive: true});
+fs.cpSync(reference.cacheDirectory, path.join(simulated, 'package'), {recursive: true, verbatimSymlinks: true});
 await runCommand('/usr/bin/tar', ['-czf', path.join(simulated, 'tool.tgz'), '-C', simulated, 'package'], run);
 const compressed = fs.readFileSync(path.join(simulated, 'tool.tgz'));
 write(path.join(simulated, 'metadata.json'), JSON.stringify({name: 'npm', version: '11.21.2', dist: {
@@ -250,12 +250,39 @@ assert.equal(tools[0].cacheDirectory, tools[1].cacheDirectory);
 assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 2, 'concurrent cache acquisition downloaded more than one metadata/archive pair');
 assert(fs.readdirSync(raceCache).every(p => !p.includes('.lock') && !p.includes('.staging-')));
 const manifest = path.join(tools[0].cacheDirectory, 'tool.json');
+const installed=tools[0].cacheDirectory;
+const savedManifest=fs.readFileSync(manifest);
+const requiredModule=path.join(installed,'lib/cli.js'), savedModule=fs.readFileSync(requiredModule);
+const savedMode=fs.statSync(requiredModule).mode&0o777;
+const restoreModule=()=>{fs.writeFileSync(requiredModule,savedModule);fs.chmodSync(requiredModule,savedMode);};
+const extra=path.join(installed,'unexpected-module.js');
+const outsideModule=path.join(simulated,'outside.js');fs.writeFileSync(outsideModule,'export {};\n');
+const corruptionChecks=[];
+try {
+  globalThis.fetch = () => { throw new Error('offline corrupted cache'); };
+  for (const [name,damage,repair] of [
+    ['changed_required_module',()=>fs.appendFileSync(requiredModule,'\n// changed module\n'),restoreModule],
+    ['missing_required_module',()=>fs.unlinkSync(requiredModule),restoreModule],
+    ['changed_executable_mode',()=>fs.chmodSync(requiredModule,savedMode^0o100),()=>fs.chmodSync(requiredModule,savedMode)],
+    ['added_file',()=>fs.writeFileSync(extra,'export {};\n'),()=>fs.unlinkSync(extra)],
+    ['outside_symlink',()=>fs.symlinkSync(path.relative(installed,outsideModule),extra),()=>fs.unlinkSync(extra)],
+    ['legacy_entry_only_manifest',()=>write(manifest,JSON.stringify({...JSON.parse(savedManifest),format:1})),()=>fs.writeFileSync(manifest,savedManifest)]
+  ]) {
+    damage();
+    try { await assert.rejects(packageTool(selection('npm@11.21.2'),raceCache,()=>{}),/offline corrupted cache/); }
+    finally { repair(); }
+    assert.equal((await packageTool(selection('npm@11.21.2'),raceCache,()=>{})).source,'user-cache');
+    assert(fs.readdirSync(raceCache).every(p=>!p.includes('.lock')&&!p.includes('.staging-')));
+    corruptionChecks.push(name);
+  }
+} finally { globalThis.fetch=originalFetch; }
 const corrupted = JSON.parse(fs.readFileSync(manifest)); corrupted.version = '0.0.0'; write(manifest, JSON.stringify(corrupted));
 try {
   globalThis.fetch = () => { throw new Error('offline corrupted cache'); };
   await assert.rejects(packageTool(selection('npm@11.21.2'), raceCache, () => {}), /offline corrupted cache/);
 } finally { globalThis.fetch = originalFetch; }
 const summary = {result: 'passed', node: process.version, cache, cells,
+  wholeCacheCorruptionChecks: corruptionChecks,
   cacheChecks: ['unsupported_pins', 'bounded_metadata_stream', 'warm_offline_reuse', 'cold_offline_failure_and_cleanup', 'two_process_acquisition_deduplication', 'corrupted_cache_not_used'],
   inputChecks: ['absent_default_hook_creation', 'ini_selected_external_hook_creation', 'user_yaml_selected_external_hook_change', 'arbitrary_basename_user_ini_hook']};
 fs.writeFileSync(path.join(run, 'result.json'), JSON.stringify(summary, null, 2) + '\n');

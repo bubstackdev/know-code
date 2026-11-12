@@ -17,7 +17,7 @@ use std::{
 
 pub const DEFAULT_DEADLINE_MS: u32 = 5_000;
 pub const MAX_DEADLINE_MS: u32 = 120_000;
-pub const QUERY_CONTRACT_VERSION: u32 = 8;
+pub const QUERY_CONTRACT_VERSION: u32 = 9;
 pub const DEFAULT_RESPONSE_BYTES: u32 = 256 * 1024;
 pub const MAX_RESPONSE_BYTES: u32 = 2 * 1024 * 1024;
 pub const MIN_RESPONSE_BYTES: u32 = 1024;
@@ -274,6 +274,7 @@ pub(crate) fn connect(path: &Path, execution: Execution) -> Result<UnixStream> {
             return Err(error.into());
         }
     }
+    crate::control::verify_peer(&stream)?;
     execution.check()?;
     Ok(stream)
 }

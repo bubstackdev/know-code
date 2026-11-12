@@ -11,12 +11,14 @@ const directory = path.join(root, '.artifacts/jsonrpc');
 fs.mkdirSync(directory, {recursive: true});
 const fixture = path.join(directory, 'child.mjs');
 fs.writeFileSync(fixture, String.raw`
+import {once} from 'node:events';
 const mode = process.argv[2];
 const frame = value => {
   const body = Buffer.from(JSON.stringify({jsonrpc:'2.0', ...value}));
   return Buffer.concat([Buffer.from('Content-Length: ' + body.length + '\r\n\r\n'), body]);
 };
 let buffer = Buffer.alloc(0), original;
+if (mode === 'slow-reader') { process.stdin.pause(); setTimeout(() => process.stdin.resume(), 100); }
 process.stdin.on('data', chunk => {
   buffer = Buffer.concat([buffer, chunk]);
   for (;;) {
@@ -31,6 +33,7 @@ process.stdin.on('data', chunk => {
       continue;
     }
     if (mode === 'hang') continue;
+    if (mode === 'slow-reader') { process.stdout.write(frame({id:message.id,result:message.params.number})); continue; }
     if (mode === 'exit') process.exit(7);
     if (mode === 'rpc-error') { process.stdout.write(frame({id:message.id,error:{code:-32601,message:'Method not found',data:{method:message.method}}})); continue; }
     if (mode === 'zero') { process.stdout.write('Content-Length: 0\r\n\r\n'); continue; }
@@ -44,6 +47,15 @@ process.stdin.on('data', chunk => {
       continue;
     }
     const response = frame({id:message.id,result:message.params});
+    if (mode === 'large-fragmented') {
+      (async () => {
+        for (let start=0;start<response.length;start+=257) {
+          if (!process.stdout.write(response.subarray(start,start+257))) await once(process.stdout,'drain');
+          await new Promise(resolve=>setImmediate(resolve));
+        }
+      })().catch(error=>{console.error(error);process.exit(1);});
+      continue;
+    }
     const header = response.indexOf('\r\n\r\n');
     const unicode = response.indexOf(Buffer.from('🦀'));
     const cuts = [0, 7, header+2, unicode+1, response.length];
@@ -124,6 +136,30 @@ await withChild('hang', async rpc => {
   assert.equal(rpc.pending.size,0);
 });
 checks.push('outgoing frame bound and pending cleanup');
+
+await withChild('large-fragmented', async rpc => {
+  const text = 'café 🦀'.repeat(200000);
+  assert.deepEqual(await rpc.request('echo', {text}), {text});
+}, {timeout:10000});
+checks.push('multi-megabyte fragmented response retains exact Unicode payload');
+
+await withChild('slow-reader', async rpc => {
+  const responses = await Promise.all(Array.from({length:20}, (_,number) =>
+    rpc.request('ordered', {number,text:'x'.repeat(512*1024)})));
+  assert.deepEqual(responses,Array.from({length:20},(_,i)=>i));
+  assert.equal(rpc.pending.size,0);
+}, {timeout:10000});
+checks.push('backpressured multi-frame writes drain in order without loss');
+
+await withChild('hang', async rpc => {
+  // The child never consumes enough to permit unbounded producer buffering.
+  rpc.child.stdin.cork();
+  try {
+    for (let i=0;i<16;i++) rpc.notify('queued',{text:'x'.repeat(1024*1024)});
+    assert.throws(()=>rpc.notify('overflow',{text:'x'.repeat(1024*1024)}),/outgoing JSON-RPC queue exceeds/);
+  } finally { rpc.child.stdin.uncork(); }
+});
+checks.push('outgoing aggregate queue is bounded while the pipe is blocked');
 
 const summary = {passed:true,checks};
 fs.writeFileSync(path.join(directory,'latest.json'), JSON.stringify(summary,null,2)+'\n');

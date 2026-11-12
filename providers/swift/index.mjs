@@ -4,8 +4,9 @@ import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {send, MAX_FRAME} from '../shared/protocol.mjs';
+export {relative} from '../shared/source.mjs';
+import {relative} from '../shared/source.mjs';
 const repo = fileURLToPath(new URL('../..', import.meta.url));
-export const relative = (root, file) => path.relative(root, file).split(path.sep).join('/');
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const kinds = ['unknown', 'module', 'namespace', 'namespace_alias', 'macro', 'enum', 'struct', 'class',
   'protocol', 'extension', 'union', 'typealias', 'function', 'variable', 'field', 'enum_constant',

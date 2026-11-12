@@ -33,9 +33,9 @@ if(!isMainThread) {
   assert.notEqual(addon,production,'diagnostic artifact must not replace default output');
   await mkdir(scope,{recursive:true});await mkdir(evidence,{recursive:true});
   const defaultNative=require(production);
-  assert.equal(defaultNative.queryContractVersion(),8);
+  assert.equal(defaultNative.queryContractVersion(),9);
   assert.deepEqual(Object.keys(defaultNative).filter(name=>/^test[A-Z]/.test(name)),[],'default native artifact exposes diagnostic hooks');
-  const native=require(addon);assert.equal(native.queryContractVersion(),8);
+  const native=require(addon);assert.equal(native.queryContractVersion(),9);
   assert.equal(typeof native.testQuery,'function');
   const checks=[];const details={};const gates=new Set();
   const gate=()=>{const id=native.testCreateGate();gates.add(id);return id;};
@@ -122,7 +122,7 @@ if(!isMainThread) {
       checks.push('worker_environment_shutdown_cancels_owned_query_and_fences_late_settlement');
     }
     const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex');
-    const result={status:'passed',contract:8,node:process.versions.node,scope,checks,details,
+    const result={status:'passed',contract:9,node:process.versions.node,scope,checks,details,
       artifacts:{[addon]:await hash(addon),[production]:await hash(production)},
       harness_sha256:await hash(fileURLToPath(import.meta.url)),
       limits:['finite test-only native gate; not a query latency or encoding-contention SLO','separate diagnostic add-on; default artifact verified without test exports','no coordinator, live workspace, install or account admission scope used']};

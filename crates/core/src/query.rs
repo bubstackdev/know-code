@@ -3,9 +3,9 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, config::DbConfig, param
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::Path,
     sync::{Arc, Mutex},
     time::Duration,
@@ -13,6 +13,13 @@ use std::{
 
 pub const DEFAULT_SOURCE_BYTES: u32 = 16 * 1024;
 pub const MAX_SOURCE_BYTES: u32 = 256 * 1024;
+const MAX_LINE_CHECKPOINTS: usize = 128;
+
+#[derive(Clone, Copy)]
+struct LineCheckpoint {
+    line: u64,
+    previous_cr: bool,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -229,7 +236,7 @@ pub struct QueryResult {
     // An explicit refresh prototype cannot claim it observes later saved files.
     pub freshness: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub coordination: Option<crate::protocol::WorkspaceStatus>,
+    pub coordination: Option<QueryCoordination>,
     pub workspace_coverage: WorkspaceCoverage,
     pub coverage_scope: &'static str,
     pub coverage: Vec<Coverage>,
@@ -244,6 +251,78 @@ pub struct QueryResult {
     pub graph: Option<crate::graph::GraphResult>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contexts: Vec<SymbolContext>,
+}
+
+/// Freshness evidence for ordinary queries. Full configuration, progress and
+/// error detail remain available through the workspace-status operation.
+#[derive(Clone, Debug, Serialize)]
+pub struct QueryCoordination {
+    pub workspace_root: String,
+    pub database: String,
+    pub phase: String,
+    pub observed_epoch: u64,
+    pub published_epoch: u64,
+    pub generation: u64,
+    pub available: bool,
+    pub has_error: bool,
+    pub outcome_code: String,
+    pub status_limited: bool,
+}
+impl From<&crate::protocol::WorkspaceStatus> for QueryCoordination {
+    fn from(status: &crate::protocol::WorkspaceStatus) -> Self {
+        let (phase, phase_limited) = Self::token(&status.phase);
+        let (outcome_code, outcome_limited) = Self::token(&status.outcome_code);
+        Self {
+            workspace_root: status.workspace_root.clone(),
+            database: status.database.clone(),
+            phase,
+            observed_epoch: status.observed_epoch,
+            published_epoch: status.published_epoch,
+            generation: status.generation,
+            available: status.available,
+            has_error: !status.error.is_empty(),
+            outcome_code,
+            status_limited: phase_limited || outcome_limited,
+        }
+    }
+}
+impl QueryCoordination {
+    const MAX_TOKEN_BYTES: usize = 32;
+    fn token(value: &str) -> (String, bool) {
+        if value.len() <= Self::MAX_TOKEN_BYTES
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        {
+            (value.into(), false)
+        } else {
+            ("unknown".into(), true)
+        }
+    }
+    pub(crate) fn bounded(mut self) -> Self {
+        for token in [&mut self.phase, &mut self.outcome_code] {
+            let (projected, limited) = Self::token(token);
+            *token = projected;
+            self.status_limited |= limited;
+        }
+        self
+    }
+    // The identities stay frozen with each saved page; only these finite
+    // status fields can grow. False is the longest JSON boolean spelling.
+    pub(crate) fn maximum_live(workspace_root: String, database: String) -> Self {
+        Self {
+            workspace_root,
+            database,
+            phase: "x".repeat(Self::MAX_TOKEN_BYTES),
+            observed_epoch: u64::MAX,
+            published_epoch: u64::MAX,
+            generation: u64::MAX,
+            available: false,
+            has_error: false,
+            outcome_code: "x".repeat(Self::MAX_TOKEN_BYTES),
+            status_limited: false,
+        }
+    }
 }
 
 struct SourceRead<'a> {
@@ -315,6 +394,9 @@ pub struct ReadView {
     execution: Arc<Mutex<Option<crate::execution::Execution>>>,
     stopped: Cell<Option<Stopped>>,
     projection_maximum: Cell<Option<usize>>,
+    // Request-local, bounded hints into immutable indexed content. The hash
+    // keeps compilation owners sharing bytes safe without conflating sources.
+    line_checkpoints: RefCell<BTreeMap<(String, u64), LineCheckpoint>>,
     pub(crate) health: crate::recovery::IndexReadGuard,
     logical_identity: Option<Vec<u8>>,
     // Public views retain their slot even while idle; controlled nested views
@@ -522,6 +604,7 @@ impl ReadView {
             execution,
             stopped: Cell::new(None),
             projection_maximum: Cell::new(None),
+            line_checkpoints: RefCell::new(BTreeMap::new()),
             health: health.clone(),
             logical_identity,
             _permit: permit,
@@ -583,11 +666,13 @@ impl ReadView {
             return Err(stopped.error());
         }
         *self.execution.lock().unwrap() = Some(execution.clone());
+        self.line_checkpoints.borrow_mut().clear();
         let result = crate::index_result(
             &self.health,
             self.check().and_then(|_| self.query_inner(request)),
         );
         let elapsed = execution.check();
+        self.line_checkpoints.borrow_mut().clear();
         *self.execution.lock().unwrap() = None;
         if let Err(error) = elapsed {
             self.expire(&error)?;
@@ -828,11 +913,11 @@ impl ReadView {
                 ));
             }
         }
-        if request.coverage_detail != CoverageDetail::Full
-            && request.op != "coverage"
-            && result.graph.is_none()
-        {
+        if request.coverage_detail != CoverageDetail::Full && request.op != "coverage" {
             let mut relevant = relevant_roots;
+            if let Some(graph) = &result.graph {
+                relevant.extend(graph.relevant_compilations.iter().cloned());
+            }
             for s in &result.symbols {
                 relevant.insert(s.compilation_id.clone());
                 relevant.extend(
@@ -922,11 +1007,11 @@ impl ReadView {
         let mut owners = BTreeSet::new();
         for key in &roots {
             self.check()?;
-            owners.insert(self.connection.query_row(
-                "SELECT compilation_id FROM symbols WHERE rowid=?",
-                [key],
-                |r| r.get::<_, String>(0),
-            )?);
+            owners.insert(
+                self.connection
+                    .prepare_cached("SELECT compilation_id FROM symbols WHERE rowid=?")?
+                    .query_row([key], |r| r.get::<_, String>(0))?,
+            );
         }
         let roots_json = serde_json::to_string(&roots)?;
         let predicate = request.tests.predicate("t.mask");
@@ -949,13 +1034,13 @@ impl ReadView {
         let sql=format!("WITH uses AS NOT MATERIALIZED (
             SELECT s.id AS symbol_id,s.compilation_id,c.target,s.generation AS owner_generation,
                 {family} AS family,s.finding_key,a.id AS artifact_id,a.path,a.content_hash,
-                o.start_byte,o.end_byte,a.generated,t.mask
+                o.start_byte,o.end_byte,a.generated,t.mask,t.classification_json
             FROM grouped_symbols s {joins}
             JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id
             JOIN test_origin_masks t ON t.owner_generation=s.generation AND t.compilation_id=s.compilation_id AND t.artifact_id=a.id
             WHERE s.symbol_key IN(SELECT value FROM json_each(?1)) AND o.role='reference' AND {predicate}
         ), selected AS MATERIALIZED (SELECT {key} FROM uses GROUP BY {key} ORDER BY {key} LIMIT ?2)
-        SELECT dense_rank() OVER (ORDER BY {key}),symbol_id,compilation_id,target,artifact_id,path,content_hash,start_byte,end_byte,generated,owner_generation
+        SELECT dense_rank() OVER (ORDER BY {key}),symbol_id,compilation_id,target,artifact_id,path,content_hash,start_byte,end_byte,generated,classification_json
         FROM uses JOIN selected USING({key}) ORDER BY {key},target,compilation_id,symbol_id");
         let mut q = self.connection.prepare(&sql)?;
         let mut rows = q.query(params![roots_json, request.limit + 1])?;
@@ -983,11 +1068,9 @@ impl ReadView {
             };
             let mut support = support;
             support.test_classification = crate::testing::origin(
-                &self.connection,
-                r.get(10)?,
-                &support.compilation_id,
                 &support.location.artifact_id,
                 &support.location.path,
+                &r.get::<_, String>(10)?,
             )?;
             if rank > output.len() {
                 let occurrence = OccurrenceResult {
@@ -1210,17 +1293,36 @@ impl ReadView {
     // Streaming the indexed blob avoids loading an entire file or relying on
     // SQLite TEXT operations (which stop at embedded NULs) for line positions.
     fn source_line(&self, hash: &str, offset: u64) -> Result<u64> {
-        let rowid =
-            self.connection
-                .query_row("SELECT rowid FROM contents WHERE hash=?", [hash], |r| {
-                    r.get(0)
-                })?;
+        self.check()?;
+        let checkpoint = self
+            .line_checkpoints
+            .borrow()
+            .range((hash.to_owned(), 0)..=(hash.to_owned(), offset))
+            .next_back()
+            .map(|((_, start), checkpoint)| (*start, *checkpoint));
+        if let Some((start, checkpoint)) = checkpoint
+            && start == offset
+        {
+            return Ok(checkpoint.line);
+        }
+        let (start, checkpoint) = checkpoint.unwrap_or((
+            0,
+            LineCheckpoint {
+                line: 1,
+                previous_cr: false,
+            },
+        ));
+        let rowid = self
+            .connection
+            .prepare_cached("SELECT rowid FROM contents WHERE hash=?")?
+            .query_row([hash], |r| r.get(0))?;
         let mut blob = self
             .connection
             .blob_open("main", "contents", "utf8", rowid, true)?;
-        let mut remaining = offset;
-        let mut line = 1;
-        let mut previous_cr = false;
+        blob.seek(SeekFrom::Start(start))?;
+        let mut remaining = offset - start;
+        let mut line = checkpoint.line;
+        let mut previous_cr = checkpoint.previous_cr;
         let mut chunk = [0u8; 8192];
         while remaining > 0 {
             self.check()?;
@@ -1234,6 +1336,14 @@ impl ReadView {
             }
             remaining -= count as u64;
         }
+        let mut checkpoints = self.line_checkpoints.borrow_mut();
+        if checkpoints.len() == MAX_LINE_CHECKPOINTS {
+            checkpoints.clear();
+        }
+        checkpoints.insert(
+            (hash.to_owned(), offset),
+            LineCheckpoint { line, previous_cr },
+        );
         Ok(line)
     }
 
@@ -1520,6 +1630,53 @@ mod tests {
     };
 
     #[test]
+    fn query_coordination_is_bounded_without_configuration_or_error_payloads() {
+        let mut status = crate::protocol::WorkspaceStatus {
+            workspace_root: "workspace/π".into(),
+            database: "state/index.db".into(),
+            phase: "resource_limited".into(),
+            outcome_code: "disk_pressure".into(),
+            generation: u64::MAX,
+            observed_epoch: u64::MAX,
+            published_epoch: u64::MAX,
+            error: "compiler detail".repeat(100_000),
+            progress: Some(crate::protocol::Progress {
+                message: "progress".repeat(100_000),
+                ..Default::default()
+            }),
+            requested_settings: Some(crate::protocol::WorkspaceAnalysisSettings {
+                configuration_origin: "configuration".repeat(100_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let projected = QueryCoordination::from(&status);
+        let bytes = serde_json::to_vec(&projected).unwrap();
+        let maximum =
+            QueryCoordination::maximum_live(status.workspace_root.clone(), status.database.clone());
+        assert!(bytes.len() <= serde_json::to_vec(&maximum).unwrap().len());
+        let value = serde_json::to_value(projected).unwrap();
+        assert_eq!(value["workspace_root"], status.workspace_root);
+        assert_eq!(value["database"], status.database);
+        assert_eq!(value["has_error"], true);
+        assert_eq!(value["outcome_code"], "disk_pressure");
+        assert_eq!(value["status_limited"], false);
+        for omitted in ["error", "progress", "requested_settings"] {
+            assert!(value.get(omitted).is_none());
+        }
+        status.phase = "\0".repeat(100_000);
+        status.outcome_code = "e".repeat(100_000);
+        let limited = QueryCoordination::from(&status);
+        assert!(limited.status_limited && limited.has_error);
+        assert_eq!(limited.phase, "unknown");
+        assert_eq!(limited.outcome_code, "unknown");
+        assert!(
+            serde_json::to_vec(&limited).unwrap().len()
+                <= serde_json::to_vec(&maximum).unwrap().len()
+        );
+    }
+
+    #[test]
     fn cursor_materialization_has_one_bounded_aggregate_budget_before_page_packing() {
         use crate::protocol::{FactBatch, Occurrence, SourceArtifact, Symbol};
         use sha2::{Digest, Sha256};
@@ -1704,6 +1861,209 @@ mod tests {
         )
         .unwrap();
     }
+    #[test]
+    fn test_mask_index_plan_comparison_preserves_symbol_results() {
+        use crate::protocol::{
+            FactBatch, Occurrence, SourceArtifact, Symbol, TestClassification, TestEvidence,
+        };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/test-mask-plans")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("index.db");
+        let mut writer = Writer::open(&path).unwrap();
+        for unit in 0..4 {
+            let id = format!("unit{unit}");
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: id.clone(),
+                    target: format!("target{}", unit % 2),
+                    ..Default::default()
+                }))
+                .unwrap();
+            for kind in ["unknown", "test", "non_test"] {
+                writer
+                    .stage(Payload::Source(SourceArtifact {
+                        id: format!("{id}/{kind}"),
+                        path: format!("{id}/{kind}.ts"),
+                        utf8: b"x".to_vec(),
+                        sha256: format!("{:x}", Sha256::digest(b"x")),
+                        compilation_id: id.clone(),
+                        test_classification: Some(TestClassification {
+                            policy_version: crate::testing::POLICY_VERSION,
+                            kind: kind.into(),
+                            evidence: vec![TestEvidence {
+                                basis: "fixture".into(),
+                                value: kind.into(),
+                                path: id.clone(),
+                                inferred: false,
+                            }],
+                        }),
+                        ..Default::default()
+                    }))
+                    .unwrap();
+            }
+            let mut facts = FactBatch {
+                compilation_id: id.clone(),
+                ..Default::default()
+            };
+            for number in 0..256 {
+                let symbol_id = format!("symbol{number:04}");
+                facts.symbols.push(Symbol {
+                    id: symbol_id.clone(),
+                    name: if number % 8 == 0 {
+                        "needle".into()
+                    } else {
+                        format!("member{number:04}")
+                    },
+                    kind: "function".into(),
+                    ..Default::default()
+                });
+                let mask = number % 7 + 1;
+                for (bit, kind) in [(1, "unknown"), (2, "test"), (4, "non_test")] {
+                    if mask & bit != 0 {
+                        facts.occurrences.push(Occurrence {
+                            symbol_id: symbol_id.clone(),
+                            artifact_id: format!("{id}/{kind}"),
+                            role: "declaration".into(),
+                            end_byte: 1,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            writer.stage(Payload::Facts(facts)).unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: id,
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        writer.publish().unwrap();
+
+        // Exact production SQL, including target/compilation scopes and all
+        // masks. Compare both unanalysed and analysed planner statistics.
+        let mut evidence = vec![];
+        for analyzed in [false, true] {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch("CREATE INDEX IF NOT EXISTS symbol_test_mask ON symbols(test_mask)")
+                .unwrap();
+            if analyzed {
+                connection.execute_batch("ANALYZE").unwrap();
+            }
+            drop(connection);
+            let capture = |with_index: bool| {
+                let view = crate::query::fixture_view(&path).unwrap();
+                let masks: Vec<(u8, u32)> = view.connection.prepare("SELECT test_mask,count(*) FROM symbols GROUP BY test_mask ORDER BY test_mask").unwrap()
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(std::result::Result::unwrap).collect();
+                assert_eq!(
+                    masks.iter().map(|(mask, _)| *mask).collect::<Vec<_>>(),
+                    vec![1, 2, 3, 4, 5, 6, 7]
+                );
+                let sqlite_source: String = view
+                    .connection
+                    .query_row("SELECT sqlite_source_id()", [], |r| r.get(0))
+                    .unwrap();
+                let mut captures = vec![];
+                for (name, text) in [
+                    (None, None),
+                    (Some("needle"), None),
+                    (None, Some("needle")),
+                    (Some("needle"), Some("needle")),
+                ] {
+                    for tests in ["all", "only", "exclude"] {
+                        for target in [None, Some("target1")] {
+                            for compilation in [None, Some("unit0")] {
+                                for limit in [12, 1000] {
+                                    let input = serde_json::json!({"op":"symbols", "name":name, "query":text, "tests":tests, "target":target, "compilation_id":compilation, "limit":limit});
+                                    let request: QueryRequest =
+                                        serde_json::from_value(input.clone()).unwrap();
+                                    let sql = symbols_sql(&request);
+                                    let terms = text.map(|text| format!("\"{text}\""));
+                                    let parameters = params![
+                                        view.generation,
+                                        name,
+                                        terms,
+                                        target,
+                                        limit + 1,
+                                        compilation
+                                    ];
+                                    let plan: Vec<String> = view
+                                        .connection
+                                        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                                        .unwrap()
+                                        .query_map(parameters, |r| r.get(3))
+                                        .unwrap()
+                                        .map(std::result::Result::unwrap)
+                                        .collect();
+                                    let keys: Vec<String> = view
+                                        .connection
+                                        .prepare(&sql)
+                                        .unwrap()
+                                        .query_map(parameters, |r| r.get(0))
+                                        .unwrap()
+                                        .map(std::result::Result::unwrap)
+                                        .collect();
+                                    // Also compare complete projected result/classification
+                                    // bytes for every search/mask shape, at a small limit.
+                                    let projected =
+                                        if target.is_none() && compilation.is_none() && limit == 12
+                                        {
+                                            Some(
+                                                serde_json::to_vec(&view.query(request).unwrap())
+                                                    .unwrap(),
+                                            )
+                                        } else {
+                                            None
+                                        };
+                                    captures.push((serde_json::json!({"request":input,"sql":sql,"plan":plan,"mask_index_used":plan.iter().any(|p| p.contains("symbol_test_mask")),"rows":keys.len(),"keys_sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&keys).unwrap())),"projected_sha256":projected.as_ref().map(|bytes| format!("{:x}",Sha256::digest(bytes)))}), keys, projected));
+                                }
+                            }
+                        }
+                    }
+                }
+                (
+                    serde_json::json!({"with_index":with_index,"sqlite_version":rusqlite::version(),"sqlite_source_id":sqlite_source,"mask_counts":masks,"mask_index_used_any":captures.iter().any(|(record, _, _)|record["mask_index_used"] == true),"queries":captures.iter().map(|(record, _, _)|record).collect::<Vec<_>>()}),
+                    captures,
+                )
+            };
+            let (before, before_rows) = capture(true);
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch("DROP INDEX symbol_test_mask")
+                .unwrap();
+            let (after, after_rows) = capture(false);
+            let unchanged = before_rows.iter().zip(&after_rows).all(
+                |((_, keys, projected), (_, other_keys, other_projected))| {
+                    keys == other_keys && projected == other_projected
+                },
+            );
+            evidence.push(serde_json::json!({"analyzed":analyzed,"results_unchanged":unchanged,"before":before,"after":after}));
+            std::fs::write(
+                path.with_file_name("comparison.json"),
+                serde_json::to_vec_pretty(&evidence).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                unchanged,
+                "mask-index removal changed a bounded selection/projection; see {}",
+                path.with_file_name("comparison.json").display()
+            );
+        }
+        eprintln!(
+            "test-mask plan evidence: {}",
+            path.with_file_name("comparison.json").display()
+        );
+    }
     fn declaration_fixture() -> (std::path::PathBuf, [u64; 3]) {
         use crate::protocol::{FactBatch, Occurrence, SourceArtifact, Symbol};
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1745,6 +2105,21 @@ mod tests {
                     compilation_id: comp.into(),
                     utf8: text.as_bytes().into(),
                     sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                    test_classification: Some(crate::protocol::TestClassification {
+                        policy_version: crate::testing::POLICY_VERSION,
+                        kind: match comp {
+                            "left" => "non_test",
+                            "right" => "test",
+                            _ => "unknown",
+                        }
+                        .into(),
+                        evidence: vec![crate::protocol::TestEvidence {
+                            basis: "fixture".into(),
+                            value: comp.into(),
+                            path: format!("{comp}.ts"),
+                            ..Default::default()
+                        }],
+                    }),
                     ..Default::default()
                 }))
                 .unwrap();
@@ -1771,6 +2146,13 @@ mod tests {
                             end_byte: text.len() as u64,
                             ..Default::default()
                         },
+                        Occurrence {
+                            symbol_id: "opaque".into(),
+                            artifact_id: "collision".into(),
+                            role: "reference".into(),
+                            end_byte: 1,
+                            ..Default::default()
+                        },
                     ],
                     ..Default::default()
                 }))
@@ -1785,6 +2167,121 @@ mod tests {
             generations[index] = writer.publish().unwrap();
         }
         (path, generations)
+    }
+    #[test]
+    fn references_project_joined_origin_evidence_without_point_queries() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let (path, _) = declaration_fixture();
+        let mut view = crate::query::fixture_view(path).unwrap();
+        view.connection
+            .authorizer(Some(|context: AuthContext<'_>| {
+                // The bounded reference stream already reads test_origins
+                // through test_origin_masks. A second top-level lookup for
+                // every projected reference would duplicate that SQL work.
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "test_origins",
+                        ..
+                    }
+                ) && context.accessor.is_none()
+                {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+        let result = view
+            .query(
+                serde_json::from_value(serde_json::json!({"op":"references","symbol_id":"opaque"}))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(result.occurrences.len(), 3);
+        for occurrence in result.occurrences {
+            let expected = match occurrence.compilation_id.as_str() {
+                "left" => "non_test",
+                "right" => "test",
+                _ => "unknown",
+            };
+            assert_eq!(occurrence.test_classification.kind, expected);
+            assert_eq!(occurrence.test_classification.evidence.len(), 1);
+            let evidence = &occurrence.test_classification.evidence[0];
+            assert_eq!(evidence.artifact_id, occurrence.location.artifact_id);
+            assert_eq!(evidence.source_path, occurrence.location.path);
+            assert_eq!(evidence.evidence[0].value, occurrence.compilation_id);
+        }
+    }
+    #[test]
+    fn indexed_line_checkpoints_preserve_crlf_nul_utf8_and_request_bounds() {
+        let (path, _) = declaration_fixture();
+        let mut text = vec![b'x'; 8191];
+        text.extend_from_slice("\r\n\0π😀\r\nz\n".as_bytes());
+        text.extend_from_slice(&b"a\r\nb\nc\rd".repeat(160));
+        let hash = format!("{:x}", Sha256::digest(&text));
+        let mut writer = Writer::open_incremental(&path, &["lines".into()]).unwrap();
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: "lines".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Source(crate::protocol::SourceArtifact {
+                id: "lines".into(),
+                compilation_id: "lines".into(),
+                path: "lines.ts".into(),
+                utf8: text.clone(),
+                sha256: hash.clone(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: "lines".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer.publish().unwrap();
+        let view = crate::query::fixture_view(path).unwrap();
+        assert!(view.source_line("not-indexed", 0).is_err());
+        assert_eq!(view.source_line(&hash, 8193).unwrap(), 2);
+        // Include a CRLF crossing the blob chunk boundary, offsets inside
+        // multibyte text and backward seeks after later checkpoints exist.
+        let offsets = (0..text.len())
+            .step_by(7)
+            .chain(8189..8210)
+            .chain((8189..8210).rev());
+        for offset in offsets {
+            let prefix = &text[..offset];
+            let breaks = prefix.iter().filter(|&&b| b == b'\r' || b == b'\n').count()
+                - prefix.windows(2).filter(|pair| *pair == b"\r\n").count();
+            assert_eq!(
+                view.source_line(&hash, offset as u64).unwrap(),
+                breaks as u64 + 1,
+                "offset {offset}"
+            );
+            assert!(view.line_checkpoints.borrow().len() <= MAX_LINE_CHECKPOINTS);
+        }
+        let cancellation = crate::execution::QueryCancellation::default();
+        let execution = crate::execution::Execution::new(Default::default(), None)
+            .unwrap()
+            .with_cancellation(Some(cancellation.clone()));
+        *view.execution.lock().unwrap() = Some(execution);
+        cancellation.cancel();
+        assert!(matches!(
+            view.source_line(&hash, 8193),
+            Err(Error::QueryCancelled)
+        ));
+        *view.execution.lock().unwrap() = None;
+        view.query(
+            serde_json::from_value(serde_json::json!({"op":"symbol_context","symbol_id":"opaque"}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(view.line_checkpoints.borrow().is_empty());
     }
     #[test]
     fn declaration_source_selects_exact_owner_origin_and_hash_before_limit() {

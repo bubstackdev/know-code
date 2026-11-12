@@ -91,18 +91,15 @@ fn kind(mask: u8) -> &'static str {
     }
 }
 pub(crate) fn symbol_mask(connection: &Connection, key: i64) -> Result<u8> {
-    Ok(connection.query_row(
-        "SELECT mask FROM symbol_test_masks WHERE symbol_key=?",
-        [key],
-        |r| r.get(0),
-    )?)
+    Ok(connection
+        .prepare_cached("SELECT mask FROM symbol_test_masks WHERE symbol_key=?")?
+        .query_row([key], |r| r.get(0))?)
 }
 pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<Classification> {
     let mask = symbol_mask(connection, key)?;
-    let external: bool =
-        connection.query_row("SELECT external FROM symbols WHERE rowid=?", [key], |r| {
-            r.get(0)
-        })?;
+    let external: bool = connection
+        .prepare_cached("SELECT external FROM symbols WHERE rowid=?")?
+        .query_row([key], |r| r.get(0))?;
     let mut result = Classification {
         kind: kind(mask).into(),
         ..Default::default()
@@ -143,15 +140,8 @@ fn origin_evidence(artifact_id: String, source_path: String, json: &str) -> Resu
         evidence: class.evidence,
     })
 }
-pub(crate) fn origin(
-    connection: &Connection,
-    generation: u64,
-    compilation: &str,
-    artifact: &str,
-    path: &str,
-) -> Result<Classification> {
-    let json: String=connection.query_row("SELECT classification_json FROM test_origins WHERE owner_generation=? AND compilation_id=? AND artifact_id=?", params![generation,compilation,artifact], |r|r.get(0))?;
-    let evidence = origin_evidence(artifact.into(), path.into(), &json)?;
+pub(crate) fn origin(artifact: &str, path: &str, json: &str) -> Result<Classification> {
+    let evidence = origin_evidence(artifact.into(), path.into(), json)?;
     Ok(Classification {
         kind: evidence.kind.clone(),
         evidence: vec![evidence],

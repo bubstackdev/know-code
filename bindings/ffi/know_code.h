@@ -1,6 +1,12 @@
+#ifndef KNOW_CODE_H
+#define KNOW_CODE_H
+
 #include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 uint32_t kc_abi_version(void);
-/* Query policy 7: shared fail-fast admission before host dispatch. */
+/* Shared fail-fast admission and compact status; compare the returned version. */
 uint32_t kc_query_contract_version(void);
 /* NUL-terminated inputs checked for UTF-8. Query requests are scanned only up
  * to kc_query_max_request_bytes()+1 after admission. One owned UTF-8 JSON
@@ -30,3 +36,8 @@ char *kc_query_json_reserved(const char *database, const char *request,
 /* Workspace registration/status/refresh/wait; same ownership as query results. */
 char *kc_workspace_json(const char *request);
 void kc_string_free(char *value);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* KNOW_CODE_H */

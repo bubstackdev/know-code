@@ -55,6 +55,11 @@ assert.equal(plan.targets.length, 2);
 assert.ok(plan.targets.every(t => !Object.keys(t.identity).length && path.isAbsolute(t.assetsFile)));
 assert.ok(fs.readFileSync(props, 'utf8').includes('1.0.0.0'), 'Planning ran identity hooks');
 const result = evaluate(true);
+const generatedDirectories=JSON.parse(result.definition.KnowCodeGeneratedDirectories);
+assert.deepEqual(Object.keys(generatedDirectories).sort(),['net10.0','netstandard2.1']);
+assert(Object.values(generatedDirectories).every(paths=>paths.length>0&&paths.every(path.isAbsolute)));
+assert(result.targets.every(t=>!Object.hasOwn(t.identity,'KnowCodeGeneratedDirectories')),
+  'source-origin metadata leaked into compiler identity/global properties');
 assert.deepEqual(result.targets.map(t => [t.target, t.identity.AssemblyVersion]), [['net10.0', '1.0.0.0'], ['netstandard2.1', '2.0.0.0']]);
 assert.deepEqual(evaluate(true).targets.map(t => t.identity.AssemblyVersion), ['2.0.0.0', '2.0.0.0']);
 const mapped = evaluate(true, {configuration:'Release', platform:'x64'});

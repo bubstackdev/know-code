@@ -118,6 +118,35 @@ function fileHash(filename) {
   return hash.digest('hex');
 }
 
+// Detect accidental cache corruption throughout the installed tool, including
+// required modules and added files. This is relative to registry/TLS trust,
+// not authentication against a user who can replace both tree and manifest.
+function toolTree(directory) {
+  const hash=createHash('sha256'), root=fs.realpathSync(directory);
+  let entries=0, bytes=0;
+  function walk(folder) {
+    for (const name of fs.readdirSync(folder).sort()) {
+      const filename=path.join(folder,name), relative=path.relative(directory,filename).split(path.sep).join('/');
+      if (relative==='tool.json') continue;
+      if (++entries>50000) throw new Error('Package-tool cache exceeds 50000 entries');
+      const stat=fs.lstatSync(filename), mode=stat.mode&0o777;
+      if (stat.isDirectory()) { hash.update(JSON.stringify([relative,'directory',mode])+'\n');walk(filename); }
+      else if (stat.isFile()) {
+        bytes+=stat.size;
+        if (bytes>512*1024*1024) throw new Error('Package-tool cache exceeds 512 MiB');
+        hash.update(JSON.stringify([relative,'file',mode,stat.size,fileHash(filename)])+'\n');
+      } else if (stat.isSymbolicLink()) {
+        const target=fs.readlinkSync(filename), resolved=path.relative(root,fs.realpathSync(filename));
+        if (path.isAbsolute(target)||resolved==='..'||resolved.startsWith(`..${path.sep}`)||path.isAbsolute(resolved))
+          throw new Error('Package-tool cache symlink escapes its installed tree');
+        hash.update(JSON.stringify([relative,'symlink',target])+'\n');
+      } else throw new Error('Package-tool cache contains a non-regular entry');
+    }
+  }
+  walk(directory);
+  return {treeSha256:hash.digest('hex'),treeEntries:entries,treeBytes:bytes};
+}
+
 export function selection(value, fallback = 'npm') {
   const pin = value ?? `${fallback}@${DEFAULT_TOOLS[fallback]}`;
   const match = /^(npm|pnpm)@(\d+)\.(\d+)\.(\d+)(?:\+sha(224|512)\.([a-fA-F0-9]+))?$/.exec(pin);
@@ -197,12 +226,15 @@ async function archive(metadata, filename, selected) {
 function cached(directory, selected) {
   try {
     const manifest = JSON.parse(readSetupInput(path.join(directory, 'tool.json'), 1024 * 1024));
-    if (manifest.format !== 1 || manifest.name !== selected.name || manifest.version !== selected.version ||
+    if (manifest.format !== 2 || manifest.name !== selected.name || manifest.version !== selected.version ||
         manifest.pinHash !== (selected.hash ?? '') || manifest.platform !== `${process.platform}-${process.arch}` ||
+        manifest.native !== (selected.name==='pnpm'&&selected.major===12) ||
         !manifest.archiveIntegrity?.startsWith('sha512-') || typeof manifest.entry !== 'string' ||
         path.isAbsolute(manifest.entry) || manifest.entry.split(path.sep).includes('..')) return;
     const entry = path.join(directory, manifest.entry);
     if (fileHash(entry) !== manifest.entrySha256) return;
+    const tree=toolTree(directory);
+    if (tree.treeSha256!==manifest.treeSha256 || tree.treeEntries!==manifest.treeEntries || tree.treeBytes!==manifest.treeBytes) return;
     return {...selected, program: manifest.native ? entry : process.execPath,
       // We already selected/verified the exact pin. Suppress pnpm's independent
       // bootstrap (including native v12's unconditional config-dependency fetch).
@@ -284,10 +316,10 @@ export async function packageTool(selected, cacheDirectory, send) {
     const version = await runCommand(native ? entry : process.execPath, [...(native ? [] : [entry]), '--version'], stage,
       undefined, {COREPACK_ENABLE_PROJECT_SPEC: '0', npm_config_manage_package_manager_versions: 'false', pnpm_config_manage_package_manager_versions: 'false'});
     if (version !== selected.version) throw new Error(`Package-tool version mismatch: expected ${selected.version}, got ${version}`);
-    fs.writeFileSync(path.join(content, 'tool.json'), JSON.stringify({format: 1, name: selected.name, version: selected.version,
+    fs.writeFileSync(path.join(content, 'tool.json'), JSON.stringify({format: 2, name: selected.name, version: selected.version,
       pinHash: selected.hash ?? '', platform: `${process.platform}-${process.arch}`, native, entry: bin,
       archiveIntegrity: metadata.dist.integrity, registryPackage: metadata.name,
-      entrySha256: fileHash(entry)}));
+      entrySha256: fileHash(entry),...toolTree(content)}));
     fs.rmSync(directory, {recursive: true, force: true});
     fs.renameSync(content, directory);
     return cached(directory, selected);

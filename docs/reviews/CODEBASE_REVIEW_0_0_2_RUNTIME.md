@@ -1,0 +1,103 @@
+# v0.0.2 Snow Leopard runtime review
+
+Base: released `e20da5db9f359311b0bc6b2be30ff9db94ac99c3`. This lane is stabilization only; planned new features remain later work. The original CODEBASE-REVIEW.md and pre-tag triage describe an older changing tree. Current functions and regression names take precedence over old line numbers and severity labels.
+
+No compiler, native build, cargo test/clippy, integration script, live service, VM or original corpus operation has run in this lane. Rustfmt parsing/formatting, Python AST parsing and `git diff --check` are static checks. Added tests below need root's serial validation.
+
+## Current dispositions
+
+| ID | Released-code finding and current action |
+| --- | --- |
+| H2 | Already fixed: `wait_for_workspace` captures enrollment identity, uses checked lookups after wake, rejects re-enrollment, and unregister notifies. Existing `queued_wait_is_safe_when_enrollment_is_removed_or_replaced` tests both transitions. Extracted unchanged function/test into `coordinator/wait.rs`. |
+| H3 | Already fixed: `finish_job` converts unwind to a terminal `JobPanicked`; host retires the coordinator rather than trusting poisoned invariants. Cursor `Publication` drop drains its pending ownership during unwind. Existing `job_unwind_has_a_terminal_owner_event` and `publication_unwind_drains_ownership_without_reusing_poisoned_state` remain. Extracted unchanged host boundary/test into `coordinator/jobs.rs`. |
+| H7 | Already fixed: `CursorRegistry::retire` is idempotent for a preceding BAD sweep. The remaining expect follows exclusive registry ownership. Existing `removed_initial_borrow_cleanup_is_idempotent_after_bad_sweep`. |
+| H8 | Already fixed: sweep continues after healthy retirement failures, retains entries/debt, exposes warning and retries. Existing `healthy_cleanup_failure_keeps_debt_and_allows_sibling_read_and_publish` and failed-file/BAD tests. No zeroing liabilities. |
+| M5 | Already fixed: CPU throttling is honored before taking the cursor fence; the publication control clone keeps cancellation but does not CPU-park there. Existing paused-publication/fence regressions. Commit/cancel linearization stays unchanged. |
+| M6 | Fixed cancel-request seam in lane: snapshot enrollment, trust/input epoch and managed Control under short locks; wait on existing commit/cancel boundary outside entries/active_job; then revalidate identity and intent before changing status. `Control::same_job` compares the existing Arc ownership without wire/native changes. Real SQLite transaction/Control publication barriers cover sibling map access, commit wins, replacement job/enrollment, later refresh/trust and same-intent baseline capture. The commit lock remains. Other settings/trust/lifecycle blocking paths remain part of M8; no blanket all-control-liveness claim. |
+| M7 | Already fixed: nonblocking `WorkerPipe` checks cancellation and owned leader terminal status; stdout/stderr drain is finite even with escaped descendants. Terminal classification excludes CLD_STOPPED. Existing update pipe, cancellation and natural-exit regressions cover the released correction. No cause inferred for earlier uncaptured process status. |
+| M8 | Fixed the concrete blocking registration-adoption seam: validated enrollment/generation snapshot, parent-directory/adoption I/O outside entries, then repository/enrollment revalidation before applying settings. Discovery suppression/identity is checked again. Concurrent first registration of the same identity is deduplicated rather than rejected. Recovery still owns the current selector; no stale physical selection/readiness is cached across its lock. Four deterministic real-held-lifecycle-lock cases cover sibling status access and stable/removed/replaced/concurrent-first enrollment. Other settings/observation/persistence I/O under entries remains a residual coupling, requiring separate controlled evidence before further movement. No schema/recovery implementation changes or swallowed durable errors. |
+| M18 | Existing page borrows do not allocate retention or run global budget measurement; H8 isolates known charged cleanup failure. Publication/admission still refuses if retained debt truly cannot be measured. That conservative refusal is required; counting unknown bytes as zero would violate the shared pool. No evidence justifies bypassing it. |
+| M19 | Deadline-insensitive cursor mutex waits, CPU parking and writer-drop/checkpoint-under-fence claims were already corrected. `lock_controlled` observes deadline while waiting. Commit, bounded retention SQL and result verification still serialize under the fence; this batch does not claim measured tail latency or remove the publication/admission starvation guard. Existing delayed-lock and paused-publication tests remain the focused gates. |
+| M20 | Fixed after the user selected compact query status: one common bounded DTO, calculated worst-live metadata headroom before atomic page packing, and frozen workspace/database identities. Maximum-cap growth regression preserves the exact graph/path/coverage/page and fits the admitted cap; one-byte-over atomic input fails before admission, and old page formats are invalidated. Lowering a later request's cap can still return response_limit_exceeded. |
+| L1 | Residual same-user truncation/SIGBUS hardening risk for memory-mapped live/health pages. Length rechecks cannot close a concurrent truncation race; replacing atomic mapped-state access is not a safe one-line fix. Owner-only local-state trust and the existing corruption boundaries remain explicit. Coordinate any health-page change with the recovery owner; no cross-file rewrite here. |
+| L2 | Residual macOS socket-to-FD_CLOEXEC window. Both paths promptly set CLOEXEC and close on setup failure; a process-wide fork mutex cannot control embedding-host forks. Do not add unsupported SOCK_CLOEXEC flags on Darwin or falsely claim fcntl is atomic with other threads' fork. Platform-level solution needs a separately reviewed compatible mechanism. |
+| L7 | Fixed per-user privacy boundary: DATA startup/preparation validates the resolved directory descriptor and effective owner, tightens only that dedicated leaf to 0700, preserves lexical paths/aliases/retained contents, refuses HOME/ancestors/root and direct repository/Git metadata misuse. Dedicated descendants remain valid. Darwin getpeereid validates the same effective UID before client writes/server payload reads, including raw deadline/activity sockets; lookup failures fail closed. Actual Unix socket/current-UID/mismatch/lookup-failure and owned-directory/privacy/refusal regressions added. No folder-content whitelist or cross-user authentication framework. |
+| L8 | Blocking adoption no longer owns entries (M8); periodic presence, dispatch and some observation/persistence still perform per-workspace I/O under entries. No independently measured hundreds-workspace latency regression or safe blanket lock move is established; preserve bounded scheduling and exact identity/input reconciliation. |
+| L9 | Safe daemon exit on failed durable registry/control persistence is intentional. Live-owner/fence invalidation and restart reconciliation must remain; do not replace `?` with ignored errors to call a full disk recoverable. Workspace-local derived errors remain separate. |
+| L10 | Existing64 serve-thread bound and <=120s waits are finite overload behavior, not an unbounded thread leak. A focused saturated-ingress/status/cancel gate is still useful before selecting a reserved path; no new queue/admission policy introduced on source inspection alone. |
+| L11 | Fixed in lane: a dedicated configuration mutex serializes durable settings replacements, while the sampled effective-limits mutex is held only for comparison/replacement. Failed save leaves old effective limits; unchanged input avoids save. Deterministic barrier test checks readable limits during a blocked failed save and later successful replacement. |
+| L12 | Fixed in lane: out-of-range position on a validated result descriptor returns `invalid_request`, preserving the shared token. Corrupt bytes/owner/generation/header still invalidate. Unit replay plus CLI/Node/.NET shared-token replay regression added. |
+| L13 | Fixed in lane: maintenance retries the same bounded safe startup reset only when there is no result-store ownership or cursor entry. Foreign/unsafe files still fail closed and remain untouched. Explicit owner repair can restore pagination without a coordinator restart; test covers foreign metadata preservation, manual repair, admission and replay. The 4096-entry bound is unchanged. |
+| L14 | Tokenless completion after a late deadline remains bounded by the same count/shared-byte/idle/absolute leases. Repeated completion does not remove those bounds; post-finish shared ownership cannot be discarded using a stale creator claim. No unbounded leak proved or stronger zero-orphan guarantee adopted. Keep cancellation cleanup/absolute expiry regressions. |
+| L15 | Several bounded materialization/encoding/parsing copies remain possible; four shared query slots and 16 MiB per-result bounds are not a hard process-RSS guarantee. Reducing copies needs measured representative peaks, preserving exact page/header/evidence semantics; no invented memory SLO or second query engine. |
+
+## Architecture3 scope
+
+Existing tested enrollment-bound waiting and terminal job completion are extracted unchanged; the new job-bound cancellation seam has its own deterministic transaction/barrier regression. `Entry`, registry persistence, scheduler transitions and recovery policy stay in the coordinator; no replacement state machine or generic service framework is introduced. Architecture4/5 durable schema/accounting/recovery edits require coordination with root/query owners. Blocking adoption is separated into coordinator/registration.rs; remaining settings/observation/persistence lock coupling is explicit, not hidden by moving files. Test-only fixture reuse is limited to these deterministic host boundaries.
+
+## Later compact-status decision
+
+The user subsequently approved compact query status and calculated page headroom. M20 is now fixed through the shared query/page path, rather than accepted as an unavoidable maximum-cap failure. The former `maximum_cap_metadata_growth_is_explicit_and_never_changes_frozen_findings` regression is superseded by `maximum_live_metadata_cannot_break_a_maximum_cap_atomic_page`, which passed in root's Rust checkpoint. Cursor-source/compiler/path evidence remains frozen and intact. See [the shared query ledger](CODEBASE_REVIEW_0_0_2_STORAGE_QUERY.md) and current QUERY_LIFECYCLE.md; the per-ID row above reflects this later decision.
+
+## Root validation needed
+
+Run on this lane or the assembled matching source in the single heavy slot:
+
+```sh
+cargo test -p know-code-core --locked configuration_io_keeps_limits_readable_and_failed_save_keeps_effective_value
+cargo test -p know-code-core --locked out_of_range_position_is_request_error_and_valid_page_remains_replayable
+cargo test -p know-code-core --locked repaired_startup_result_cache_recovers_without_deleting_foreign_entries
+cargo test -p know-code-core --locked maximum_live_metadata_cannot_break_a_maximum_cap_atomic_page
+cargo test -p know-code --locked commit_blocked_cancel_leaves_entries_readable_and_does_not_cancel_new_intent
+cargo test -p know-code --locked held_adoption_keeps_sibling_status_available_and_revalidates_enrollment
+cargo test -p know-code --locked coordinator::
+```
+
+Then matching build + `KNOW_CODE_BUILD_PROFILE=debug python3 tests/cursors.py`, affected resource/coordinator/WAL checks, and ordinary fmt/clippy. The three-binding cursor regression requires matching new native artifacts; old installed0.0.1 binaries must not be used to judge the changed error contract. Root should test both profiles before final certification. None of these commands is claimed executed here.
+
+## Architecture4: one versioned host registry boundary
+
+Source recheck found two actual `registry.db` open sites: coordinator startup and installer compatibility inspection. Discovery owns the remaining two existing schema tables through its connection-based constructor. `runtime::info` opens only an in-memory bundled-SQLite FTS probe; the report's runtime registry-open claim is not present in released code, so no new runtime dependency is added.
+
+`crates/host/src/registry.rs` now owns writer open, read-only open/version checks and the existing initialization SQL. `user_version=1` names exactly the released six-table schema. Legacy 0 accepts the known base columns and performs only the previous additive columns, saved-input manifest move, and one-time cancellation backfill, now within one IMMEDIATE transaction together with the version marker. There is no new table, column, migration ledger, core engine, plugin or settings format. Current registrations, identities, tracked inputs, manifests, discovery parents/exclusions/suppressions and personal settings stay intact. Reopening version 1 does not repeat data migration.
+
+The coordinator still takes its existing sole-writer fence first. Registry WAL and synchronous FULL are retained. Installer inspection accepts 0/1 read-only and does not migrate. Old released 0.0.1 ignored user_version and already reads/writes this same additive schema, so the marker itself does not impose a rollback incompatibility; the test explicitly retains a same-schema older-runtime write across reopen. This is structural compatibility evidence, not a new claim to have executed an old binary in this lane.
+
+Unknown/negative versions return an actionable shared update-required error before application schema, journal-mode or settings writes. Normal SQLite writable-open recovery is deliberately preserved: SQLite may itself recover a hot journal or maintain WAL shared memory before the committed version can be read. There is no universal no-filesystem-write claim and no duplicate header/WAL parser. Clean unknown-version fixture bytes remain unchanged through writer, read-only, direct initialization and discovery open checks.
+
+Added deterministic tests (root must execute):
+
+```sh
+cargo test -p know-code --locked registry::tests::
+cargo test -p know-code --locked discovery::tests::
+cargo test -p know-code --locked install::tests::
+```
+
+The registry tests cover legacy rows plus existing cancellation semantics, all six released tables and personal-settings bytes across migration/idempotent reopen, same-schema older writes, transactional rollback/retry after an owned SQLite trigger fault, unknown/negative format refusal, unchanged read-only legacy inspection, and a real hot rollback journal. That last fixture runs only its own test binary, leaves an uncommitted spilled transaction by process exit, verifies read-only inspection cannot recover it, and requires normal writer recovery to retain the committed legacy values. The owned child has a bounded 20-second watchdog with kill/reap on timeout; no child or SQLite fixture was executed by this agent.
+
+Only the registry module declaration is changed in main.rs; its CLI body is untouched. Pure rustfmt/diff checks are not compiler/test certification. Root owns matching builds, both-profile tests, installed lifecycle/data compatibility and final integration.
+
+## L7: bounded per-user DATA and peer ownership
+
+The explicit DATA override already designates dedicated per-user product state. Existing owned 0755/0777 leaves are made 0700 through a checked directory descriptor; existing private leaves avoid redundant chmod. Aliases and caller path spelling stay intact, and no existing parent permissions or directory contents are changed. The safeguards refuse configured HOME/ancestors/filesystem root, an actual repository root with its own .git marker, and Git metadata directories (including aliases before creating a new leaf). A dedicated descendant under an owned checkout/artifact directory remains permitted; no ancestor .git or state-filename whitelist is used.
+
+Coordinator startup and shared ensure_running use the same core control helper. Both ordinary/installer clients, deadline-controlled raw connect and one-way activity sockets verify Darwin kernel peer credentials before sending a control frame. Host accept checks before serve-thread admission, and serve checks again before decoding payloads. A foreign effective UID (including root when different from the process UID) is denied. Failed getpeereid never authenticates a zero-initialized UID; unsupported platforms explicitly error rather than claiming success. The current per-user local coordinator policy remains; no cross-user shared-service authentication product is introduced.
+
+Focused root commands after matching build:
+
+```sh
+cargo test -p know-code-core --locked control::privacy_tests::
+cargo test -p know-code-core --locked control::activity_tests::
+cargo test -p know-code-core --locked execution::tests::
+cargo test -p know-code --locked coordinator::
+```
+
+The new tests use real Unix socket pairs and the actual kernel credential lookup, mismatch predicates and a real non-socket failure. Pending bytes stay unread by credential verification. Directory cases include nonempty retained/Finder files, aliases, 0755/0777 repair, unchanged parents, owner mismatch, HOME/ancestors/root, actual .git misuse and legitimate descendant state. UID-negative tests change only expected predicates against owned fixtures; no chown, setuid, other-user process or other-user filesystem modification is used. No native tests/builds, live directories, services or VM operations were executed by this agent. L2's macOS socket/CLOEXEC race remains explicitly separate; no global fork lock or signal-policy changes were added.
+
+
+L7 follow-up protects both the effective UID's account home from `getpwuid_r` and any configured HOME, including their ancestors. Lookup grows a 16 KiB buffer only through 1 MiB, with finite retries; unresolved, missing or nonabsolute account homes fail before directory changes. Tests inject owned actual/configured homes without mutating HOME or touching the real home.
+
+Mode0700 alone does not remove Darwin extended ACL grants. The validated owned descriptor now inspects its extended ACL using the installed SDK ABI, removes a nonempty ACL with an empty `acl_init(0)`/`acl_set_fd_np` ACL, frees every allocation, and re-reads/validates that no entry remains. Already-empty ACLs avoid a set call. Unsupported platforms or inspection/removal failures error explicitly; failures never claim that DATA is private. Parent, child, source and HOME ACLs are not changed. The regression creates an inheritable everyone grant on an exclusive owned fixture using `/bin/chmod`, proves the mode0700 DATA leaf inherited it, and checks leaf-only removal, unchanged parent/retained-file ACLs, aliases and idempotent ctime. No ACL or account test was executed in this lane.
+
+
+The first actual root ACL run found Darwin returns null/ENOENT for a valid descriptor without an extended ACL, including immediately after successful empty-ACL installation. That precise absence now becomes an allocated empty ACL; every other get error remains fatal, and a focused invalid-descriptor regression requires EBADF rather than empty acceptance. Existing ordinary DATA cases and the real inherited-ACL fixture exercise the no-ACL and post-clear paths. The failed run is retained; this correction is static-only pending root rerun.

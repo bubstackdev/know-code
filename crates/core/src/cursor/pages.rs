@@ -2,7 +2,7 @@
 use crate::{
     Error, Result,
     execution::{self, Execution},
-    protocol::WorkspaceStatus,
+    query::QueryCoordination,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
@@ -13,7 +13,7 @@ use std::{
 };
 
 const MAGIC: &[u8; 8] = b"KCPAGE01";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const FIXED: usize = 136;
 const ENTRY: usize = 84;
 const MAX_HEADER: usize = execution::MAX_RESPONSE_BYTES as usize + 4096;
@@ -33,7 +33,7 @@ pub(crate) struct ReadOptions<'a> {
     pub expected_generation: u64,
     pub response_max_bytes: usize,
     pub freshness: &'a str,
-    pub coordination: Option<&'a WorkspaceStatus>,
+    pub coordination: Option<&'a QueryCoordination>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -183,6 +183,27 @@ fn encoded(value: &impl Serialize, execution: Execution, maximum: usize) -> Resu
 fn row_bytes(prefix: &[usize], plan: Plan) -> usize {
     prefix[(plan.start + plan.count) as usize] - prefix[plan.start as usize]
 }
+fn frozen_identities(result: &Value) -> (String, String) {
+    let coordination = &result["coordination"];
+    (
+        coordination["workspace_root"]
+            .as_str()
+            .unwrap_or_default()
+            .into(),
+        coordination["database"].as_str().unwrap_or_default().into(),
+    )
+}
+fn maximum_live_result(result: &Value) -> Result<Value> {
+    let (workspace_root, database) = frozen_identities(result);
+    let mut maximum = result.clone();
+    let root = maximum.as_object_mut().ok_or_else(scope)?;
+    root.insert("freshness".into(), Value::String("unverified".into()));
+    root.insert(
+        "coordination".into(),
+        serde_json::to_value(QueryCoordination::maximum_live(workspace_root, database))?,
+    );
+    Ok(maximum)
+}
 fn fits(
     header: &Header,
     position: u32,
@@ -300,7 +321,10 @@ pub(crate) fn encode(
         .ok_or_else(scope)?;
     if root.contains_key("page")
         || !root.get("truncated").is_some_and(Value::is_boolean)
-        || !root.get("freshness").is_some_and(Value::is_string)
+        || !matches!(
+            root.get("freshness").and_then(Value::as_str),
+            Some("current" | "stale" | "unverified")
+        )
     {
         return Err(scope());
     }
@@ -351,8 +375,10 @@ pub(crate) fn encode(
         sections,
         result,
     };
+    // Pack against the largest permitted live metadata, rather than the
+    // shorter status at creation. Every item and coverage field stays intact.
     let base = execution::encode(
-        &header.result,
+        &maximum_live_result(&header.result)?,
         execution.clone(),
         options.response_max_bytes,
     )?
@@ -556,7 +582,11 @@ fn entry(
     execution: Execution,
 ) -> Result<Entry> {
     if position >= preamble.page_count {
-        return Err(Error::CursorInvalidated);
+        // A caller can alter only the token's position while other holders
+        // still own a valid frozen result. Do not invalidate their cursor.
+        return Err(Error::InvalidRequest(
+            "cursor page position is out of range".into(),
+        ));
     }
     let offset = FIXED as u64 + u64::from(preamble.header_len) + u64::from(position) * ENTRY as u64;
     let bytes = block(reader, offset, ENTRY, execution)?;
@@ -740,15 +770,24 @@ pub(crate) fn read(
             Value::Array(rows.by_ref().take(count).collect()),
         );
     }
+    let identities = frozen_identities(&header.result);
     let root = header
         .result
         .as_object_mut()
         .ok_or(Error::CursorInvalidated)?;
     root.insert("page".into(), metadata);
+    if !matches!(options.freshness, "current" | "stale" | "unverified") {
+        return Err(scope());
+    }
     root.insert("freshness".into(), Value::String(options.freshness.into()));
     root.remove("coordination");
     if let Some(coordination) = options.coordination {
-        let bytes = encoded(coordination, execution.clone(), options.response_max_bytes)?;
+        let mut coordination = coordination.clone().bounded();
+        // Saved relative source locations retain their creation-time identity.
+        // No identity at creation remains explicitly empty if status arrives later.
+        coordination.workspace_root = identities.0;
+        coordination.database = identities.1;
+        let bytes = encoded(&coordination, execution.clone(), options.response_max_bytes)?;
         root.insert("coordination".into(), serde_json::from_slice(&bytes)?);
     }
     execution::check_response(
@@ -802,6 +841,13 @@ mod tests {
     }
     fn get(bytes: &[u8], position: u32, maximum: usize) -> Value {
         read(Cursor::new(bytes), settings(position, maximum), execution()).unwrap()
+    }
+    fn worst(bytes: &[u8], maximum: usize) -> Value {
+        let coordination = QueryCoordination::maximum_live(String::new(), String::new());
+        let mut options = settings(0, maximum);
+        options.freshness = "unverified";
+        options.coordination = Some(&coordination);
+        read(Cursor::new(bytes), options, execution()).unwrap()
     }
     fn seal_preamble(bytes: &mut [u8]) {
         let digest = Sha256::digest(&bytes[..104]);
@@ -876,7 +922,7 @@ mod tests {
             assert_eq!(all, rows);
             assert!(matches!(
                 validate(Cursor::new(&bytes), 3, PREFIX, 7, execution()),
-                Err(Error::CursorInvalidated)
+                Err(Error::InvalidRequest(_))
             ));
         }
     }
@@ -923,7 +969,7 @@ mod tests {
         let input = result("symbols", vec![json!({"signature":"é\"\n".repeat(500)})]);
         let large = encode(input.clone(), options("symbols", 1, 1, 16_384), execution()).unwrap();
         let page = get(&large, 0, 16_384);
-        let exact = json!({"result":page}).to_string().len();
+        let exact = json!({"result":worst(&large, 16_384)}).to_string().len();
         assert!(exact >= 1024);
         let bytes = encode(input.clone(), options("symbols", 1, 1, exact), execution()).unwrap();
         assert_eq!(get(&bytes, 0, exact), page);
@@ -938,7 +984,7 @@ mod tests {
             vec![json!({"signature":"x".repeat(1000)}), json!({"id":"x"})],
         );
         let large = encode(input.clone(), options("symbols", 2, 2, 4096), execution()).unwrap();
-        let terminal = get(&large, 0, 4096);
+        let terminal = worst(&large, 4096);
         let exact = json!({"result":terminal}).to_string().len();
         let bytes = encode(input, options("symbols", 2, 2, exact), execution()).unwrap();
         assert_eq!(
@@ -951,12 +997,12 @@ mod tests {
         let input = result(
             "symbols",
             vec![
-                json!({"body":"x".repeat(1300)}),
-                json!({"body":"y".repeat(1300)}),
+                json!({"body":"x".repeat(2000)}),
+                json!({"body":"y".repeat(2000)}),
             ],
         );
-        let bytes = encode(input, options("symbols", 2, 2, 2048), execution()).unwrap();
-        let old = get(&bytes, 0, 2048);
+        let bytes = encode(input, options("symbols", 2, 2, 4096), execution()).unwrap();
+        let old = get(&bytes, 0, 4096);
         assert_eq!(old["symbols"].as_array().unwrap().len(), 1);
         assert!(matches!(
             read(Cursor::new(&bytes), settings(0, 1024), execution()),
@@ -964,19 +1010,18 @@ mod tests {
         ));
         let bigger = get(&bytes, 0, 8192);
         assert_eq!(bigger, old);
-        let status = WorkspaceStatus {
+        let status = QueryCoordination::from(&crate::protocol::WorkspaceStatus {
             generation: 8,
             phase: "idle".into(),
             error: "e".repeat(3000),
             ..Default::default()
-        };
-        let mut updated = settings(0, 2048);
+        });
+        let mut updated = settings(0, 4096);
         updated.freshness = "stale";
         updated.coordination = Some(&status);
-        assert!(matches!(
-            read(Cursor::new(&bytes), updated, execution()),
-            Err(Error::ResponseLimitExceeded)
-        ));
+        let current = read(Cursor::new(&bytes), updated, execution()).unwrap();
+        assert_eq!(current["coordination"]["has_error"], true);
+        assert!(current["coordination"].get("error").is_none());
         let mut updated = settings(0, 8192);
         updated.freshness = "stale";
         updated.coordination = Some(&status);
@@ -987,6 +1032,69 @@ mod tests {
         assert_eq!(current["coordination"]["generation"], 8);
         assert_eq!(current["freshness"], "stale");
         assert_eq!(get(&bytes, 0, 8192), old);
+    }
+    #[test]
+    fn maximum_live_metadata_cannot_break_a_maximum_cap_atomic_page() {
+        let maximum = execution::MAX_RESPONSE_BYTES as usize;
+        let initial = QueryCoordination::from(&crate::protocol::WorkspaceStatus {
+            workspace_root: "workspace/π\"".into(),
+            database: "state/index.db".into(),
+            phase: "idle".into(),
+            generation: 7,
+            available: true,
+            ..Default::default()
+        });
+        let mut input = result("symbols", vec![]);
+        input["coordination"] = serde_json::to_value(&initial).unwrap();
+        input["graph"] = json!({"findings":[{"symbol":{"id":"affected"},"paths":[[{"source_id":"root","target_id":"affected","proof":"x"}]]}],"boundaries":[],"limits":[],"root_definitions":[{"definition_symbol_id":"root-body"}],"capability_coverage":{"proof-owner":"partial"}});
+        let small = encode(input.clone(), options("impact", 1, 1, maximum), execution()).unwrap();
+        let live =
+            QueryCoordination::maximum_live("new-root".repeat(10_000), "new-db".repeat(10_000));
+        let mut updated = settings(0, maximum);
+        updated.freshness = "unverified";
+        updated.coordination = Some(&live);
+        let overhead = serde_json::to_vec(
+            &json!({"result":read(Cursor::new(&small), updated, execution()).unwrap()}),
+        )
+        .unwrap()
+        .len();
+        input["graph"]["findings"][0]["paths"][0][0]["proof"] =
+            Value::String("x".repeat(maximum - overhead + 1));
+        let bytes = encode(input.clone(), options("impact", 1, 1, maximum), execution()).unwrap();
+        let original = get(&bytes, 0, maximum);
+        let mut updated = settings(0, maximum);
+        updated.freshness = "unverified";
+        updated.coordination = Some(&live);
+        let grown = read(Cursor::new(&bytes), updated, execution()).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&json!({"result":grown})).unwrap().len(),
+            maximum
+        );
+        assert_eq!(grown["graph"], original["graph"]);
+        assert_eq!(grown["coverage"], original["coverage"]);
+        assert_eq!(grown["page"], original["page"]);
+        assert_eq!(grown["generation"], 7);
+        assert_eq!(grown["coordination"]["generation"], u64::MAX);
+        assert_eq!(
+            grown["coordination"]["workspace_root"],
+            initial.workspace_root
+        );
+        assert_eq!(grown["coordination"]["database"], initial.database);
+        assert_eq!(grown["graph"]["findings"].as_array().unwrap().len(), 1);
+        if let Value::String(proof) = &mut input["graph"]["findings"][0]["paths"][0][0]["proof"] {
+            proof.push('x');
+        }
+        assert!(matches!(
+            encode(input, options("impact", 1, 1, maximum), execution()),
+            Err(Error::ResponseLimitExceeded)
+        ));
+        let mut legacy = bytes;
+        legacy[8..12].copy_from_slice(&1u32.to_le_bytes());
+        seal_preamble(&mut legacy);
+        assert!(matches!(
+            validate(Cursor::new(&legacy), 0, PREFIX, 7, execution()),
+            Err(Error::CursorInvalidated)
+        ));
     }
     #[test]
     fn atomic_context_path_and_required_header_cannot_be_stripped() {
@@ -1147,8 +1255,29 @@ mod tests {
         ));
         assert!(matches!(
             validate(Cursor::new(&original), u32::MAX, PREFIX, 7, execution()),
-            Err(Error::CursorInvalidated)
+            Err(Error::InvalidRequest(_))
         ));
+    }
+    #[test]
+    fn out_of_range_position_is_request_error_and_valid_page_remains_replayable() {
+        let bytes = encode(
+            result("symbols", vec![json!({"id":"a"}), json!({"id":"b"})]),
+            options("symbols", 2, 1, 1024),
+            execution(),
+        )
+        .unwrap();
+        let original = get(&bytes, 0, 1024);
+        for position in [2, u32::MAX] {
+            assert!(matches!(
+                read(Cursor::new(&bytes), settings(position, 1024), execution()),
+                Err(Error::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                validate(Cursor::new(&bytes), position, PREFIX, 7, execution()),
+                Err(Error::InvalidRequest(_))
+            ));
+            assert_eq!(get(&bytes, 0, 1024), original);
+        }
     }
     #[test]
     fn checksum_valid_malformed_json_or_inconsistent_header_is_invalid() {

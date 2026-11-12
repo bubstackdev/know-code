@@ -17,7 +17,7 @@ use std::{
     },
 };
 
-pub const CONTROL_VERSION: u32 = 2;
+pub const CONTROL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -104,6 +104,11 @@ impl Drop for Publication<'_> {
     }
 }
 impl CursorService {
+    fn open_files(root: &Path) -> Result<result_store::ResultStore> {
+        let mut files = result_store::ResultStore::open(&root.join("cursors"))?;
+        files.reset()?;
+        Ok(files)
+    }
     pub fn new(root: &Path, databases: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
         let owner = nonce()?;
         let limits = CursorLimits::load(root)?;
@@ -142,14 +147,11 @@ impl CursorService {
             limits.max_cursors as usize,
             limits.retention_bytes,
         )?;
-        let file_error = match result_store::ResultStore::open(&root.join("cursors")) {
-            Ok(mut files) => match files.reset() {
-                Ok(()) => {
-                    registry.files = Some(files);
-                    None
-                }
-                Err(error) => Some(error.to_string()),
-            },
+        let file_error = match Self::open_files(root) {
+            Ok(files) => {
+                registry.files = Some(files);
+                None
+            }
             Err(error) => Some(error.to_string()),
         };
         Ok(Self {
@@ -350,7 +352,7 @@ impl CursorService {
         }
         if let Some(error) = &state.file_error {
             return Err(Error::ResourceLimited(format!(
-                "cursor result storage unavailable: {error}; repair the cursor cache permissions/contents and restart the coordinator"
+                "cursor result storage unavailable: {error}; repair the cursor cache permissions/contents; cursor maintenance will retry"
             )));
         }
         if request.action == "admit" {
@@ -570,6 +572,20 @@ impl CursorService {
     pub fn sweep(&self) -> Result<()> {
         let mut state = self.lock()?;
         self.running()?;
+        // Startup refuses foreign/unsafe cache entries. Once the owner repairs
+        // them, retry the same bounded reset without discarding any live state.
+        if state.file_error.is_some()
+            && state.registry.files.is_none()
+            && state.registry.entries.is_empty()
+        {
+            match Self::open_files(&self.root) {
+                Ok(files) => {
+                    state.registry.files = Some(files);
+                    state.file_error = None;
+                }
+                Err(error) => state.file_error = Some(error.to_string()),
+            }
+        }
         let execution = Execution::new(Default::default(), None)?;
         // Existing leases/retiring files make progress before old-incarnation
         // retries. Rotate retries so one locked index cannot starve the rest.
@@ -1153,7 +1169,7 @@ mod tests {
                     })
                 })
             });
-            wait_for_publication(&service);
+            wait_for_publication_fence(&service);
             assert!(!called.load(Ordering::Acquire));
             assert_eq!(
                 crate::recovery::selected_incarnation(&db)
@@ -1161,10 +1177,11 @@ mod tests {
                     .as_deref(),
                 Some(stored.index_incarnation.as_str())
             );
-            assert!(matches!(
-                call(&service, &db, action("borrow", Some(&stored))),
-                Err(Error::ResourceLimited(_))
-            ));
+            let denied = call(&service, &db, action("borrow", Some(&stored)));
+            assert!(
+                matches!(&denied, Err(Error::ResourceLimited(_))),
+                "unexpected cursor admission result: {denied:?}"
+            );
             let connection =
                 rusqlite::Connection::open(crate::recovery::selected_path(&db).unwrap()).unwrap();
             connection.busy_timeout(Duration::from_millis(100)).unwrap();
@@ -1428,6 +1445,32 @@ mod tests {
         ));
     }
     #[test]
+    fn repaired_startup_result_cache_recovers_without_deleting_foreign_entries() {
+        let (root, db, old) = fixture();
+        old.stop();
+        let foreign = root.join("cursors/.DS_Store");
+        std::fs::write(&foreign, b"owned test simulating foreign metadata").unwrap();
+        let service = CursorService::new(&root, [db.clone()]).unwrap();
+        assert!(service.lock().unwrap().file_error.is_some());
+        service.sweep().unwrap();
+        assert!(matches!(
+            call(&service, &db, action("admit", None)),
+            Err(Error::ResourceLimited(_))
+        ));
+        assert_eq!(
+            std::fs::read(&foreign).unwrap(),
+            b"owned test simulating foreign metadata"
+        );
+        // Simulate explicit owner repair; the service never removes this file.
+        std::fs::remove_file(&foreign).unwrap();
+        service.sweep().unwrap();
+        assert!(service.lock().unwrap().file_error.is_none());
+        let stored = ready(&service, &db);
+        let borrowed = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+        assert_eq!(std::fs::read(&borrowed.result_path).unwrap(), b"saved");
+        call(&service, &db, action("finish", Some(&borrowed))).unwrap();
+    }
+    #[test]
     fn failed_file_cleanup_keeps_reservation_pin_and_retries() {
         let (_, db, service) = fixture();
         let stored = ready(&service, &db);
@@ -1623,6 +1666,18 @@ mod tests {
             std::thread::yield_now();
         }
     }
+    fn wait_for_publication_fence(service: &CursorService) {
+        // Ownership precedes the fence so CPU-throttled publishers still
+        // permit reads. Pressure tests require the actual admission fence.
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.lock().unwrap().registry.publication_waiting {
+            assert!(
+                std::time::Instant::now() < until,
+                "publisher never entered the cursor admission fence"
+            );
+            std::thread::yield_now();
+        }
+    }
     #[test]
     fn cursor_mutex_wait_observes_deadline_without_acquiring_the_fence() {
         let (_, db, service) = fixture();
@@ -1731,11 +1786,12 @@ mod tests {
         let next_generation = writer.generation;
         std::thread::scope(|scope| {
             let publish = scope.spawn(|| service.publish(&db, writer, &Control::default()));
-            wait_for_publication(&service);
-            assert!(matches!(
-                call(&service, &db, action("borrow", Some(&stored))),
-                Err(Error::ResourceLimited(_))
-            ));
+            wait_for_publication_fence(&service);
+            let denied = call(&service, &db, action("borrow", Some(&stored)));
+            assert!(
+                matches!(&denied, Err(Error::ResourceLimited(_))),
+                "unexpected cursor admission result: {denied:?}"
+            );
             // A competing writer can acquire IMMEDIATE while publication waits.
             let connection = rusqlite::Connection::open(&db).unwrap();
             connection.busy_timeout(Duration::from_millis(100)).unwrap();

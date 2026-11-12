@@ -33,11 +33,15 @@ function pinsAt(directory,ignoreSwift=false,ignoreXcode=false) {
   return {swift,xcode,inputs};
 }
 
-function repositoryPins(directory) {
+function repositoryPins(directory, workspaceRoot) {
   let swift,xcode;
   const inputs=[];
   for (let current=directory;;current=path.dirname(current)) {
     const pins=pinsAt(current,Boolean(swift),Boolean(xcode));
+    const relative=path.relative(workspaceRoot,current);
+    const scope=relative==='..'||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative)?'ancestor':'workspace';
+    if(pins.swift)pins.swift.scope=scope;
+    if(pins.xcode)pins.xcode.scope=scope;
     swift??=pins.swift; xcode??=pins.xcode;
     inputs.push(...pins.inputs);
     if (path.dirname(current)===current) break;
@@ -58,7 +62,7 @@ function identifierFor(bundle,directory) {
 
 // One resolver per worker caches installed-tool probes; pin files are read for
 // each project. It never changes xcode-select, installs tools, or uses a shim.
-export function createToolchainResolver({environment=process.env,
+export function createToolchainResolver({environment=process.env,workspaceRoot,
   applicationDirectories=['/Applications',path.join(os.homedir(),'Applications')],
   toolchainDirectories=['/Library/Developer/Toolchains',path.join(os.homedir(),'Library/Developer/Toolchains')]}={}) {
   const base={...environment};
@@ -129,7 +133,9 @@ export function createToolchainResolver({environment=process.env,
     } catch (error) { probes.set(key,error);throw error; }
   }
   return directory => {
-    const pins=repositoryPins(directory);
+    const root=path.resolve(workspaceRoot??directory);
+    const pins=repositoryPins(directory,root);
+    const pinOrigin=pins.swift?.scope==='ancestor'||pins.xcode?.scope==='ancestor'?'inherited_pin':'repository_pin';
     const explicit=Boolean(base.DEVELOPER_DIR || base.TOOLCHAINS || base.SDKROOT || base.SWIFT_EXEC || base.SWIFT_EXEC_MANIFEST);
     const matches=tool=>{
       if (pins.xcode && tool.xcodeVersion!==pins.xcode.value) return false;
@@ -143,19 +149,20 @@ export function createToolchainResolver({environment=process.env,
       return tool.identifier===pin || path.basename(tool.bundle,'.xctoolchain')===pin || tool.version.includes(`(${pin})`);
     };
     const finish=(tool,origin)=>({...tool,inputPaths:pins.inputs,selection:{origin,
+      workspaceRoot:root,
       developerDirectory:tool.env.DEVELOPER_DIR??null,toolchainIdentifier:tool.identifier||null,
       xcodeVersion:tool.xcodeVersion||null,
       sdkOverride:base.SDKROOT??null,
       swiftPin:pins.swift??null,xcodePin:pins.xcode??null}});
     if (explicit) {
       const tool=probe(base,directory);
-      if (!matches(tool)) throw new Error(`explicit Swift toolchain conflicts with repository pin ${pins.swift?.path??pins.xcode?.path}; align the override and pin. Selected: ${tool.version}`);
+      if (!matches(tool)) throw new Error(`explicit Swift toolchain conflicts with selected pin ${pins.swift?.path??pins.xcode?.path}; align the override and pin. Selected: ${tool.version}`);
       return finish(tool,'explicit_override');
     }
     if (pins.swift?.value==='system') {
       const tool=probe(base,directory);
       if (!matches(tool)) throw new Error(`the system Swift selection conflicts with ${pins.xcode.path}; align the repository pins or select a matching developer directory explicitly`);
-      return finish(tool,'repository_pin');
+      return finish(tool,pinOrigin);
     }
     const {xcodes,bundles}=installed(directory);
     const candidates=xcodes.map(developer=>({...base,DEVELOPER_DIR:developer}));
@@ -171,7 +178,7 @@ export function createToolchainResolver({environment=process.env,
     for (const candidate of candidates) {
       try {
         const tool=probe(candidate,directory);
-        if (matches(tool)) return finish(tool,pins.swift||pins.xcode?'repository_pin':candidate.DEVELOPER_DIR?'preferred_xcode':'command_line_tools');
+        if (matches(tool)) return finish(tool,pins.swift||pins.xcode?pinOrigin:candidate.DEVELOPER_DIR?'preferred_xcode':'command_line_tools');
       } catch (error) { errors.push(error.message); }
     }
     throw new Error(`no compatible installed Swift toolchain${pins.swift?` matching ${pins.swift.path} (${pins.swift.value})`:''}${pins.xcode?` matching ${pins.xcode.path} (${pins.xcode.value})`:''}. Install/select the required toolchain separately and refresh. Know Code does not install compilers. ${errors.join('; ')}`);

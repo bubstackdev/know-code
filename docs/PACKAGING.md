@@ -1,12 +1,12 @@
 # Runtime discovery and local candidate packages
 
-The user selected a separate shared coordinator/worker runtime and thin npm/NuGet SDKs. The first candidate matrix is macOS 15+ on Apple Silicon, Node 24 and a separately installed .NET 10 SDK. Only the current development machine is initially tested; selecting a floor is not evidence of testing every older OS version. Node/.NET are not installed or bundled by Know Code.
+Distribution uses a separate shared coordinator/worker runtime and thin npm/NuGet SDKs for macOS 15+ on Apple Silicon, Node 24 and a separately installed .NET 10 SDK. Published v0.0.1 passed exact-artifact signing/notarization and macOS 15 installed/offline checks; each new release needs matching artifact evidence. Node/.NET are not installed or bundled by Know Code. v0.0.2 is stabilization only; see the [changelog](../CHANGELOG.md) and [release plan](RELEASE_PLAN.md).
 
-The supported-platform rationale is the [Node 24 build matrix](https://raw.githubusercontent.com/nodejs/node/v24.22.2/BUILDING.md) and [.NET 10 OS matrix](https://raw.githubusercontent.com/dotnet/core/main/release-notes/10.0/supported-os.md), checked 2026-11-09. This SDK is built for .NET 10; compiler selection still honors repository pins and existing Roslyn compatibility checks. Swift/Rust adapters remain explicitly experimental v0.0.3 work, even when their small adapter resources are retained in a candidate.
+The supported-platform rationale is the [Node 24 build matrix](https://raw.githubusercontent.com/nodejs/node/v24.22.2/BUILDING.md) and [.NET 10 OS matrix](https://raw.githubusercontent.com/dotnet/core/main/release-notes/10.0/supported-os.md), checked 2026-11-09. This SDK is built for .NET 10; compiler selection still honors repository pins and existing Roslyn compatibility checks. Swift/Rust adapters remain experimental outside the supported TS/C# contract, even when their small adapter resources are retained; accepted language goals remain in [PRODUCT_CONSTRAINTS.md](PRODUCT_CONSTRAINTS.md).
 
 ## Layout and discovery
 
-A runtime archive extracts to `know-code-0.0.1-darwin-arm64/`:
+A v0.0.2 runtime archive extracts to `know-code-0.0.2-darwin-arm64/`:
 
 ```text
 bin/know-code
@@ -37,7 +37,7 @@ Packaging consumes matching built artifacts and creates a runtime `.tar.gz`, npm
 
 NuGet worker publication retains its framework-dependent runtime/dependency files and Roslyn build hosts, and omits debug PDBs. Worker JS dependency trees are copied from the pinned installed closure, with their notices, without development workspace symlinks or consumer install scripts. SDK packages include third-party evidence too. A final dependency/license/source provenance review remains a publication gate; this candidate inventory is not a substitute for that review.
 
-Final public signing/notarization, registry destinations/ownership, committed/tagged source, clean-machine/older-OS verification and remaining 0.0.1 acceptance requirements are still open. These local candidates do not authorize external publication. The user-approved development LaunchAgent remains separate.
+Every public release requires exact source/producer/archive provenance, dependency/license closure, signing/notarization and normal-security installed/offline/platform checks. Distribution uses GitHub release assets, including npm/NuGet SDK archives; registry publication is separate. The development LaunchAgent remains separate. See [0.0.1-to-0.0.2 upgrade compatibility](INSTALLATION.md#upgrading-from-001-to-002). Dated checkpoints below retain their original evidence limits.
 
 ## Verification
 

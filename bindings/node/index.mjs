@@ -8,10 +8,10 @@ function abortError(signal) {
 }
 function checkAborted(signal) { if (signal?.aborted) throw abortError(signal); }
 function checkQueryContract() {
-  if (typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 8
+  if (typeof native.queryContractVersion !== 'function' || native.queryContractVersion() !== 9
       || typeof native.QueryReservation !== 'function' || typeof native.queryJsonReserved !== 'function'
       || typeof native.queryMaxRequestBytes !== 'function')
-    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; project execution trust or shared query admission is missing or incompatible.');
+    throw new KnowCodeError('update_required', 'Update the Know Code JavaScript and native packages together; compact query status, frozen-page headroom or shared query admission is missing or incompatible.');
 }
 /** Select one shared scope for an embedding/server host; default queries use the account scope. */
 export class QueryLimitScope {

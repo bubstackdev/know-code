@@ -1,9 +1,11 @@
 """Compiler-backed Swift worker contract tests; retained work stays in .artifacts."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +17,9 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), KNOW_CODE_BUILD_PROFILE=PROFILE)
 ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 HARNESS = ROOT / 'tests/worker_harness.mjs'
-subprocess.run(['bash', 'providers/swift/build.sh', PROFILE], cwd=ROOT, check=True)
+subprocess.run([sys.executable, ROOT / 'scripts/build_record.py', 'verify', PROFILE], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+READER = ROOT / f'.artifacts/build/{PROFILE}/swift/indexstore-reader'
+reader_sha256 = hashlib.sha256(READER.read_bytes()).hexdigest()
 
 
 def invoke(name, sources, projects=None, configured=None):
@@ -110,7 +114,8 @@ assert any(d['code'] in ('swiftpm_no_swift_targets', 'swiftpm_manifest_failed') 
 assert not any('facts' in m or 'source' in m for m in packaged)
 assert all(source.read_bytes() == content for source, content in original.items())
 assert not any((RUN / 'data/workers/swift').glob('job-*')), 'compiler scratch must be reclaimed'
-summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'symbols': len(symbols),
+assert hashlib.sha256(READER.read_bytes()).hexdigest() == reader_sha256, 'test changed the built reader'
+summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'symbols': len(symbols), 'reader_sha256': reader_sha256,
            'occurrences': len(occurrences), 'unicode_ranges_checked': checked,
            'compiler': compilations[0]['compilerVersion'], 'scope': 'standalone_directory_groups',
            'explicit_packages': 'empty_package_partial_without_inference'}

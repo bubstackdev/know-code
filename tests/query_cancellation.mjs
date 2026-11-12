@@ -7,7 +7,7 @@ import {pathToFileURL} from 'node:url';
 
 const [addon,database,mode,encoded,delay] = process.argv.slice(2);
 const native = createRequire(pathToFileURL(addon))('./know_code.node');
-assert.equal(native.queryContractVersion(),8,'matching cancellation-native contract required');
+assert.equal(native.queryContractVersion(),9,'matching cancellation-native contract required');
 const {Index} = await import(pathToFileURL(addon));
 const index = new Index(database);
 const reason = 'owned query cancellation fixture';
@@ -67,4 +67,4 @@ if (mode === 'preabort') {
   }
   details={responses,late_cancels:3};
 } else {throw new Error('unknown cancellation fixture mode');}
-console.log(JSON.stringify({passed:true,contract:8,mode,...details}));
+console.log(JSON.stringify({passed:true,contract:9,mode,...details}));

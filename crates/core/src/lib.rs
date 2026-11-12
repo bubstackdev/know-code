@@ -318,7 +318,7 @@ pub fn query_json_reserved(
                     } else {
                         "stale"
                     };
-                    result.coordination = Some(status);
+                    result.coordination = Some(query::QueryCoordination::from(&status));
                 }
                 Err(_)
                     if control::root_for_database(std::path::Path::new(database))

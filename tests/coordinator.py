@@ -1,4 +1,5 @@
 """Native saved events -> persistent coordinator -> scoped publication."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 import atexit
 import json
@@ -42,7 +43,7 @@ fixture_config.write_text(json.dumps(initial_config))
 
 def run(args, check=True):
     process = subprocess.run([str(a) for a in args], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=120)
-    assert not check or not process.returncode, (args, process.stdout, process.stderr)
+    check_exit(process,args,check)
     return process
 
 def stop():

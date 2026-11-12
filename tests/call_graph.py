@@ -1,4 +1,5 @@
 """Real TS/Roslyn -> atomic store -> Rust/.NET/Node call/impact parity."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 import atexit
 import copy
@@ -52,6 +53,11 @@ cs_source = '''// π😀 source coordinates
 using System;
 public interface IWork { int Work(); }
 public class Parent { public virtual int Work() => 0; }
+public class PrimaryBase { public PrimaryBase(int x) { } public PrimaryBase(string x) { } }
+public static class PrimaryInputs { public static int ComputePrimaryInput(int x) => x; }
+public class PrimaryDerived(int x) : PrimaryBase(PrimaryInputs.ComputePrimaryInput(x)) {
+  public PrimaryDerived() : this(1) { }
+}
 public class Worker : Parent, IWork {
   public static int Leaf() { /* π😀 retained declaration */ return 1; }
   public override int Work() => Leaf();
@@ -82,7 +88,7 @@ public class Worker : Parent, IWork {
 
 def run(args, check=True):
     p = subprocess.run([str(a) for a in args], cwd=ROOT, env=ENV, text=True, capture_output=True, timeout=120)
-    assert not check or p.returncode == 0, (p.stdout, p.stderr)
+    check_exit(p,args,check)
     return p
 
 
@@ -209,6 +215,23 @@ for method in ['ViaInterface', 'ViaVirtual']:
     exact = graph('callees', symbol(method, 'cs'), target='net10.0', exact_only=True)
     assert not any(e['resolution'] == 'possible_dispatch' for f in exact['findings'] for p in f['paths'] for e in p)
 checks += ['Roslyn calls/local functions/accessors/operators/conversions', 'possible dispatch with proof', 'exact and implicit filters']
+
+# The primary base initializer belongs to the compiler-selected primary
+# constructor, including argument calls; a secondary constructor must not own it.
+primary = symbol('.ctor', 'cs', 'PrimaryDerived(int)')
+primary_calls = graph('callees', primary, target='net10.0')
+primary_findings = primary_calls['findings']
+assert {f['symbol']['signature'] for f in primary_findings} == {
+    'PrimaryBase.PrimaryBase(int)', 'PrimaryInputs.ComputePrimaryInput(int)'}, primary_calls
+for finding in primary_findings:
+    edge = finding['paths'][0][0]
+    assert edge['source_id'] == primary and edge['resolution'] == 'compiler_bound', edge
+    retained = query({'op': 'source', 'artifact_id': edge['location']['artifact_id']})['source']['text'].encode()
+    span = retained[edge['location']['start_byte']:edge['location']['end_byte']].decode()
+    expected = ('PrimaryBase(PrimaryInputs.ComputePrimaryInput(x))' if finding['symbol']['name'] == '.ctor'
+                else 'PrimaryInputs.ComputePrimaryInput(x)')
+    assert span == expected, (span, edge)
+checks += ['primary-constructor base and argument calls retain exact constructor ownership and saved sites']
 
 for language, constant, reader in [('ts', 'answer', 'readAnswer'), ('cs', 'Answer', 'ReadAnswer')]:
     impact = graph('impact', symbol(constant, language), kinds=['reference'])

@@ -5,8 +5,9 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {readRequest, send} from '../shared/protocol.mjs';
 import {Analyzer, compilerEnvironment} from './lsp.mjs';
+import {relative,byteOffsets} from '../shared/source.mjs';
+import {orderedDefinitions,ExternalSources} from './navigation.mjs';
 
-const relative = (root, name) => path.relative(root, name).split(path.sep).join('/');
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
 const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
 
@@ -28,18 +29,9 @@ function source(filename, root, compilationId) {
   const utf8 = fs.readFileSync(filename);
   const text = utf8.toString('utf8');
   if (!Buffer.from(text, 'utf8').equals(utf8)) throw new Error(`unsupported non-UTF-8 Rust source: ${filename}`);
-  const offsets = new Uint32Array(text.length + 1);
+  const offsets = byteOffsets(text);
   const lines = [0];
-  let bytes = 0;
-  for (let i = 0; i < text.length;) {
-    const point = text.codePointAt(i);
-    offsets[i] = bytes;
-    if (point > 0xffff) offsets[i + 1] = bytes;
-    bytes += Buffer.byteLength(String.fromCodePoint(point));
-    i += point > 0xffff ? 2 : 1;
-    if (point === 10) lines.push(i);
-  }
-  offsets[text.length] = bytes;
+  for (let i=0;i<text.length;i++) if (text.charCodeAt(i)===10) lines.push(i+1);
   const sha256 = createHash('sha256').update(utf8).digest('hex');
   return {filename, text, offsets, lines, uri: pathToFileURL(filename).href,
     artifact: {id: `${relative(root, filename)}@${sha256}`, path: relative(root, filename), utf8, sha256, compilationId, generated: false},
@@ -93,7 +85,7 @@ async function analyze(root, manifest, metadata, configuration) {
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
   const analyzer = new Analyzer(directory);
   const emitted = new Set();
-  const externalSources = new Map();
+  const externalSources = new ExternalSources();
   let batch = {compilationId, symbols: [], occurrences: [], relationships: []};
   const flush = () => {
     if (batch.symbols.length || batch.occurrences.length) send('facts', batch);
@@ -132,8 +124,9 @@ async function analyze(root, manifest, metadata, configuration) {
         collect(outline);
       }
       const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
-      let line = 0, character = 0;
-      for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {
+      function* positions() {
+       let line = 0, character = 0;
+       for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {
         const [deltaLine, deltaCharacter, length, tokenType, modifiers] = tokens.data.slice(i, i + 5);
         line += deltaLine;
         character = deltaLine ? deltaCharacter : character + deltaCharacter;
@@ -148,7 +141,11 @@ async function analyze(root, manifest, metadata, configuration) {
           if (spelling === '!') continue;
           if (spelling.endsWith('!')) endPosition.character--;
         }
-        const definitions = await analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position});
+        yield {kind,position,endPosition};
+       }
+      }
+      for await (const {item:{kind,position,endPosition},definitions} of orderedDefinitions(positions(),
+        ({position})=>analyzer.request('textDocument/definition',{textDocument:{uri:current.uri},position}))) {
         const locations = definitions ? (Array.isArray(definitions) ? definitions : [definitions]) : [];
         const unique = new Map(locations.map(d => {
           const uri = d.targetUri ?? d.uri;

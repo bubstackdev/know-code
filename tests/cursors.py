@@ -3,6 +3,7 @@
 Run after a matching build; this harness never builds, mutates live state or uses
 external corpora. Every subprocess response is retained in the isolated run.
 """
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,subprocess,time
@@ -37,7 +38,7 @@ def run(args,*,input=None,check=True):
  with EVENTS.open('a') as log:
   log.write(json.dumps({'args':list(map(str,args)),'input':input,
                        'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr})+'\n')
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,args,check)
  return p
 
 def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
@@ -119,6 +120,10 @@ try:
  error(workspace_next(token,response_max_bytes=1024),'response_limit_exceeded')
  assert frozen(workspace_next(token))==retained
  CHECKS+=['failed_small_cap_and_deadline_preserve_replay','Index_and_Workspace_NextPageAsync_paths']
+ for language in ['cli','node','dotnet']:
+  error(query(language,{'op':'next_page','cursor':token[:-8]+'ffffffff'}),'invalid_request')
+  replay(token,retained)
+ CHECKS.append('out_of_range_position_does_not_invalidate_shared_cursor')
  error(query('cli',{'op':'next_page','cursor':token,'limit':3}),'invalid_request')
  CHECKS.append('continuation_rejects_scope_mutation')
 

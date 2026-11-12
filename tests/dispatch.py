@@ -1,4 +1,5 @@
 """Cross-project dispatch with compiler-selected composition and exact proof sites."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 import atexit
 import json
@@ -59,7 +60,7 @@ for name,refs,source in ts_projects:
     write(f'ts/{name}/code.ts',source)
 def run(args,check=True):
     p=subprocess.run([str(a) for a in args],cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=180)
-    assert not check or p.returncode==0,(p.stdout,p.stderr)
+    check_exit(p,args,check)
     return p
 atexit.register(lambda:run([HOST,'coordinator','stop'],False))
 grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')

@@ -6,22 +6,7 @@ import {graphFacts} from './graph.mjs';
 import {canSend,MAX_FRAME} from '../shared/protocol.mjs';
 import {ProjectSetupError,boundedText} from './project-errors.mjs';
 import {classificationPolicy, compilationClassification, sourceClassification, TEST_CLASSIFICATION_POLICY} from './test-classification.mjs';
-const relative = (root, name) => path.relative(root, name).split(path.sep).join('/');
-
-// One linear conversion per source; never slice from byte zero for every token.
-function byteOffsets(text) {
-  const offsets = new Uint32Array(text.length + 1);
-  let bytes = 0;
-  for (let i = 0; i < text.length;) {
-    const point = text.codePointAt(i);
-    offsets[i] = bytes;
-    if (point > 0xffff) offsets[i + 1] = bytes;
-    bytes += Buffer.byteLength(String.fromCodePoint(point));
-    i += point > 0xffff ? 2 : 1;
-  }
-  offsets[text.length] = bytes;
-  return offsets;
-}
+import {relative,byteOffsets,sourceBoundary} from '../shared/source.mjs';
 
 export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], inferredDirectory = root, send, epoch = '', testPolicy = TEST_CLASSIFICATION_POLICY) {
   classificationPolicy(testPolicy);
@@ -65,6 +50,8 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
   });
   const indexed = new Set(files.map(f => f.fileName));
   const emitted = new Set();
+  let unresolvedNames = 0, sourceBoundaries = 0;
+  const sourceDiagnostics = [];
   let batch = {compilationId: id, symbols: [], occurrences: [], relationships: []};
   let graphFile, graphArtifact, graphOffsets;
   const anchored = new Set();
@@ -115,6 +102,8 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
     relationship(edge) {batch.relationships.push(edge);if(batch.relationships.length>=128)flush();}
   });
   for (const file of files) {
+    const boundary = sourceBoundary(root,file.fileName);
+    if (boundary && ++sourceBoundaries <= 100) sourceDiagnostics.push(boundary);
     const utf8 = Buffer.from(file.text, 'utf8');
     const sha256 = createHash('sha256').update(utf8).digest('hex');
     const artifactId = `${relative(root, file.fileName)}@${sha256}`;
@@ -151,7 +140,7 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
             graph.reference(node,symbol,owner,declaration);
           }
           if (batch.occurrences.length >= 128) flush();
-        }
+        } else if (!(ts.isLabeledStatement(node.parent) || ts.isBreakStatement(node.parent) || ts.isContinueStatement(node.parent))) unresolvedNames++;
       }
       ts.forEachChild(node, child=>visit(child,owner));
     };
@@ -163,6 +152,9 @@ export function analyze(ts, root, config, inferredFiles, setupDiagnostics = [], 
     severity: d.category === ts.DiagnosticCategory.Error ? 'error' : 'warning',
     message: ts.flattenDiagnosticMessageText(d.messageText, '\n'), path: d.file ? relative(root, d.file.fileName) : ''}));
   items.push(...setupDiagnostics,...omitted.slice(0,100));
+  items.push(...sourceDiagnostics);
+  if (sourceBoundaries > 100) items.push({code:'source_origins_truncated',severity:'info',path:'',message:`${sourceBoundaries} source-origin boundaries; first 100 paths reported.`});
+  if (unresolvedNames) items.push({code:'unresolved_name_sites',severity:'info',path:'',message:`${unresolvedNames} identifier sites had no compiler symbol; no exact symbol reference was invented. This count excludes control-flow labels and is not an exhaustive unresolved-reference analysis.`});
   if(omitted.length>100)items.push({code:'artifacts_omitted',severity:'warning',message:`${omitted.length} source artifacts exceed the worker frame; first 100 paths reported.`,path:''});
   if (inferred) items.push({code: 'inferred_configuration', severity: 'info', message: 'Compiler options were inferred; intended build configuration is unknown.', path: ''});
   if (diagnostics.length > 100) items.push({code: 'diagnostics_truncated', severity: 'info', message: `${diagnostics.length} diagnostics; first 100 included.`, path: ''});

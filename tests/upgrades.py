@@ -1,4 +1,5 @@
 """Owned historical-store upgrade acceptance through CLI and both native SDKs."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 from contextlib import closing
@@ -32,7 +33,7 @@ def run(args,check=True,timeout=120):
   with (RUN/'commands.jsonl').open('a') as log:log.write(json.dumps({'args':argv,'timeout':timeout,'stdout':str(error.stdout),'stderr':str(error.stderr)})+'\n')
   raise
  with (RUN/'commands.jsonl').open('a') as log:log.write(json.dumps({'args':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,'elapsed_ms':(time.monotonic()-started)*1000})+'\n')
- assert not check or p.returncode==0,(argv,p.returncode,p.stdout,p.stderr)
+ check_exit(p,argv,check)
  return p
 
 def cli(*args,check=True):return run([HOST,*args],check)

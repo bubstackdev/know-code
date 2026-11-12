@@ -171,6 +171,14 @@ impl Control {
             .as_ref()
             .is_some_and(|inner| inner.state.lock().unwrap().committed)
     }
+    /// Whether two managed handles control the same admitted analysis job.
+    /// Staging/publication clones share cancellation ownership, not a new job.
+    pub fn same_job(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
     pub fn resource_limited(&self) -> bool {
         self.0.as_ref().is_some_and(|inner| {
             matches!(inner.state.lock().unwrap().reason, Some(Stop::Limited(_)))
@@ -360,6 +368,7 @@ fn signal(group: i32, signal: i32) {
 pub struct Governor {
     meter: Arc<Mutex<Meter>>,
     limits: Arc<Mutex<Limits>>,
+    configuration: Mutex<()>,
     active: AtomicBool,
 }
 impl Governor {
@@ -372,6 +381,7 @@ impl Governor {
                 credit: 0.0,
             })),
             limits: Arc::new(Mutex::new(limits)),
+            configuration: Mutex::new(()),
             active: AtomicBool::new(false),
         }))
     }
@@ -379,13 +389,22 @@ impl Governor {
         self.limits.lock().unwrap().clone()
     }
     pub fn configure(&self, data: &Path, limits: Limits) -> Result<bool> {
+        self.configure_with(limits, |limits| limits.save(data))
+    }
+    fn configure_with(
+        &self,
+        limits: Limits,
+        save: impl FnOnce(&Limits) -> Result<()>,
+    ) -> Result<bool> {
         limits.validate()?;
-        let mut current = self.limits.lock().unwrap();
-        if *current == limits {
+        // Serialize durable replacements without holding the sampled limits
+        // lock across filesystem I/O. Failed saves keep the effective limits.
+        let _configuration = self.configuration.lock().unwrap();
+        if self.limits() == limits {
             return Ok(false);
         }
-        limits.save(data)?;
-        *current = limits;
+        save(&limits)?;
+        *self.limits.lock().unwrap() = limits;
         Ok(true)
     }
     pub fn start(self: &Arc<Self>) -> Result<Session> {
@@ -674,6 +693,48 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
+    #[test]
+    fn configuration_io_keeps_limits_readable_and_failed_save_keeps_effective_value() {
+        let initial = Limits::default();
+        let changed = Limits {
+            memory_mib: initial.memory_mib + 1,
+            ..initial.clone()
+        };
+        let governor = Governor::new(initial.clone()).unwrap();
+        let (entered, waiting) = std::sync::mpsc::sync_channel(0);
+        let (release, released) = std::sync::mpsc::sync_channel(0);
+        let readable = thread::scope(|scope| {
+            let worker_governor = &governor;
+            let requested = changed.clone();
+            let worker = scope.spawn(move || {
+                worker_governor.configure_with(requested, |_| {
+                    entered.send(()).unwrap();
+                    released.recv().unwrap();
+                    Err(std::io::Error::other("owned save failure").into())
+                })
+            });
+            waiting.recv().unwrap();
+            let readable = governor.limits.try_lock().ok().map(|limits| limits.clone());
+            let serialized = governor.configuration.try_lock().is_err();
+            release.send(()).unwrap();
+            assert!(worker.join().unwrap().is_err());
+            assert!(serialized, "concurrent saves must remain serialized");
+            readable
+        });
+        assert_eq!(readable, Some(initial.clone()));
+        assert_eq!(governor.limits(), initial);
+        assert!(
+            governor
+                .configure_with(changed.clone(), |_| Ok(()))
+                .unwrap()
+        );
+        assert_eq!(governor.limits(), changed);
+        assert!(
+            !governor
+                .configure_with(changed, |_| panic!("unchanged limits saved again"))
+                .unwrap()
+        );
+    }
     #[test]
     fn staging_commit_keeps_cancel_live_and_disk_io_failure_is_not_a_limit() {
         let governor = Governor::new(Limits::default()).unwrap();

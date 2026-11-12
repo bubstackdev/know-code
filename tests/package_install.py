@@ -1,6 +1,6 @@
 """Install archives, restore dependencies, then test with checkout/network access denied."""
 from pathlib import Path
-import argparse,atexit,hashlib,json,os,selectors,shlex,shutil,socket,subprocess,sys,tarfile,time,zipfile
+import argparse,atexit,hashlib,json,os,re,selectors,shlex,shutil,socket,subprocess,sys,tarfile,time,zipfile
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256');args=parser.parse_args()
 assert bool(args.signed_team_id)==bool(args.signed_signer_sha256),'signed mode requires both Team ID and pinned signer SHA-256'
@@ -110,6 +110,7 @@ if args.signed_team_id:
 
 # Review integrity and archive inventory before installation.
 manifest=json.loads((PACKAGES/'manifest.json').read_text());assert manifest['candidate']
+VERSION=manifest['version'];assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?',VERSION)
 shutil.copy2(PACKAGES/'manifest.json',PREFIX/'candidate-manifest.json')
 for artifact in manifest['artifacts']:
  source=PACKAGES/artifact['file'];assert hashlib.sha256(source.read_bytes()).hexdigest()==artifact['sha256']
@@ -132,7 +133,8 @@ info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bun
 runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
 contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':1,'resource_control_version':3}
 assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
-assert command(HOST,'--version').stdout.startswith('know-code 0.0.1')
+assert runtime_manifest['version']==VERSION
+assert command(HOST,'--version').stdout.strip()==f'know-code {VERSION}'
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']
 for native in [bundle/'bin/know-code',PREFIX/'unused']:
  if not native.exists():continue
@@ -143,14 +145,14 @@ NODE=PREFIX/'node-consumer';NODE.mkdir();(NODE/'package.json').write_text('{"nam
 command('npm','install','--offline','--ignore-scripts','--no-audit','--no-fund',next(FEED.glob('know-code-node-*.tgz')),cwd=NODE)
 node_driver=(ROOT/'tests/workspace_client.mjs').read_text().replace("await import(pathToFileURL(process.argv[2]))","await import('@know-code/node')")
 (NODE/'client.mjs').write_text(node_driver)
-DOTNET=PREFIX/'net-consumer';DOTNET.mkdir();(DOTNET/'Consumer.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><UseAppHost>false</UseAppHost><ImplicitUsings>enable</ImplicitUsings></PropertyGroup><ItemGroup><PackageReference Include="KnowCode" Version="0.0.1" /></ItemGroup></Project>')
+DOTNET=PREFIX/'net-consumer';DOTNET.mkdir();(DOTNET/'Consumer.csproj').write_text(f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><UseAppHost>false</UseAppHost><ImplicitUsings>enable</ImplicitUsings></PropertyGroup><ItemGroup><PackageReference Include="KnowCode" Version="{VERSION}" /></ItemGroup></Project>')
 (DOTNET/'Program.cs').write_text((ROOT/'bindings/dotnet/Smoke/Program.cs').read_text())
 (PREFIX/'NuGet.Config').write_text('<configuration><packageSources><clear/><add key="candidate" value="'+str(FEED)+'" /></packageSources></configuration>')
 command('dotnet','build',DOTNET/'Consumer.csproj','-c','Release','--nologo','-p:UseSharedCompilation=false','-nodeReuse:false',cwd=DOTNET)
 checks+=['npm_archive_installed_offline','NuGet_archive_installed_offline_with_native_assets']
 (WORKSPACE/'tsconfig.json').write_text('{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"noEmit":true},"files":["value.ts"]}')
 (WORKSPACE/'value.ts').write_text('// café 😀 offline source\nimport { dependencyValue } from "@know-code/offline-dependency";\nexport function leaf() { return dependencyValue(); }\nexport function answer() { return leaf(); }\n')
-(WORKSPACE/'App.csproj').write_text('<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup><ItemGroup><PackageReference Include="KnowCode" Version="0.0.1" /></ItemGroup></Project>')
+(WORKSPACE/'App.csproj').write_text(f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><LangVersion>latest</LangVersion></PropertyGroup><ItemGroup><PackageReference Include="KnowCode" Version="{VERSION}" /></ItemGroup></Project>')
 CSHARP='// café 😀 offline source\nusing System.Text.Json.Serialization; public static class Greeter { public static int Greet() => 42; public static int GreetCaller() => Greet(); public static KnowCode.QueryRequest Request() => new("symbols"); } public record Person(string Name); [JsonSerializable(typeof(Person))] public partial class MyContext : JsonSerializerContext { }\n'
 (WORKSPACE/'Code.cs').write_text(CSHARP)
 
@@ -169,7 +171,7 @@ command('npm','install','--offline','--ignore-scripts','--no-audit','--no-fund',
 command('dotnet','restore',WORKSPACE/'App.csproj','--configfile',PREFIX/'NuGet.Config','--nologo',cwd=WORKSPACE)
 assert (WORKSPACE/'node_modules/typescript/lib/typescript.js').is_file()
 assert (WORKSPACE/'node_modules/@know-code/offline-dependency/index.d.ts').is_file()
-assets=json.loads((WORKSPACE/'obj/project.assets.json').read_text());assert 'KnowCode/0.0.1' in assets['libraries']
+assets=json.loads((WORKSPACE/'obj/project.assets.json').read_text());assert f'KnowCode/{VERSION}' in assets['libraries']
 # Acquire only a tool distribution, through the shipped helper, before Internet
 # denial. This cache lives outside DATA and cannot pre-seed a serving index.
 TOOL_CACHE=PREFIX/'tool-cache';npm10_prime=PREFIX/'prime-npm10.mjs'

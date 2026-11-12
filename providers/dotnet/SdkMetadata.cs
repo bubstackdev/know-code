@@ -117,6 +117,7 @@ static class SdkMetadataServer
             if (string.IsNullOrWhiteSpace(frameworks)) frameworks = result.Definition["TargetFramework"];
             var targets = frameworks.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
             if (targets.Length == 0) throw new ProjectSetupException(request.ProjectPath,"target_context_unavailable",$"cannot determine target frameworks for {request.ProjectPath}");
+            var generatedDirectories = new Dictionary<string,string[]>(StringComparer.Ordinal);
             foreach (var target in targets)
             {
                 // Fresh evaluation/built state for every inner context. Metadata
@@ -154,6 +155,11 @@ static class SdkMetadataServer
                 }
                 if (request.IncludeIdentity)
                 {
+                    generatedDirectories.Add(target,
+                        new[] { "IntermediateOutputPath", "CompilerGeneratedFilesOutputPath" }
+                            .Select(classificationState.GetPropertyValue).Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Select(value => Path.GetFullPath(value, Path.GetDirectoryName(request.ProjectPath)!))
+                            .Distinct(StringComparer.Ordinal).ToArray());
                     var signals = new Dictionary<string, string>(StringComparer.Ordinal);
                     foreach (var name in TestClasses.Properties)
                         if (classificationState.GetProperty(name) is { } property) signals.Add(name, property.EvaluatedValue);
@@ -163,6 +169,7 @@ static class SdkMetadataServer
                 collection.UnloadAllProjects();
             }
             result.Definition.Add("KnowCodeInputPaths", System.Text.Json.JsonSerializer.Serialize(inputPaths.Order(StringComparer.Ordinal)));
+            if (request.IncludeIdentity) result.Definition.Add("KnowCodeGeneratedDirectories", System.Text.Json.JsonSerializer.Serialize(generatedDirectories));
             Wire.Send(new Envelope { SdkMetadataResult = result });
         }
         catch(ProjectSetupException error) {

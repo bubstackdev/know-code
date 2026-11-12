@@ -3,6 +3,7 @@
 Run only after a matching build. All scopes, coordinator state and evidence are
 owned by this durable run; default account admission and live runtime are unused.
 """
+from cli_assertions import check_exit
 from pathlib import Path
 from fixture_trust import grant_fixture
 import atexit,ctypes,hashlib,json,os,selectors,subprocess,time,traceback
@@ -35,7 +36,7 @@ def run(args,*,input=None,env=None,check=True,timeout=60):
  log({'args':args,'input':input,'data_directory':selected['KNOW_CODE_DATA_DIR'],
       'query_scope':selected['KNOW_CODE_QUERY_SCOPE'],'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,
       'elapsed_ms':(time.monotonic()-started)*1000})
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,args,check)
  return p
 
 def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
@@ -45,7 +46,7 @@ def error(response,code):assert response.get('error',{}).get('code')==code,respo
 def node(mode,*,db=None,scope=None,payload=None,env=None):
  result=json.loads(run(['node',ROOT/'tests/query_admission.mjs',ADDON,scope or SCOPE,db or MISSING,
                         mode,json.dumps(payload) if payload is not None else ''],env=env).stdout)
- assert result['passed'] and result['contract']==8,result
+ assert result['passed'] and result['contract']==9,result
  return result
 
 def dotnet(*args,**kwargs):return json.loads(run(['dotnet',SMOKE,*args],**kwargs).stdout)
@@ -96,7 +97,7 @@ def holder():
  CHILDREN.append((child,stderr));selector=selectors.DefaultSelector();selector.register(child.stdout,selectors.EVENT_READ)
  try:
   assert selector.select(10),('Node holder did not report ready',child.poll())
-  line=child.stdout.readline();receipt=json.loads(line);assert receipt['ready'] and receipt['contract']==8,receipt
+  line=child.stdout.readline();receipt=json.loads(line);assert receipt['ready'] and receipt['contract']==9,receipt
   (RUN/'node-holder-ready.json').write_text(json.dumps(receipt,indent=2)+'\n')
   log({'args':child.args,'pid':child.pid,'ready':receipt})
   return child
@@ -148,7 +149,10 @@ try:
  ffi.kc_query_cancel_free.argtypes=[ctypes.c_void_p];ffi.kc_query_cancel_free.restype=None
  ffi.kc_workspace_json.argtypes=[ctypes.c_char_p];ffi.kc_workspace_json.restype=ctypes.c_void_p
  ffi.kc_string_free.argtypes=[ctypes.c_void_p];ffi.kc_string_free.restype=None
- assert ffi.kc_query_contract_version()==8 and ffi.kc_query_max_request_bytes()==262144
+ assert ffi.kc_query_contract_version()==9 and ffi.kc_query_max_request_bytes()==262144
+ raw=dotnet('--raw-request-validation',RUN/'raw-missing.db',RUN/'raw-scope',FFI)
+ assert raw['passed'],raw
+ CHECKS.append('managed_raw_request_encoding_precedes_native_admission_and_preserves_valid_JSON')
  policy=value('queries')['result'];assert policy=={'version':1,'max_active_queries':4},policy
  assert value('queries','--scope',SCOPE)['result']==policy
  guard_and_slots=[SCOPE/'policy.lock',*[SCOPE/f'slot-{i:02}.lock' for i in range(4)]]

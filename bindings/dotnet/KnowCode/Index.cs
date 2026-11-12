@@ -8,23 +8,44 @@ namespace KnowCode;
 /// <summary>One shared embedding/server-host scope. Omit to use the account-wide scope.</summary>
 public sealed record QueryLimitScope(string Directory);
 
-public sealed class Index(string database, QueryLimitScope? queryLimitScope = null)
+/// <summary>Compact query freshness evidence. Full detail remains in Workspace.StatusAsync.
+/// Cursor identities are frozen with indexed locations; empty means unavailable at creation.
+/// StatusLimited marks phase/outcome tokens projected to unknown.</summary>
+public sealed record QueryCoordination(string WorkspaceRoot, string Database, string Phase,
+    ulong ObservedEpoch, ulong PublishedEpoch, ulong Generation, bool Available,
+    bool HasError, string OutcomeCode, bool StatusLimited);
+
+public sealed class Index
 {
+    private readonly string database;
+    private readonly QueryLimitScope? queryLimitScope;
+
+    public Index(string database, QueryLimitScope? queryLimitScope = null)
+    {
+        this.database = Native.ValidateInteropText(database, nameof(database));
+        if (queryLimitScope is not null) Native.ValidateInteropText(queryLimitScope.Directory, nameof(queryLimitScope));
+        this.queryLimitScope = queryLimitScope;
+    }
+
     public Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
         QueryCoreAsync(() => JsonSerializer.Serialize(request, Native.JsonOptions), Stopwatch.GetTimestamp(), cancellationToken);
 
     // Coarse native calls run off the caller's synchronization context.
     public Task<JsonDocument> QueryJsonAsync(string request, CancellationToken cancellationToken = default) =>
-        QueryCoreAsync(() => request, Stopwatch.GetTimestamp(), cancellationToken);
+        QueryCoreAsync(() => request, Stopwatch.GetTimestamp(), cancellationToken, rawRequest: true);
     /// <summary>Reads a frozen cursor page with optional per-request deadline and response-byte budgets.</summary>
     public Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null,
         CancellationToken cancellationToken = default) =>
         QueryCoreAsync(() => JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
             DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions), Stopwatch.GetTimestamp(), cancellationToken);
 
-    private async Task<JsonDocument> QueryCoreAsync(Func<string> serialize, long started, CancellationToken cancellationToken)
+    private async Task<JsonDocument> QueryCoreAsync(Func<string> serialize, long started, CancellationToken cancellationToken, bool rawRequest = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // Raw text already exists: validate its C-string representation before
+        // admission can touch native state. Typed/user serialization still runs
+        // only after reservation. The original start also charges this work.
+        var raw = rawRequest ? Native.ValidateInteropText(serialize(), "request") : null;
         // This synchronous native call runs before user serialization and before
         // cancellation registrations or Task.Run can retain queued requests.
         var acquired = Native.Reserve(queryLimitScope);
@@ -35,7 +56,7 @@ public sealed class Index(string database, QueryLimitScope? queryLimitScope = nu
             cancellationToken.ThrowIfCancellationRequested();
         }
         if (acquired.Error is not null) return acquired.Error;
-        var request = serialize();
+        var request = rawRequest ? raw! : serialize();
         var maximum = Native.QueryMaxRequestBytes();
         if (System.Text.Encoding.UTF8.GetByteCount(request) > maximum)
             return JsonSerializer.SerializeToDocument(new { Error = new { Code = "invalid_request",
@@ -110,6 +131,19 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
 
 internal static partial class Native
 {
+    // Interop strings are NUL-terminated UTF-8. Reject text that would arrive
+    // truncated or replacement-encoded; this does not validate JSON syntax.
+    private static readonly System.Text.UTF8Encoding StrictUtf8 = new(false, true);
+    internal static string ValidateInteropText(string value, string parameter)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameter);
+        if (value.Contains('\0')) throw new ArgumentException("Native text inputs cannot contain NUL.", parameter);
+        try { _ = StrictUtf8.GetByteCount(value); }
+        catch (System.Text.EncoderFallbackException error)
+        { throw new ArgumentException("Native text inputs must contain valid Unicode.", parameter, error); }
+        return value;
+    }
+
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -119,8 +153,8 @@ internal static partial class Native
     {
         try
         {
-            if (AbiVersion() != 1 || QueryContractVersion() != 8)
-                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; project execution trust or shared query admission is missing or incompatible.");
+            if (AbiVersion() != 1 || QueryContractVersion() != 9)
+                throw new KnowCodeException("update_required", "Update the Know Code managed/native packages together; compact query status, frozen-page headroom or shared query admission is missing or incompatible.");
         }
         catch (EntryPointNotFoundException error) { throw new KnowCodeException("update_required", $"Update the Know Code managed/native packages together: {error.Message}"); }
         catch (DllNotFoundException error) { throw new KnowCodeException("native_library_unavailable", $"Install the matching Know Code native library: {error.Message}"); }

@@ -34,7 +34,7 @@ def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
 def value(*args):return json.loads(cli(*args).stdout)
 def node(mode,db,request=None,delay=50):
  result=json.loads(run(['node',ROOT/'tests/query_cancellation.mjs',ADDON,db,mode,json.dumps(request),delay]).stdout)
- assert result['passed'] and result['contract']==8,result
+ assert result['passed'] and result['contract']==9,result
  return result
 def query(request):return value('query',database,json.dumps(request))
 def ready(minimum=1):
@@ -137,7 +137,7 @@ try:
  identity={'source_revision':record['source_revision'],'build_id':record['build_id'],'record_sha256':digest(record_path),
            'artifacts_sha256':hashes,'test_source_sha256':{p:digest(ROOT/p) for p in ['tests/query_cancellation.py','tests/query_cancellation.mjs','tests/fixture_trust.py']}}
  ffi=ctypes.CDLL(str(FFI));ffi.kc_query_contract_version.argtypes=[];ffi.kc_query_contract_version.restype=ctypes.c_uint32
- assert ffi.kc_query_contract_version()==8,'matching FFI cancellation contract required'
+ assert ffi.kc_query_contract_version()==9,'matching FFI cancellation contract required'
  node('preabort',RUN/'preabort.db');CHECKS.append('Node_preabort_before_serialization_and_index_open')
  node('queue',RUN/'node-queue.db');CHECKS.append('Node_native_dispatch_progresses_with_libuv_occupied_and_preabort_isolated')
  queued=json.loads(run(['dotnet',SMOKE,'--cancel-queue',RUN/'dotnet-queue.db']).stdout)

@@ -1,4 +1,5 @@
 """Shared CPU/memory ceilings and explicit indexing cancellation through real clients."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import atexit,json,os,shutil,sqlite3,subprocess,time
@@ -43,7 +44,7 @@ for workspace in [A,B]:
 
 def cli(*args,check=True,timeout=60):
  p=subprocess.run([str(HOST),*map(str,args)],cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=timeout)
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,[HOST,*args],check)
  return p
 def cleanup():
  # Shutdown deliberately drains active work. Cancel our held fixture jobs first
@@ -115,8 +116,24 @@ limits=json.loads(cli('resources').stdout);assert limits=={'cpu_cores':2.0,'memo
 for root in [A,B]:grant_fixture(HOST,root,ENV,RUN,RUN/'fixture-trust.jsonl')
 registered=json.loads(cli('watch',A).stdout);database=registered['database']
 initial=wait(A,lambda s:s['phase']=='idle','initial compiler graph');generation=initial['generation']
-def query():return json.loads(cli('query',database,'{"op":"symbols","name":"answer","freshness_wait_ms":0}').stdout)['result']
-assert query()['freshness']=='current'
+def query():
+ value=json.loads(cli('query',database,'{"op":"symbols","name":"answer","freshness_wait_ms":0}').stdout)['result']
+ with (RUN/'query-responses.jsonl').open('a') as stream:
+  stream.write(json.dumps({'monotonic':time.monotonic(),'result':value})+'\n')
+ return value
+def current_query():
+ # First idle can precede reconciliation of newly learned compiler-input
+ # watches. A separate zero-wait query may honestly serve the prior snapshot.
+ until=time.monotonic()+45
+ while True:
+  value=query();coordination=value['coordination']
+  assert value['generation']>0 and value['snapshot'] and [s['name'] for s in value['symbols']]==['answer'],value
+  assert coordination['available'] and not coordination['has_error'] and coordination['database']==database,value
+  if value['freshness']=='current':return value
+  assert value['freshness']=='stale',value
+  if time.monotonic()>=until:raise AssertionError(('initial graph never became current',value))
+  time.sleep(.04)
+initial_query=current_query();generation=initial_query['generation']
 record('automatic_shared_defaults_and_initial_compiler_index')
 # These are personal control state, separate from repository analysis settings.
 assert cli('resources','--cpu','0',check=False).returncode
@@ -192,7 +209,7 @@ stop_coordinator();save(B,103);cli('resources')
 wait(B,lambda s:s['phase']=='idle' and s['generation']>pending['generation'],'offline save after acknowledged baseline resumes')
 assert start_count(B)>before_pending
 record('offline_save_after_cancelled_resumes_without_explicit_refresh')
-cli('index',A);generation=status(A)['generation'];assert query()['freshness']=='current'
+cli('index',A);generation=current_query()['generation']
 record('explicit_refresh_resumes_cancelled_analysis')
 # Explicit refresh is the supported way to supersede a pending boundary.
 lease('maintenance');save(B,104);wait(B,lambda s:s['phase']=='queued','second paused save')
@@ -213,6 +230,8 @@ cli('cancel',A);before_legacy=start_count(A);stop_coordinator()
 with sqlite3.connect(DATA/'registry.db') as connection:
  connection.execute("UPDATE workspaces SET outcome_code='cancelled',error='indexing cancelled',failed_input_hash='legacy-effective-settings-hash' WHERE root=?",(str(A),))
  connection.execute('ALTER TABLE workspaces DROP COLUMN cancel_pending')
+ # This simulates the older unversioned registry, not a damaged version1.
+ connection.execute('PRAGMA user_version=0')
 cli('resources');wait(A,lambda s:s['phase']=='cancelled','legacy cancellation is recaptured')
 assert start_count(A)==before_legacy
 with sqlite3.connect(DATA/'registry.db') as connection:

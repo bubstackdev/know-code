@@ -1,7 +1,7 @@
 {
   "name": "know-code-development",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "workspaces": ["providers/typescript", "bindings/node", "tests/fixtures/typescript"],
   "scripts": {
     "build": "bash scripts/build.sh",

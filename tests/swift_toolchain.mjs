@@ -11,7 +11,7 @@ fs.mkdirSync(run,{recursive:true});
 const environment={...process.env};
 for (const name of ['DEVELOPER_DIR','TOOLCHAINS','SDKROOT','SWIFT_EXEC','SWIFT_EXEC_MANIFEST']) delete environment[name];
 const original={DEVELOPER_DIR:process.env.DEVELOPER_DIR,TOOLCHAINS:process.env.TOOLCHAINS};
-const resolve=createToolchainResolver({environment});
+const resolve=createToolchainResolver({environment,workspaceRoot:run});
 const selected=resolve(run);
 const checks=[];
 if (selected.xcodeVersion) {
@@ -51,7 +51,7 @@ assert(pinned.inputPaths.includes(pin));
 assert.equal(pinned.compiler,selected.compiler);
 fs.writeFileSync(pin,'99.99.99\n');
 assert.throws(()=>resolve(run),/no compatible installed.*\.swift-version/s);
-assert.throws(()=>createToolchainResolver({environment:{...environment,DEVELOPER_DIR:selected.env.DEVELOPER_DIR}})(run),/conflicts with repository pin/);
+assert.throws(()=>createToolchainResolver({environment:{...environment,DEVELOPER_DIR:selected.env.DEVELOPER_DIR}})(run),/conflicts with selected pin/);
 checks.push('matching pin, missing pin, and explicit-pin conflict');
 
 const child=path.join(run,'child');fs.mkdirSync(child);
@@ -63,6 +63,19 @@ fs.unlinkSync(childPin);
 fs.writeFileSync(path.join(child,'.tool-versions'),`python 3.14\nswift ${version} # selected\n`);
 assert.equal(resolve(child).selection.swiftPin.path,path.join(child,'.tool-versions'));
 checks.push('nearest scoped pin and conflicting/selected manager entries');
+
+const nestedWorkspace=path.join(run,'nested-workspace');fs.mkdirSync(nestedWorkspace);
+fs.writeFileSync(pin,version+'\n');
+const inherited=createToolchainResolver({environment,workspaceRoot:nestedWorkspace})(nestedWorkspace);
+assert.equal(inherited.selection.origin,'inherited_pin');
+assert.equal(inherited.selection.swiftPin.scope,'ancestor');
+assert.equal(inherited.selection.swiftPin.path,pin);
+assert(inherited.inputPaths.includes(pin));
+fs.writeFileSync(path.join(nestedWorkspace,'.swift-version'),version+'\n');
+const local=createToolchainResolver({environment,workspaceRoot:nestedWorkspace})(nestedWorkspace);
+assert.equal(local.selection.origin,'repository_pin');
+assert.equal(local.selection.swiftPin.scope,'workspace');
+checks.push('ancestor pin remains honored and tracked with distinct non-repository provenance');
 
 fs.unlinkSync(pin);
 fs.writeFileSync(path.join(run,'.tool-versions'),'swift system\n');

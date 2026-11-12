@@ -32,6 +32,7 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
             projectInputs[current] = System.Text.Json.JsonSerializer.Deserialize<string[]>(evaluated.Definition["KnowCodeInputPaths"])!;
             var properties = buildContexts.Properties(current);
             var variants = evaluated.Targets.ToDictionary(t => t.Target, t => t.Identity.ToImmutableDictionary(), StringComparer.Ordinal);
+            var generatedDirectories = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string,string[]>>(evaluated.Definition["KnowCodeGeneratedDirectories"])!;
 
             async Task<bool> LoadVariants(string? selectedTarget)
             {
@@ -103,7 +104,8 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
                 foreach (var (target, info) in selected)
                 {
                     contexts.Add((current, target), info.Id);
-                    compilerMetadata.Add(info.Id, variants[target]);
+                    compilerMetadata.Add(info.Id, variants[target].Add("KnowCodeGeneratedDirectories",
+                        System.Text.Json.JsonSerializer.Serialize(generatedDirectories[target])));
                     testClassifications.Add(info.Id, evaluated.Targets.Single(t => t.Target == target).TestClassification?.Clone()
                         ?? new KnowCode.Protocol.TestClassification { PolicyVersion = TestClasses.Version, Kind = "unknown" });
                 }

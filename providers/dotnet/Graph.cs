@@ -14,10 +14,21 @@ static partial class Analysis
     {
         private readonly Emitter output = emitter;
         private readonly Dictionary<SyntaxNode, string> initializers = [];
+        private IMethodSymbol? PrimaryConstructor(TypeDeclarationSyntax type)
+        {
+            // Select by the compiler's declaring syntax, never by a constructor
+            // name/signature guess (which could select a secondary constructor).
+            var constructors = model.GetDeclaredSymbol(type)?.InstanceConstructors.Where(c =>
+                c.DeclaringSyntaxReferences.Any(r => r.SyntaxTree == type.SyntaxTree && r.Span == type.Span)).ToArray();
+            return constructors is { Length: 1 } ? constructors[0] : null;
+        }
         public string Owner(SyntaxNode node)
         {
             foreach (var ancestor in node.AncestorsAndSelf())
             {
+                if (ancestor is PrimaryConstructorBaseTypeSyntax && ancestor.Parent?.Parent is TypeDeclarationSyntax primaryType
+                    && PrimaryConstructor(primaryType) is { } constructor)
+                    return output.Symbol(Normalize(constructor));
                 if (ancestor is EqualsValueClauseSyntax init &&
                     (init.Parent is PropertyDeclarationSyntax || init.Parent is VariableDeclaratorSyntax { Parent.Parent: BaseFieldDeclarationSyntax }))
                 {
@@ -139,6 +150,18 @@ static partial class Analysis
         }
         public void Operations(SyntaxNode node)
         {
+            if (node is PrimaryConstructorBaseTypeSyntax primary && primary.Parent?.Parent is TypeDeclarationSyntax type
+                && PrimaryConstructor(type) is { } constructor)
+            {
+                var owner = output.Symbol(Normalize(constructor));
+                output.Occurrence(owner, source, type.Identifier.Span, "declaration", type.Span);
+                var selected = model.GetSymbolInfo(primary).Symbol as IMethodSymbol;
+                Edge(owner, selected is null ? null : output.Symbol(Normalize(selected)), "call", primary, dispatch: "direct");
+                foreach (var argument in primary.ArgumentList.Arguments)
+                    if ((model.GetOperation(argument) ?? model.GetOperation(argument.Expression)) is { } argumentOperation)
+                        new Calls(this, owner).Visit(argumentOperation);
+                return;
+            }
             // Select executable roots, then walk each tree once. Nested function
             // operations update ownership inside the walker, not a second pass.
             SyntaxNode? root=node switch {

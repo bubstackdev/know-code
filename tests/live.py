@@ -1,4 +1,5 @@
 """Stateful native consumers exercise live certification without diagnostic APIs."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import json, os, selectors, shutil, signal, socket, subprocess, time
@@ -23,7 +24,7 @@ checks = []
 def command(*args):
     result = subprocess.run([str(HOST), *map(str, args)], cwd=ROOT, env=ENV,
                             capture_output=True, text=True, timeout=120)
-    assert result.returncode == 0, (args, result.stdout, result.stderr)
+    check_exit(result,[HOST,*args])
     return result.stdout
 
 def status():

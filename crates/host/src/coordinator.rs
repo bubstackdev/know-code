@@ -1,3 +1,14 @@
+mod cancel;
+mod jobs;
+mod registration;
+#[cfg(test)]
+mod test_support;
+mod wait;
+use cancel::cancel_workspace;
+use jobs::finish_job;
+use registration::register_workspace;
+use wait::wait_for_workspace;
+
 use know_code_core::live::Publisher;
 use know_code_core::{
     control,
@@ -15,7 +26,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     os::unix::{
-        fs::{DirBuilderExt, PermissionsExt},
+        fs::PermissionsExt,
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -294,16 +305,6 @@ struct Failure {
     index_fault: Option<(PathBuf, String)>,
 }
 
-// An unwind is terminal for the coordinator: mutex/transaction invariants may
-// be poisoned. Always notify its owner rather than stranding the analysis slot.
-fn finish_job(sender: &SyncSender<Event>, database: String, work: impl FnOnce() -> JobResult) {
-    let event = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
-        Ok(result) => Event::Finished(result),
-        Err(_) => Event::JobPanicked(database),
-    };
-    let _ = sender.send(event);
-}
-
 fn selected_readiness(database: &Path) -> know_code_core::Result<(u64, bool)> {
     let guard = recovery::IndexReadGuard::open_unbudgeted(database)?;
     let result = (|| {
@@ -516,10 +517,7 @@ fn maintenance_active(shared: &Shared) -> bool {
 }
 
 pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(data)?;
+    control::prepare_data_root(data)?;
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -544,39 +542,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
         publisher: Arc::clone(&publisher),
         cursors: None,
     };
-    let registry = Connection::open(data.join("registry.db"))?;
-    registry.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspaces(database TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL,configuration TEXT NOT NULL,generation INTEGER NOT NULL,inputs TEXT NOT NULL,error TEXT NOT NULL); CREATE TABLE IF NOT EXISTS identities(database TEXT PRIMARY KEY, identity TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tracked_inputs(database TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(database,path)); CREATE TABLE IF NOT EXISTS manifests(database TEXT PRIMARY KEY, inputs TEXT NOT NULL); INSERT OR IGNORE INTO manifests SELECT database,inputs FROM workspaces; UPDATE workspaces SET inputs='{}' WHERE inputs<>'{}';")?;
-    let has_failure_hash = registry
-        .prepare("PRAGMA table_info(workspaces)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "failed_input_hash");
-    if !has_failure_hash {
-        registry.execute_batch(
-            "ALTER TABLE workspaces ADD COLUMN failed_input_hash TEXT NOT NULL DEFAULT '';",
-        )?;
-    }
-    let columns = registry
-        .prepare("PRAGMA table_info(workspaces)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    if !columns.contains("outcome_code") {
-        registry.execute_batch(
-            "ALTER TABLE workspaces ADD COLUMN outcome_code TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
-    if !columns.contains("cancel_pending") {
-        registry.execute_batch("BEGIN IMMEDIATE;
-          ALTER TABLE workspaces ADD COLUMN cancel_pending INTEGER NOT NULL DEFAULT 0;
-          UPDATE workspaces SET cancel_pending=1,failed_input_hash='' WHERE outcome_code='cancelled';
-          COMMIT;")?;
-    }
-    if !columns.contains("disk_pause") {
-        registry.execute_batch(
-            "ALTER TABLE workspaces ADD COLUMN disk_pause TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
+    let registry = crate::registry::open(data)?;
     let discovery = crate::discovery::Discovery::open(&registry)?;
     let mut entries = BTreeMap::new();
     {
@@ -733,6 +699,9 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             let Ok(socket) = socket else {
                 continue;
             };
+            if control::verify_peer(&socket).is_err() {
+                continue;
+            }
             if accepting.clients.fetch_add(1, Ordering::AcqRel) >= 64 {
                 accepting.clients.fetch_sub(1, Ordering::AcqRel);
                 continue;
@@ -2242,220 +2211,13 @@ fn set_workspace_execution(
     })
 }
 
-fn register_workspace(
-    shared: &Shared,
-    data: &Path,
-    request: &ControlRequest,
-    discovered: bool,
-) -> AnyResult<WorkspaceStatus> {
-    let root = std::fs::canonicalize(&request.workspace_root)?;
-    let actual_identity = workspace::identity(&root)?;
-    let database = workspace::database_path(&root, data)
-        .to_string_lossy()
-        .into_owned();
-    let configuration = request.configuration.as_str();
-    let persistent = {
-        let mut entries = shared.entries.lock().unwrap();
-        if discovered {
-            let suppressed: bool = shared.registry.lock().unwrap().query_row(
-                "SELECT EXISTS(SELECT 1 FROM discovery_suppressed WHERE root=?)",
-                [root.to_string_lossy().as_ref()],
-                |r| r.get(0),
-            )?;
-            if suppressed {
-                return Err("repository enrollment is explicitly suppressed".into());
-            }
-            if let Some(entry) = entries.get(&database) {
-                if entry.identity != actual_identity {
-                    return Err(
-                        "workspace identity changed; explicitly unregister the old workspace"
-                            .into(),
-                    );
-                }
-                return Ok(entry.snapshot());
-            }
-        }
-        if entries
-            .get(&database)
-            .is_some_and(|entry| entry.identity != actual_identity)
-        {
-            return Err(
-                "workspace identity changed; unwatch before registering the replacement".into(),
-            );
-        }
-        std::fs::create_dir_all(
-            Path::new(&database)
-                .parent()
-                .ok_or("workspace database parent missing")?,
-        )?;
-        // Never promote a new personal choice into legacy fallback state.
-        let legacy = entries
-            .get(&database)
-            .map(|entry| entry.configuration.clone())
-            .unwrap_or_default();
-        let mut settings_changed = false;
-        if !configuration.is_empty() {
-            let mut personal = settings::personal(&root, data)?;
-            if !matches!(&personal.csharp.configuration, settings::Selection::Named(value) if value == configuration)
-            {
-                personal.csharp.configuration = settings::Selection::Named(configuration.into());
-                settings::save(&root, data, &legacy, &personal)?;
-                settings_changed = true;
-            }
-        }
-        let requested_settings = settings::resolve(&root, data, &legacy).ok();
-        let existing_entry = entries.contains_key(&database);
-        recovery::adopt(
-            Path::new(&database),
-            entries
-                .get(&database)
-                .map(|e| e.status.generation)
-                .unwrap_or(0),
-        )?;
-        let entry = entries.entry(database.clone()).or_insert_with(|| Entry {
-            registration: REGISTRATION.fetch_add(1, Ordering::Relaxed),
-            project_trusted: settings::project_execution_allowed(&root, data).unwrap_or(false),
-            trust_epoch: 0,
-            analysis_error: String::new(),
-            failed_input_hash: String::new(),
-            status: LiveStatus::new(
-                WorkspaceStatus {
-                    workspace_root: root.to_string_lossy().into_owned(),
-                    database,
-                    phase: "queued".into(),
-                    observed_epoch: 1,
-                    available: true,
-                    requested_settings,
-                    ..Default::default()
-                },
-                &shared.publisher,
-            ),
-            configuration: legacy,
-            identity: actual_identity.clone(),
-            special_inputs: settings::paths(&root, data).into_iter().collect(),
-            dirty: BTreeSet::new(),
-            force: false,
-            rehash: true,
-            retry_preparation: false,
-            watch_pending: true,
-            pending: true,
-            cancel_pending: false,
-            disk_pause: None,
-            recovery_blocked: false,
-            recovery_explicit: false,
-            recovering: false,
-            upgrade_format: None,
-            queued: Instant::now(),
-            active: Instant::now(),
-        });
-        if entry.identity != actual_identity {
-            return Err(
-                "workspace identity changed; unwatch before registering the replacement".into(),
-            );
-        }
-        if !existing_entry {
-            restore_recovery(entry)?;
-        }
-        if settings_changed {
-            release_disk_pause(entry);
-            queue(entry, None, true);
-        }
-        entry.project_trusted = settings::project_execution_allowed(&root, data).unwrap_or(false);
-        entry.status.requested_settings = settings::resolve(&root, data, &entry.configuration).ok();
-        if request.operation == "refresh" {
-            release_disk_pause(entry);
-            entry.recovery_explicit = true;
-            entry.recovery_blocked = false;
-            if entry.cancel_pending {
-                entry.cancel_pending = false;
-                if let Some((_, control)) = shared
-                    .active_job
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .filter(|(db, _)| db == &entry.status.database)
-                {
-                    control.cancel();
-                }
-            }
-            entry.retry_preparation = true;
-            queue(entry, None, true);
-        }
-        persist(shared, entry, None)?;
-        shared.cursors.register(Path::new(&entry.status.database))?;
-        if !discovered {
-            shared.registry.lock().unwrap().execute(
-                "DELETE FROM discovery_suppressed WHERE root=?",
-                [root.to_string_lossy().as_ref()],
-            )?;
-        }
-        entry.snapshot()
-    };
-    Ok(persistent)
-}
-
-fn wait_for_workspace(shared: &Shared, request: &ControlRequest) -> AnyResult<WorkspaceStatus> {
-    let mut entries = shared.entries.lock().unwrap();
-    let entry = entries
-        .get_mut(&request.database)
-        .ok_or("workspace is not registered")?;
-    entry.active = Instant::now();
-    let target = entry.status.observed_epoch;
-    let registration = entry.registration;
-    let until = Instant::now() + Duration::from_millis(u64::from(request.wait_ms.min(120000)));
-    loop {
-        let entry = entries
-            .get(&request.database)
-            .ok_or("workspace was unregistered while waiting")?;
-        if entry.registration != registration {
-            return Err("workspace registration changed while waiting; start a new wait".into());
-        }
-        let status = entry.snapshot();
-        let reconciling = entry.pending
-            || shared
-                .active_job
-                .lock()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|(db, _)| db == &request.database);
-        if status.published_epoch >= target
-            || matches!(
-                status.phase.as_str(),
-                "failed"
-                    | "unavailable"
-                    | "resource_limited"
-                    | "recovery_failed"
-                    | "trust_required"
-            )
-            || (status.phase == "cancelled" && !reconciling)
-            || shared.stop.load(Ordering::Acquire)
-        {
-            break;
-        }
-        let Some(remaining) = until.checked_duration_since(Instant::now()) else {
-            break;
-        };
-        let (next, timeout) = shared.changed.wait_timeout(entries, remaining).unwrap();
-        entries = next;
-        if timeout.timed_out() {
-            break;
-        }
-    }
-    let entry = entries
-        .get(&request.database)
-        .ok_or("workspace was unregistered while waiting")?;
-    if entry.registration != registration {
-        return Err("workspace registration changed while waiting; start a new wait".into());
-    }
-    Ok(entry.snapshot())
-}
-
 fn serve(
     mut socket: UnixStream,
     shared: &Shared,
     sender: &SyncSender<Event>,
     data: &Path,
 ) -> AnyResult<()> {
+    control::verify_peer(&socket)?;
     // Darwin can reject timeout setup after a one-way peer closes. Drain its
     // buffered frame without blocking, including any unexpected EINVAL case.
     if let Err(error) = socket.set_read_timeout(Some(Duration::from_secs(3))) {
@@ -2650,29 +2412,11 @@ fn serve(
             });
         }
         if request.operation == "cancel" {
-            let mut entries = shared.entries.lock().unwrap();
-            let entry = entries
-                .get_mut(&request.database)
-                .ok_or("workspace is not registered")?;
-            let active = shared.active_job.lock().unwrap();
-            let accepted = if entry.cancel_pending {
-                false
-            } else if let Some((_, control)) =
-                active.as_ref().filter(|(db, _)| db == &request.database)
-            {
-                control.cancel() || !control.committed()
-            } else {
-                entry.pending && entry.status.available
-            };
-            if accepted {
-                begin_cancellation(entry);
-                persist(shared, entry, None)?;
-            }
-            drop(active);
+            let status = cancel_workspace(shared, &request.database)?;
             wake(sender, shared, Event::Wake);
             shared.changed.notify_all();
             return Ok(ControlResponse {
-                workspaces: vec![entry.snapshot()],
+                workspaces: vec![status],
                 ..Default::default()
             });
         }
@@ -3217,127 +2961,6 @@ mod live_lifetime_tests {
             recovery::replacement_reason(Path::new(&database))
                 .unwrap()
                 .is_none()
-        );
-    }
-    #[test]
-    fn queued_wait_is_safe_when_enrollment_is_removed_or_replaced() {
-        for replaced in [false, true] {
-            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../.artifacts/wait-enrollment")
-                .join(format!(
-                    "{}-{}",
-                    std::process::id(),
-                    REGISTRATION.fetch_add(1, Ordering::Relaxed)
-                ));
-            std::fs::create_dir_all(&root).unwrap();
-            let publisher = Arc::new(Publisher::new(&root));
-            let active = Instant::now() - Duration::from_secs(60);
-            let entry = Entry {
-                registration: 1,
-                project_trusted: true,
-                trust_epoch: 0,
-                analysis_error: String::new(),
-                failed_input_hash: String::new(),
-                status: LiveStatus::new(
-                    WorkspaceStatus {
-                        database: "owned".into(),
-                        observed_epoch: 1,
-                        phase: "queued".into(),
-                        available: true,
-                        ..Default::default()
-                    },
-                    &publisher,
-                ),
-                configuration: String::new(),
-                identity: String::new(),
-                special_inputs: BTreeSet::new(),
-                dirty: BTreeSet::new(),
-                force: false,
-                rehash: false,
-                retry_preparation: false,
-                queued: Instant::now(),
-                active,
-                watch_pending: false,
-                pending: true,
-                cancel_pending: false,
-                disk_pause: None,
-                recovery_blocked: false,
-                recovery_explicit: false,
-                recovering: false,
-                upgrade_format: None,
-            };
-            let shared = Arc::new(Shared {
-                entries: Mutex::new(BTreeMap::from([("owned".into(), entry)])),
-                publisher,
-                changed: Condvar::new(),
-                registry: Mutex::new(Connection::open_in_memory().unwrap()),
-                discovery: Mutex::new(
-                    crate::discovery::Discovery::open(&Connection::open_in_memory().unwrap())
-                        .unwrap(),
-                ),
-                stop: AtomicBool::new(false),
-                maintenance: Mutex::new(None),
-                analysis_running: AtomicBool::new(false),
-                resources: Governor::new(Limits::default()).unwrap(),
-                active_job: Mutex::new(None),
-                overflow: AtomicBool::new(false),
-                clients: AtomicUsize::new(0),
-                cursors: Arc::new(
-                    know_code_core::cursor::CursorService::new(&root, Vec::new()).unwrap(),
-                ),
-            });
-            let waiter_shared = Arc::clone(&shared);
-            let waiter = thread::spawn(move || {
-                wait_for_workspace(
-                    &waiter_shared,
-                    &ControlRequest {
-                        database: "owned".into(),
-                        wait_ms: 5000,
-                        ..Default::default()
-                    },
-                )
-                .map_err(|error| error.to_string())
-            });
-            // Observing this marker while owning entries proves the actual
-            // waiter released the mutex after capturing enrollment identity.
-            let until = Instant::now() + Duration::from_secs(1);
-            loop {
-                if shared.entries.lock().unwrap()["owned"].active != active {
-                    break;
-                }
-                assert!(Instant::now() < until, "waiter never entered");
-                thread::yield_now();
-            }
-            {
-                let mut entries = shared.entries.lock().unwrap();
-                if replaced {
-                    entries.get_mut("owned").unwrap().registration = 2;
-                } else {
-                    entries.remove("owned");
-                }
-                shared.changed.notify_all();
-            }
-            let error = waiter.join().unwrap().unwrap_err();
-            assert!(error.contains(if replaced {
-                "registration changed"
-            } else {
-                "unregistered"
-            }));
-            assert!(
-                shared.entries.lock().is_ok(),
-                "wait must not poison shared state"
-            );
-            assert!(shared.cursors.sweep().is_ok());
-        }
-    }
-    #[test]
-    fn job_unwind_has_a_terminal_owner_event() {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        finish_job(&sender, "owned workspace".into(), || {
-            panic!("owned analysis unwind")
-        });
-        assert!(
-            matches!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), Event::JobPanicked(database) if database == "owned workspace")
         );
     }
     fn pause_fixture() -> DiskPause {

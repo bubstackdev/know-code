@@ -4,6 +4,7 @@ No test changes HOME, the live coordinator, or original corpora. Compiler-module
 side effects make an accidental pre-grant worker visible. All grants use the
 real public CLI, never private receipt synthesis.
 """
+from cli_assertions import check_exit
 from pathlib import Path
 import atexit,hashlib,json,os,sqlite3,subprocess,time,traceback
 ROOT=Path(__file__).resolve().parents[1];RUN=ROOT/'.artifacts/pt'/format(time.time_ns(),'x')[-9:]
@@ -31,7 +32,7 @@ def run(argv,*,check=True,timeout=120):
   with (RUN/'commands.jsonl').open('a') as stream:stream.write(json.dumps({'phase':PHASE,'argv':argv,'timeout':timeout,'stdout':str(error.stdout),'stderr':str(error.stderr)})+'\n')
   raise
  with (RUN/'commands.jsonl').open('a') as stream:stream.write(json.dumps({'phase':PHASE,'argv':argv,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,'elapsed_ms':(time.monotonic()-start)*1000})+'\n')
- assert not check or p.returncode==0,(argv,p.stdout,p.stderr)
+ check_exit(p,argv,check)
  return p
 def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
 def value(*args):return json.loads(cli(*args).stdout)
