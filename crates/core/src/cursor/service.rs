@@ -104,6 +104,11 @@ impl Drop for Publication<'_> {
     }
 }
 impl CursorService {
+    fn open_files(root: &Path) -> Result<result_store::ResultStore> {
+        let mut files = result_store::ResultStore::open(&root.join("cursors"))?;
+        files.reset()?;
+        Ok(files)
+    }
     pub fn new(root: &Path, databases: impl IntoIterator<Item = PathBuf>) -> Result<Self> {
         let owner = nonce()?;
         let limits = CursorLimits::load(root)?;
@@ -142,14 +147,11 @@ impl CursorService {
             limits.max_cursors as usize,
             limits.retention_bytes,
         )?;
-        let file_error = match result_store::ResultStore::open(&root.join("cursors")) {
-            Ok(mut files) => match files.reset() {
-                Ok(()) => {
-                    registry.files = Some(files);
-                    None
-                }
-                Err(error) => Some(error.to_string()),
-            },
+        let file_error = match Self::open_files(root) {
+            Ok(files) => {
+                registry.files = Some(files);
+                None
+            }
             Err(error) => Some(error.to_string()),
         };
         Ok(Self {
@@ -350,7 +352,7 @@ impl CursorService {
         }
         if let Some(error) = &state.file_error {
             return Err(Error::ResourceLimited(format!(
-                "cursor result storage unavailable: {error}; repair the cursor cache permissions/contents and restart the coordinator"
+                "cursor result storage unavailable: {error}; repair the cursor cache permissions/contents; cursor maintenance will retry"
             )));
         }
         if request.action == "admit" {
@@ -570,6 +572,20 @@ impl CursorService {
     pub fn sweep(&self) -> Result<()> {
         let mut state = self.lock()?;
         self.running()?;
+        // Startup refuses foreign/unsafe cache entries. Once the owner repairs
+        // them, retry the same bounded reset without discarding any live state.
+        if state.file_error.is_some()
+            && state.registry.files.is_none()
+            && state.registry.entries.is_empty()
+        {
+            match Self::open_files(&self.root) {
+                Ok(files) => {
+                    state.registry.files = Some(files);
+                    state.file_error = None;
+                }
+                Err(error) => state.file_error = Some(error.to_string()),
+            }
+        }
         let execution = Execution::new(Default::default(), None)?;
         // Existing leases/retiring files make progress before old-incarnation
         // retries. Rotate retries so one locked index cannot starve the rest.
@@ -1426,6 +1442,32 @@ mod tests {
             pin.open_fixture_view(),
             Err(Error::CursorInvalidated)
         ));
+    }
+    #[test]
+    fn repaired_startup_result_cache_recovers_without_deleting_foreign_entries() {
+        let (root, db, old) = fixture();
+        old.stop();
+        let foreign = root.join("cursors/.DS_Store");
+        std::fs::write(&foreign, b"owned test simulating foreign metadata").unwrap();
+        let service = CursorService::new(&root, [db.clone()]).unwrap();
+        assert!(service.lock().unwrap().file_error.is_some());
+        service.sweep().unwrap();
+        assert!(matches!(
+            call(&service, &db, action("admit", None)),
+            Err(Error::ResourceLimited(_))
+        ));
+        assert_eq!(
+            std::fs::read(&foreign).unwrap(),
+            b"owned test simulating foreign metadata"
+        );
+        // Simulate explicit owner repair; the service never removes this file.
+        std::fs::remove_file(&foreign).unwrap();
+        service.sweep().unwrap();
+        assert!(service.lock().unwrap().file_error.is_none());
+        let stored = ready(&service, &db);
+        let borrowed = call(&service, &db, action("borrow", Some(&stored))).unwrap();
+        assert_eq!(std::fs::read(&borrowed.result_path).unwrap(), b"saved");
+        call(&service, &db, action("finish", Some(&borrowed))).unwrap();
     }
     #[test]
     fn failed_file_cleanup_keeps_reservation_pin_and_retries() {
