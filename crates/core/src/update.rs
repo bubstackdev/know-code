@@ -853,7 +853,7 @@ mod pipe_tests {
             let mut worker = control.spawn(&mut fixture.command(mode)).unwrap();
             let reaped = Arc::new(AtomicBool::new(false));
             let pid = worker.child.id();
-            let mut stdout =
+            let stdout =
                 WorkerPipe::new(worker.child.stdout.take().unwrap(), &control, pid, &reaped)
                     .unwrap();
             fixture.ready();
@@ -896,7 +896,8 @@ mod pipe_tests {
                 }
                 assert!(
                     !stdout.get_mut().exited().unwrap(),
-                    "WEXITED reported a stopped leader"
+                    "WEXITED reported a stopped leader: {}",
+                    worker_exit_snapshot(pid)
                 );
                 control.test_pause(true);
             }
