@@ -28,15 +28,21 @@ export function boundedRead(filename, limit) {
 
 export function writeDerivedFile(filename, bytes) {
   const temporary = `${filename}.${process.pid}.${randomUUID()}.next`;
-  let retained = false;
+  let retained = false, descriptor;
   try {
     // Exclusive creation cannot open a pre-existing FIFO/symlink. Replacing the
     // derived target atomically also avoids opening corrupt target file types.
-    fs.writeFileSync(temporary, bytes, {flag: 'wx', mode: 0o600});
+    descriptor = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NONBLOCK, 0o600);
     retained = true;
+    fs.writeFileSync(descriptor, bytes);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
     fs.renameSync(temporary, filename);
     retained = false;
-  } finally { if (retained) fs.unlinkSync(temporary); }
+  } finally {
+    try { if (descriptor !== undefined) fs.closeSync(descriptor); }
+    finally { if (retained) fs.unlinkSync(temporary); }
+  }
 }
 function readPlan(filename, fingerprint) {
   try {

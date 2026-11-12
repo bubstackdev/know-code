@@ -24,6 +24,21 @@ assert(fs.statSync(fifo).isFile());
 assert.equal(fs.readFileSync(fifo, 'utf8'), 'recovered derived data');
 assert(!fs.readdirSync(directory).some(name => name.endsWith('.next')));
 
+const originalWrite = fs.writeFileSync, failedTarget = path.join(directory, 'failed-derived.json');
+let ownedBeforeFailure = 0;
+try {
+  fs.writeFileSync = (descriptor, bytes) => {
+    assert.equal(typeof descriptor, 'number');
+    originalWrite(descriptor, String(bytes).slice(0, 3));
+    ownedBeforeFailure = fs.readdirSync(directory).filter(name => name.endsWith('.next')).length;
+    throw Object.assign(new Error('simulated partial-write ENOSPC'), {code: 'ENOSPC'});
+  };
+  assert.throws(() => writeDerivedFile(failedTarget, 'partial data'), /simulated partial-write ENOSPC/);
+} finally { fs.writeFileSync = originalWrite; }
+assert.equal(ownedBeforeFailure, 1);
+assert(!fs.existsSync(failedTarget));
+assert(!fs.readdirSync(directory).some(name => name.endsWith('.next')), 'partial-write scratch file was left behind');
+
 const configuration = path.join(directory, 'configuration.json'), marker = path.join(directory, 'compiler-must-not-run');
 fs.writeFileSync(configuration, JSON.stringify({directory, inputs: [], toolRoots: []}));
 const rejected = spawnSync(process.execPath, [path.join(repository, 'providers/rust/capture.mjs'), '/usr/bin/touch', marker], {
@@ -35,5 +50,6 @@ assert.match(rejected.stderr, /unsupported Cargo jobserver coordination format/)
 assert(!fs.existsSync(marker));
 fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify({passed: true, assertions: [
   'FIFO setup/source/artifact reads fail without blocking', 'derived FIFO target replaced atomically',
-  'unsupported jobserver format refused before tool execution']}, null, 2));
+  'partial-write ENOSPC simulation cleans the owned temporary file', 'unsupported jobserver format refused before tool execution'],
+  simulatedWriteFailure: {ownedFilesBeforeFailure: ownedBeforeFailure, retainedFilesAfterCleanup: 0}}, null, 2));
 process.stdout.write(`${directory}\n`);
