@@ -207,7 +207,7 @@ static partial class Analysis
                     preparationError=previous.Error;
                 else {
                     var assets=plan.Targets.Select(t=>t.AssetsFile).ToHashSet(StringComparer.Ordinal);
-                    if(previous?.Succeeded!=true||request.RetryPreparation||assets.Any(p=>!File.Exists(p))) {
+                    if(previous?.Succeeded!=true||previous?.Fingerprint!=fingerprint||request.RetryPreparation||assets.Any(p=>!File.Exists(p))) {
                         Wire.Send(new Envelope {Progress=new Progress {Stage="restoring",ProjectPath=projectPath,Message="Restoring NuGet dependencies for all declared targets"}});
                         try {await Tools.Restore(request.WorkspaceRoot,["restore",projectPath,"--nologo",
                             ..globals.Select(p=>$"-property:{p.Key}={Microsoft.Build.Evaluation.ProjectCollection.Escape(p.Value)}")]);}

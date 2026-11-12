@@ -150,8 +150,10 @@ checkpoint = DATABASE.with_suffix('.preparation.json').stat().st_mtime_ns
 cs_source.write_text(cs_source.read_text().replace('=> 2', '=> 3'))
 partial = settled(partial['generation'])
 assert DATABASE.with_suffix('.preparation.json').stat().st_mtime_ns == checkpoint, 'failed NuGet restore repeated on save'
+restores_before_repair = len(counter.read_text().splitlines())
 project.write_text(project_text)
 settled(partial['generation'])
+assert len(counter.read_text().splitlines()) > restores_before_repair, 'healthy project configuration repair did not restore dependencies'
 assert all(c['status'] == 'complete' for c in query('configuredValue')['coverage'])
 summary = {'result': 'passed', 'database': str(DATABASE), 'checks': ['npm_restore_without_scripts', 'no_synthetic_lockfile',
            'mixed_configured_inferred_typescript', 'centralized_msbuild_assets', 'source_save_restore_deduplication',
