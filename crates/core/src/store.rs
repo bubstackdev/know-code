@@ -16,6 +16,15 @@ pub const READABLE_FORMATS: &[i32] = &[2, 3, 4, 5, 6, 7, 8];
 pub const MIGRATION_FORMATS: &[i32] = &[3, 4, 5, 6, 7];
 pub const REBUILD_FORMATS: &[i32] = &[1, 2];
 
+struct WriterFence(File);
+impl Drop for WriterFence {
+    fn drop(&mut self) {
+        // A duplicated/inherited descriptor can outlive this owner. Closing
+        // alone would leave its flock held on the shared open-file description.
+        let _ = self.0.unlock();
+    }
+}
+
 /// Managed write connections must not checkpoint on commit/close while their
 /// caller owns a shared coordinator fence. Maintenance is explicit instead.
 pub(crate) fn defer_checkpoints(connection: &Connection) -> Result<()> {
@@ -83,6 +92,7 @@ pub fn maintain_index(logical: &Path) -> Result<CheckpointProgress> {
         }
         Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
+    let _ownership = WriterFence(ownership);
     let health = crate::recovery::IndexReadGuard::open_unbudgeted(logical)?;
     if health.incarnation().is_empty() {
         return Err(Error::InvalidRequest(
@@ -301,8 +311,9 @@ fn migrate_dispatch_keys(connection: &Connection) -> Result<()> {
 }
 
 pub struct Writer {
+    // Keep the connection's close/cleanup inside the writer fence lifetime.
     connection: Connection,
-    _ownership: File,
+    _ownership: WriterFence,
     pub generation: u64,
     published: bool,
     health: Option<crate::recovery::IndexReadGuard>,
@@ -367,6 +378,7 @@ impl Writer {
         ownership
             .try_lock()
             .map_err(|e| Error::Provider(format!("workspace index already has a writer: {e}")))?;
+        let mut ownership = Some(WriterFence(ownership));
         // Resolve after the logical fence. A candidate is unpublished and may
         // be written even though the selected serving incarnation is BAD.
         let health = if destination.is_none() {
@@ -384,6 +396,9 @@ impl Writer {
             let mut connection = Connection::open(path)?;
             defer_checkpoints(&connection)?;
             let interrupt = connection.get_interrupt_handle();
+            // Borrow the outer fence until a complete Writer takes ownership.
+            // The callback owns the connection, so early errors close it first;
+            // post-action cancellation drops Writer and cleans its staged rows.
             control.interruptible(interrupt, || {
         connection.busy_timeout(Duration::from_secs(2))?;
         let version: i32 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -460,7 +475,7 @@ impl Writer {
         }
         Ok(Self {
             connection,
-            _ownership: ownership,
+            _ownership: ownership.take().expect("writer fence transferred once"),
             generation,
             published: false,
             health: health.clone(),
@@ -963,7 +978,7 @@ mod checkpoint_tests {
             let path = fixture();
             let mut writer = Writer::open(&path).unwrap();
             populate(&mut writer, "retained descriptor", true);
-            let duplicate = writer._ownership.try_clone().unwrap();
+            let duplicate = writer._ownership.0.try_clone().unwrap();
             let identity = duplicate.metadata().unwrap();
             assert!(Writer::open(&path).is_err(), "live writer lost exclusion");
             if published {
@@ -974,7 +989,7 @@ mod checkpoint_tests {
             // A duplicate shares the original open-file description. It must
             // not keep a retired Writer's lock alive until its eventual close.
             let replacement = Writer::open(&path).unwrap();
-            let selected = replacement._ownership.metadata().unwrap();
+            let selected = replacement._ownership.0.metadata().unwrap();
             assert_eq!(
                 (selected.dev(), selected.ino()),
                 (identity.dev(), identity.ino())
