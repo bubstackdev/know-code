@@ -20,8 +20,10 @@ assert NODE, 'Node.js is required'
 HELPER = ROOT / 'tests/worker_harness.mjs'
 
 
-def run(label, workspace, projects=None, env=None):
+def run(label, workspace, projects=None, env=None, policy=None):
     request = {'workspaceRoot': str(workspace), 'projects': [str(p) for p in (projects or [workspace / 'Cargo.toml'])], 'configuration': 'Debug'}
+    if policy is not None:
+        request['analysisPolicy'] = policy
     start = time.monotonic()
     result = subprocess.run([NODE, str(HELPER), str(ROOT / 'providers/rust/worker.mjs')], input=json.dumps(request), text=True, cwd=ROOT,
                             capture_output=True, timeout=190, check=True, env=env)
@@ -162,6 +164,19 @@ assert any('z_dependency/src/hidden.rs@' in artifact for artifact in dedup_sourc
 compilations = [f['compilation'] for f in dedup['messages'] if 'compilation' in f]
 assert len(compilations) == 1 and compilations[0]['projectPath'] == 'Cargo.toml', compilations
 assert any(p.endswith('member/Cargo.toml') for p in compilations[0]['inputPaths'])
+
+# Managed policy acknowledgment is separate from legacy worker requests. A
+# wrong branch/version or invalid cache path must fail before ProviderInfo and
+# therefore before compiler/dependency work; no silent legacy fallback.
+for label, policy in [
+    ('wrong-policy-version', {'version': 99, 'rust': {'cacheDirectory': str(ARTIFACTS / 'cache')}}),
+    ('wrong-policy-branch', {'version': 1, 'csharp': {}}),
+    ('relative-policy-cache', {'version': 1, 'rust': {'cacheDirectory': 'relative'}}),
+]:
+    rejected = run(label, virtual, policy=policy)
+    assert rejected['code'] != 0 and 'Update required' in rejected['stderr'], rejected
+    assert not any('provider' in frame or 'compilation' in frame for frame in rejected['messages']), rejected
+
 
 # Registering only a member directory must not silently index an enclosing
 # workspace that the host cannot select again during an incremental refresh.
