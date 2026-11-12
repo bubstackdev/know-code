@@ -75,7 +75,7 @@ def start_count(root):
 CONTROL=RUN/'control.mjs'
 CONTROL.write_text("""import fs from 'node:fs';import net from 'node:net';import protobuf from 'protobufjs';
 const schema=await protobuf.load(process.argv[2]),Envelope=schema.lookupType('knowcode.Envelope');
-const request={operation:process.argv[4],maintenanceToken:'cancel-fixture',maintenanceLeaseMs:30000};
+const request={operation:process.argv[4],indexLifecycleVersion:4,maintenanceToken:'cancel-fixture',maintenanceLeaseMs:30000};
 const bytes=Envelope.encode(Envelope.create({protocolVersion:7,controlRequest:request})).finish();
 const head=Buffer.alloc(4);head.writeUInt32LE(bytes.length);const socket=net.createConnection(process.argv[3]);
 socket.setTimeout(5000,()=>socket.destroy(Error('control timeout')));let result=Buffer.alloc(0);
