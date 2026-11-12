@@ -10,6 +10,18 @@ import {contextArguments, fileEvidence, flagValues} from './contexts.mjs';
 const LIMIT = 8 * 1024 * 1024;
 const [compiler, ...args] = process.argv.slice(2);
 const record = {compiler, args, cwd: process.cwd(), environment: {}, absentEnvironment: [], artifacts: [], status: null};
+function compilerStdio() {
+  const descriptors = [...(process.env.CARGO_MAKEFLAGS ?? '').matchAll(/--jobserver-(?:auth|fds)=(\d+),(\d+)(?=\s|$)/g)]
+    .flatMap(match => [Number(match[1]), Number(match[2])]);
+  const stdio = ['pipe', 'pipe', 'pipe'];
+  for (const descriptor of new Set(descriptors)) {
+    if (descriptor < 3 || descriptor > 255 || !fs.fstatSync(descriptor).isFIFO())
+      throw new Error('Rust context unavailable: Cargo jobserver descriptors cannot be preserved');
+    while (stdio.length <= descriptor) stdio.push('ignore');
+    stdio[descriptor] = descriptor;
+  }
+  return stdio;
+}
 let configuration;
 try {
   configuration = JSON.parse(boundedRead(process.env.KNOW_CODE_RUST_CAPTURE_CONFIG, LIMIT).toString('utf8'));
@@ -37,7 +49,7 @@ try {
     }), {artifact: true});
   }
   const result = spawnSync(compiler, args, {cwd: record.cwd, env: process.env, encoding: 'utf8',
-    timeout: 120000, maxBuffer: LIMIT});
+    timeout: 120000, maxBuffer: LIMIT, stdio: compilerStdio()});
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   for (const line of (result.stderr ?? '').split('\n')) {

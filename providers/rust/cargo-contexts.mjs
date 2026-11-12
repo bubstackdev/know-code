@@ -139,7 +139,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       if (typeof filename === 'string' && path.isAbsolute(filename) && fs.existsSync(filename)) files.add(filename);
   }
   const scratch = fs.mkdtempSync(path.join(state, 'capture-'));
-  let units = [], cargoSucceeded = false, artifacts = [], failed = [], droppedDiagnostics = 0, captureAttempts = 0, capturedCount = 0;
+  let units = [], cargoSucceeded = false, artifacts = [], failed = [], buildScripts = [], droppedDiagnostics = 0, captureAttempts = 0, capturedCount = 0;
   const warn = (code, message) => { if (diagnostics.length < 100) diagnostics.push(warning(code, message)); else droppedDiagnostics++; };
   const queryCache = new Map();
   const query = (program, args, cwd) => {
@@ -165,6 +165,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       cargoSucceeded = result.status === 0;
       const messages = (result.stdout ?? '').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
       artifacts = messages.filter(item => item.reason === 'compiler-artifact');
+      buildScripts = messages.filter(item => item.reason === 'build-script-executed').map(item => ({packageId: item.package_id, outDir: item.out_dir}));
       const records = capturedRecords(directory), current = [], recapture = new Set(), unproven = [];
       capturedCount += records.filter(record => record.beforeInputs && record.status === 0 && !record.error).length;
       for (const item of messages.filter(item => item.reason === 'compiler-message')) {
@@ -175,6 +176,10 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       }
       failed = records.filter(record => record.status !== 0 || record.error);
       for (const artifact of artifacts) {
+        // Cargo may copy/alias a build-script executable after rustc emits it.
+        // Tooling execution/provenance is retained through Cargo messages; no
+        // application semantic context is invented from that alias pathname.
+        if (artifact.target.kind.includes('custom-build')) continue;
         const candidates = records.filter(record => record.status === 0 && !record.error && record.artifacts?.some(item =>
           artifact.filenames.includes(path.resolve(record.cwd, item.artifact))));
         let unit;
@@ -229,7 +234,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
     try { jsonFile(cacheFile, {version: 1, fingerprint, units}, CACHE_LIMIT); }
     catch (error) { warn('rust_context_cache_limited', error.message); }
     if (droppedDiagnostics) diagnostics.push(warning('rust_context_diagnostics_limited', `${droppedDiagnostics} additional context diagnostics omitted.`));
-    return {plans, units: connected, diagnostics, failed, cargoSucceeded, captureAttempts, capturedCount,
+    return {plans, units: connected, diagnostics, failed, buildScripts, cargoSucceeded, captureAttempts, capturedCount,
       inputPaths: [...new Set(connected.flatMap(unit => Object.keys(unit.inputHashes)))]};
   } finally {
     // Failed cleanup is an error; never report retained capture bytes reclaimed.

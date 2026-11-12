@@ -12,6 +12,10 @@ const state = path.join(repository, '.artifacts/rust-context-collection', `${Dat
 const workspace = path.join(state, 'fixture');
 fs.mkdirSync(state, {recursive: true});
 fs.cpSync(path.join(repository, 'tests/fixtures/rust'), workspace, {recursive: true});
+const buildScript = path.join(workspace, 'build.rs');
+// The marker is an output. Without this declaration Cargo's default package
+// scan sees that output change and correctly reruns the script on every check.
+fs.writeFileSync(buildScript, fs.readFileSync(buildScript, 'utf8').replace(/}\s*$/, '    println!("cargo:rerun-if-changed=build.rs");\n}\n'));
 const manifest = path.join(workspace, 'Cargo.toml'), library = path.join(workspace, 'src/lib.rs');
 const data = path.join(workspace, 'src/input.txt');
 fs.writeFileSync(data, 'saved 🦀 data\n');
