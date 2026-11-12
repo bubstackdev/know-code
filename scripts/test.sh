@@ -15,6 +15,7 @@ case "$KNOW_CODE_BUILD_PROFILE" in
     ;;
   *) echo "Usage: bash scripts/test.sh [debug|release]" >&2; exit 2 ;;
 esac
+python3 scripts/build_record.py verify "$KNOW_CODE_BUILD_PROFILE" >/dev/null
 python3 tests/build_record.py
 cargo test --workspace --locked --profile "$task_cargo_profile"
 python3 tests/cli.py
@@ -62,3 +63,4 @@ python3 tests/swift_provider.py
 python3 tests/swiftpm_provider.py
 python3 tests/xcode_provider.py
 python3 tests/languages.py
+python3 scripts/build_record.py verify "$KNOW_CODE_BUILD_PROFILE" >/dev/null

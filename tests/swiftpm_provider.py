@@ -1,9 +1,11 @@
 """Real SwiftPM planner -> module preparation -> compiler IndexStore contract."""
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,7 +52,9 @@ public struct First {
 SECOND = 'import First\npublic func call() -> String { First().greet("hello") }\n'
 write(PACKAGE / 'Sources/Second/Second.swift', SECOND)
 write(PACKAGE / 'Tests/SecondTests/Test.swift', '@testable import Second\nfunc fixtureTestInput() -> String { call() }\n')
-subprocess.run(['bash', 'providers/swift/build.sh', PROFILE], cwd=ROOT, check=True)
+subprocess.run([sys.executable, ROOT / 'scripts/build_record.py', 'verify', PROFILE], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
+READER = ROOT / f'.artifacts/build/{PROFILE}/swift/indexstore-reader'
+reader_sha256 = hashlib.sha256(READER.read_bytes()).hexdigest()
 
 
 def invoke(name, package=PACKAGE, preparations=None, fingerprint='fixture1'):
@@ -190,7 +194,8 @@ if(await extensionRequest(modern,'buildTarget/prepare',{})!==7 || methods.length
 '''
 subprocess.run(['node', '--input-type=module', '-e', protocol_test], cwd=ROOT, env=ENV, check=True, timeout=15)
 assert not any((RUN / 'data/workers/swift').glob('job-*')), 'per-job indexes/spools must be reclaimed'
-summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE,
+assert hashlib.sha256(READER.read_bytes()).hexdigest() == reader_sha256, 'test changed the built reader'
+summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'reader_sha256': reader_sha256,
            'targets': [c['target'] for c in compilations], 'initial_symbols': len(symbols),
            'initial_occurrences': len(occurrences), 'source_artifacts': len(artifacts),
            'module_only_preparation': True, 'dependency_sources_indexed': False,
