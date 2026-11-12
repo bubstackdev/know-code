@@ -1,5 +1,7 @@
+mod cancel;
 mod jobs;
 mod wait;
+use cancel::cancel_workspace;
 use jobs::finish_job;
 use wait::wait_for_workspace;
 
@@ -2589,29 +2591,11 @@ fn serve(
             });
         }
         if request.operation == "cancel" {
-            let mut entries = shared.entries.lock().unwrap();
-            let entry = entries
-                .get_mut(&request.database)
-                .ok_or("workspace is not registered")?;
-            let active = shared.active_job.lock().unwrap();
-            let accepted = if entry.cancel_pending {
-                false
-            } else if let Some((_, control)) =
-                active.as_ref().filter(|(db, _)| db == &request.database)
-            {
-                control.cancel() || !control.committed()
-            } else {
-                entry.pending && entry.status.available
-            };
-            if accepted {
-                begin_cancellation(entry);
-                persist(shared, entry, None)?;
-            }
-            drop(active);
+            let status = cancel_workspace(shared, &request.database)?;
             wake(sender, shared, Event::Wake);
             shared.changed.notify_all();
             return Ok(ControlResponse {
-                workspaces: vec![entry.snapshot()],
+                workspaces: vec![status],
                 ..Default::default()
             });
         }

@@ -171,6 +171,14 @@ impl Control {
             .as_ref()
             .is_some_and(|inner| inner.state.lock().unwrap().committed)
     }
+    /// Whether two managed handles control the same admitted analysis job.
+    /// Staging/publication clones share cancellation ownership, not a new job.
+    pub fn same_job(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            _ => false,
+        }
+    }
     pub fn resource_limited(&self) -> bool {
         self.0.as_ref().is_some_and(|inner| {
             matches!(inner.state.lock().unwrap().reason, Some(Stop::Limited(_)))
