@@ -2,6 +2,7 @@ mod coordinator;
 mod discovery;
 mod install;
 mod mcp;
+mod registry;
 mod runtime;
 use know_code_core::{control, protocol::ControlRequest};
 use std::{

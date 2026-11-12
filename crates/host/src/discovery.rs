@@ -41,8 +41,7 @@ pub struct Discovery {
 }
 impl Discovery {
     pub fn open(registry: &Connection) -> Result<Self> {
-        registry.execute_batch("CREATE TABLE IF NOT EXISTS discovery_parents(root TEXT PRIMARY KEY,identity TEXT NOT NULL,exclusions TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS discovery_suppressed(root TEXT PRIMARY KEY);")?;
+        crate::registry::initialize(registry)?;
         let mut parents = BTreeMap::new();
         let mut query = registry
             .prepare("SELECT root,identity,exclusions FROM discovery_parents ORDER BY root")?;

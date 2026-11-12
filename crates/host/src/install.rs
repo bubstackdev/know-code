@@ -453,8 +453,7 @@ fn compatible_data(s: &Settings, target: &Value, legacy_fallback: bool) -> Resul
         Err(error) => return Err(error.into()),
         Ok(_) => {}
     }
-    let registry =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let registry = crate::registry::open_read_only(&path)?;
     let mut query = registry.prepare("SELECT database FROM workspaces ORDER BY database")?;
     let databases = query.query_map([], |r| r.get::<_, String>(0))?;
     for database in databases {

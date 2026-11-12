@@ -12,7 +12,7 @@ pub(super) fn shared(control: Control) -> Arc<Shared> {
     std::fs::create_dir_all(&root).unwrap();
     let publisher = Arc::new(Publisher::new(&root));
     let registry = Connection::open_in_memory().unwrap();
-    registry.execute_batch("CREATE TABLE workspaces(database TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL,configuration TEXT NOT NULL,generation INTEGER NOT NULL,inputs TEXT NOT NULL,error TEXT NOT NULL,failed_input_hash TEXT NOT NULL,outcome_code TEXT NOT NULL,cancel_pending INTEGER NOT NULL,disk_pause TEXT NOT NULL); CREATE TABLE identities(database TEXT PRIMARY KEY,identity TEXT NOT NULL); CREATE TABLE manifests(database TEXT PRIMARY KEY,inputs TEXT NOT NULL);").unwrap();
+    crate::registry::initialize(&registry).unwrap();
     let active = Instant::now() - Duration::from_secs(60);
     let entry = Entry {
         registration: 1,

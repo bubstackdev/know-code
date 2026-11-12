@@ -50,3 +50,25 @@ cargo test -p know-code --locked coordinator::
 ```
 
 Then matching build + `KNOW_CODE_BUILD_PROFILE=debug python3 tests/cursors.py`, affected resource/coordinator/WAL checks, and ordinary fmt/clippy. The three-binding cursor regression requires matching new native artifacts; old installed0.0.1 binaries must not be used to judge the changed error contract. Root should test both profiles before final certification. None of these commands is claimed executed here.
+
+## Architecture4: one versioned host registry boundary
+
+Source recheck found two actual `registry.db` open sites: coordinator startup and installer compatibility inspection. Discovery owns the remaining two existing schema tables through its connection-based constructor. `runtime::info` opens only an in-memory bundled-SQLite FTS probe; the report's runtime registry-open claim is not present in released code, so no new runtime dependency is added.
+
+`crates/host/src/registry.rs` now owns writer open, read-only open/version checks and the existing initialization SQL. `user_version=1` names exactly the released six-table schema. Legacy 0 accepts the known base columns and performs only the previous additive columns, saved-input manifest move, and one-time cancellation backfill, now within one IMMEDIATE transaction together with the version marker. There is no new table, column, migration ledger, core engine, plugin or settings format. Current registrations, identities, tracked inputs, manifests, discovery parents/exclusions/suppressions and personal settings stay intact. Reopening version 1 does not repeat data migration.
+
+The coordinator still takes its existing sole-writer fence first. Registry WAL and synchronous FULL are retained. Installer inspection accepts 0/1 read-only and does not migrate. Old released 0.0.1 ignored user_version and already reads/writes this same additive schema, so the marker itself does not impose a rollback incompatibility; the test explicitly retains a same-schema older-runtime write across reopen. This is structural compatibility evidence, not a new claim to have executed an old binary in this lane.
+
+Unknown/negative versions return an actionable shared update-required error before application schema, journal-mode or settings writes. Normal SQLite writable-open recovery is deliberately preserved: SQLite may itself recover a hot journal or maintain WAL shared memory before the committed version can be read. There is no universal no-filesystem-write claim and no duplicate header/WAL parser. Clean unknown-version fixture bytes remain unchanged through writer, read-only, direct initialization and discovery open checks.
+
+Added deterministic tests (root must execute):
+
+```sh
+cargo test -p know-code --locked registry::tests::
+cargo test -p know-code --locked discovery::tests::
+cargo test -p know-code --locked install::tests::
+```
+
+The registry tests cover legacy rows plus existing cancellation semantics, all six released tables and personal-settings bytes across migration/idempotent reopen, same-schema older writes, transactional rollback/retry after an owned SQLite trigger fault, unknown/negative format refusal, unchanged read-only legacy inspection, and a real hot rollback journal. That last fixture runs only its own test binary, leaves an uncommitted spilled transaction by process exit, verifies read-only inspection cannot recover it, and requires normal writer recovery to retain the committed legacy values. The owned child has a bounded 20-second watchdog with kill/reap on timeout; no child or SQLite fixture was executed by this agent.
+
+Only the registry module declaration is changed in main.rs; its CLI body is untouched. Pure rustfmt/diff checks are not compiler/test certification. Root owns matching builds, both-profile tests, installed lifecycle/data compatibility and final integration.

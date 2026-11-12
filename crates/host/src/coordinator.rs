@@ -545,39 +545,7 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
         publisher: Arc::clone(&publisher),
         cursors: None,
     };
-    let registry = Connection::open(data.join("registry.db"))?;
-    registry.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS workspaces(database TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL,configuration TEXT NOT NULL,generation INTEGER NOT NULL,inputs TEXT NOT NULL,error TEXT NOT NULL); CREATE TABLE IF NOT EXISTS identities(database TEXT PRIMARY KEY, identity TEXT NOT NULL); CREATE TABLE IF NOT EXISTS tracked_inputs(database TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(database,path)); CREATE TABLE IF NOT EXISTS manifests(database TEXT PRIMARY KEY, inputs TEXT NOT NULL); INSERT OR IGNORE INTO manifests SELECT database,inputs FROM workspaces; UPDATE workspaces SET inputs='{}' WHERE inputs<>'{}';")?;
-    let has_failure_hash = registry
-        .prepare("PRAGMA table_info(workspaces)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "failed_input_hash");
-    if !has_failure_hash {
-        registry.execute_batch(
-            "ALTER TABLE workspaces ADD COLUMN failed_input_hash TEXT NOT NULL DEFAULT '';",
-        )?;
-    }
-    let columns = registry
-        .prepare("PRAGMA table_info(workspaces)")?
-        .query_map([], |r| r.get::<_, String>(1))?
-        .collect::<Result<BTreeSet<_>, _>>()?;
-    if !columns.contains("outcome_code") {
-        registry.execute_batch(
-            "ALTER TABLE workspaces ADD COLUMN outcome_code TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
-    if !columns.contains("cancel_pending") {
-        registry.execute_batch("BEGIN IMMEDIATE;
-          ALTER TABLE workspaces ADD COLUMN cancel_pending INTEGER NOT NULL DEFAULT 0;
-          UPDATE workspaces SET cancel_pending=1,failed_input_hash='' WHERE outcome_code='cancelled';
-          COMMIT;")?;
-    }
-    if !columns.contains("disk_pause") {
-        registry.execute_batch(
-            "ALTER TABLE workspaces ADD COLUMN disk_pause TEXT NOT NULL DEFAULT ''",
-        )?;
-    }
+    let registry = crate::registry::open(data)?;
     let discovery = crate::discovery::Discovery::open(&registry)?;
     let mut entries = BTreeMap::new();
     {
