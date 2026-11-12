@@ -5,6 +5,7 @@ import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {send} from '../shared/protocol.mjs';
 import {checked, run, hash, relative, sourceFile, compilerDiagnostics, ingestStore} from './index.mjs';
 import {unavailableGraphCapabilities} from './graph.mjs';
+import {semanticArguments} from './compiler.mjs';
 
 const packageManifest = file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file));
 export const canonicalManifest = file => packageManifest(file) ? path.join(path.dirname(file), 'Package.swift') : file;
@@ -82,17 +83,6 @@ function prepareDependencies({request, root, project, swift, toolchain, state, c
 export async function extensionRequest(client, method, params) {
   try { return await client.request(`sourcekit/${method}`, params); }
   catch (error) { if (error.rpcCode !== -32601) throw error; return client.request(method, params); }
-}
-function semanticArguments(args) {
-  const result = [];
-  const outputOptions = new Set(['-index-store-path', '-index-unit-output-path', '-o', '-emit-module-path',
-    '-emit-module-doc-path', '-emit-module-source-info-path', '-emit-dependencies-path', '-emit-reference-dependencies-path', '-serialize-diagnostics-path']);
-  for (let i = 0; i < args.length; i++) {
-    if (outputOptions.has(args[i])) { i++; continue; }
-    if (['-c', '-emit-module', '-emit-object', '-typecheck', '-index-file'].includes(args[i])) continue;
-    result.push(args[i]);
-  }
-  return result;
 }
 function verifyToolchain(target, compiler) {
   const uri = target.data?.toolchain;
