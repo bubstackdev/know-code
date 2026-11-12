@@ -61,10 +61,14 @@ shutil.copytree(ROOT / 'tests/fixtures/rust', workspace)
 # retain the original CRLF bytes while LSP navigation stays UTF-16.
 helper_source = workspace / 'src/helper.rs'
 helper_source.write_bytes(('// 🦀 saved CRLF source\n' + helper_source.read_text()).replace('\n', '\r\n').encode())
+(workspace / 'orphan.rs').write_text('pub fn orphan_must_not_be_owned() {}\n')
+(workspace / 'vendor/unrelated').mkdir(parents=True)
+(workspace / 'vendor/unrelated/bogus.rs').write_text('pub fn vendor_must_not_be_owned() {}\n')
 clean = run('clean', workspace)
 symbols, occurrences, sources = facts(clean)
 names = {s['name'] for s in symbols.values()}
 assert {'Greeter', 'greet', 'café', 'input', 'expected', 'greeting', 'decorate'} <= names, names
+assert not {'orphan_must_not_be_owned', 'vendor_must_not_be_owned'} & names, names
 local_ids = [s['id'] for s in symbols.values() if s['name'] == 'café']
 assert len(local_ids) == 2, local_ids
 assert all(any(o['symbolId'] == sid and o['role'] == 'declaration' for o in occurrences) for sid in local_ids)
@@ -81,7 +85,7 @@ assert extents, 'compiler document outline did not provide the function extent'
 assert any('fn decorate' in sources[o['artifactId']][o.get('startByte',0):o['endByte']].decode() for o in extents)
 assert all(len(s['signature']) < 4096 for s in symbols.values()), 'hover docs leaked into signatures'
 assert any(s.get('external') and s['name'] == 'String' for s in symbols.values())
-assert len(sources) == 3, 'dependency source was indexed'
+assert len(sources) == 3, 'dependency/orphan/vendor source was indexed'
 assert not (workspace / 'know-code-build-ran').exists(), 'analysis executed the build script'
 
 # Actual outgoing-call evidence, syntax ownership and unique definitions must
@@ -143,11 +147,17 @@ virtual = ARTIFACTS / 'virtual'
 if virtual.exists():
     shutil.rmtree(virtual)
 (virtual / 'member/src').mkdir(parents=True)
-(virtual / 'Cargo.toml').write_text('[workspace]\nmembers = ["member"]\nresolver = "3"\n')
-(virtual / 'member/Cargo.toml').write_text('[package]\nname = "fixture-member"\nversion = "0.1.0"\nedition = "2024"\n')
-(virtual / 'member/src/lib.rs').write_text('pub fn member_function(value: usize) -> usize { value }\n')
+(virtual / 'Cargo.toml').write_text('[workspace]\nmembers = ["member", "z_dependency"]\nresolver = "3"\n')
+(virtual / 'member/Cargo.toml').write_text('[package]\nname = "fixture-member"\nversion = "0.1.0"\nedition = "2024"\n[dependencies]\nfixture-dependency = {path = "../z_dependency"}\n')
+(virtual / 'member/src/lib.rs').write_text('pub fn member_function(value: usize) -> usize { fixture_dependency::hidden::shared_helper(value) }\n')
+(virtual / 'z_dependency/src').mkdir(parents=True)
+(virtual / 'z_dependency/Cargo.toml').write_text('[package]\nname = "fixture-dependency"\nversion = "0.1.0"\nedition = "2024"\n')
+(virtual / 'z_dependency/src/lib.rs').write_text('pub mod hidden;\n')
+(virtual / 'z_dependency/src/hidden.rs').write_text('pub fn shared_helper(value: usize) -> usize { value }\n')
 dedup = run('workspace', virtual, [virtual / 'Cargo.toml', virtual / 'member/Cargo.toml'])
-facts(dedup)
+dedup_symbols, _, dedup_sources = facts(dedup)
+assert any(symbol['name'] == 'shared_helper' and not symbol.get('external') for symbol in dedup_symbols.values()), 'later-owned module was classified external'
+assert any('z_dependency/src/hidden.rs@' in artifact for artifact in dedup_sources), 'analyzer-selected dependency module omitted'
 compilations = [f['compilation'] for f in dedup['messages'] if 'compilation' in f]
 assert len(compilations) == 1 and compilations[0]['projectPath'] == 'Cargo.toml', compilations
 assert any(p.endswith('member/Cargo.toml') for p in compilations[0]['inputPaths'])
@@ -248,6 +258,7 @@ assert not any('compilation' in f or f.get('complete', {}).get('success') for f 
 summary = {'passed': True, 'checks': ['compiler-defined method/cross-file references', 'distinct same-named Unicode locals and exact byte ranges',
            'outgoing direct calls with compiler locations', 'value/type dependency kinds and enclosing owners',
            'function values and deferred/nested execution are not fabricated calls',
+           'Cargo target roots and analyzer-selected modules exclude orphan/vendor source',
            'test symbols', 'external identity without dependency source publication', 'saved-source replacement scope',
            'unresolved call does not invent symbol', 'Cargo workspace member deduplication', 'out-of-root workspace rejection', 'build script execution disabled', 'missing analyzer prerequisite', 'uninstalled pin without install/network', 'missing rust-src before analyzer launch'],
            'clean_symbols': len(symbols), 'clean_occurrences': len(occurrences),

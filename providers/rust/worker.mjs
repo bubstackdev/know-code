@@ -5,7 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {readRequest, send} from '../shared/protocol.mjs';
 import {Analyzer, compilerEnvironment} from './lsp.mjs';
-import {relative,byteOffsets} from '../shared/source.mjs';
+import {relative,byteOffsets,sourceBoundary} from '../shared/source.mjs';
 import {orderedDefinitions,ExternalSources} from './navigation.mjs';
 import {syntaxGraph, outgoingCalls} from './graph.mjs';
 
@@ -16,14 +16,6 @@ function command(tool, args, cwd) {
   const result = spawnSync(tool, args, {cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: compilerEnvironment()});
   if (result.error || result.status !== 0) throw new Error(`${tool} prerequisite/project evaluation failed: ${result.error?.message ?? result.stderr}; install the repository-selected Rust toolchain, rust-analyzer and rust-src components, and restore Cargo dependencies separately`);
   return result.stdout.trim();
-}
-
-function walk(directory, result) {
-  for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
-    const filename = path.join(directory, entry.name);
-    if (entry.isDirectory() && !['target', '.git', 'node_modules', '.artifacts', '.research'].includes(entry.name)) walk(filename, result);
-    else if (entry.isFile() && entry.name.endsWith('.rs')) result.add(filename);
-  }
 }
 
 function source(filename, root, compilationId) {
@@ -81,16 +73,20 @@ async function analyze(root, manifest, metadata, configuration) {
   const analyzerVersion = command('rust-analyzer', ['--version'], directory);
   const members = metadata.packages.filter(p => metadata.workspace_members.includes(p.id));
   const files = new Set();
-  for (const member of members) walk(path.dirname(member.manifest_path), files);
+  // Cargo supplies crate roots. Additional module sources are enrolled only
+  // from analyzer-resolved module declarations below, never a recursive scan.
+  for (const member of members) for (const target of member.targets ?? [])
+    if (typeof target.src_path === 'string' && fs.existsSync(target.src_path)) files.add(target.src_path);
   const sources = new Map([...files].sort().map(filename => [pathToFileURL(filename).href, source(filename, root, compilationId)]));
   const options = {provider: 'rust-analyzer-lsp', analyzerVersion, positionEncoding: 'utf-16', configuration,
     cargo: {offline: true, allTargets: true, buildScripts: false, features: 'default'}, procMacros: false,
+    sourceOwnership: 'Cargo target roots and unique analyzer-selected module files',
     coverage: 'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
   send('compilation', {id: compilationId, language: 'rust', projectPath, target: 'rust-analyzer-workspace-view', configuration,
     inferred: false, compilerVersion, optionsJson: JSON.stringify(options), inputPaths: inputPaths(metadata, manifest), dependencies: []});
   send('progress', {stage: 'analysis', projectPath, message: 'Loading repository-selected Rust analyzer; build scripts and procedural macro execution are disabled.'});
   const diagnostics = [{code: 'rust_coverage_limits', severity: 'warning', path: projectPath,
-    message: 'Experimental compiler-backed Rust navigation: build scripts/procedural macros are disabled; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not covered. Discovered Rust files may include unowned/orphan modules; only unique analyzer-resolved references are published. This is a partial graph.'}];
+    message: 'Experimental compiler-backed Rust navigation: build scripts/procedural macros are disabled; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Only unique analyzer-resolved references are published. This is a partial graph.'}];
   if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
   const analyzer = new Analyzer(directory);
@@ -142,7 +138,41 @@ async function analyze(root, manifest, metadata, configuration) {
     analyzer.notify('initialized', {});
     const status = await analyzer.ready();
     if (status.health !== 'ok') diagnostics.push({code: 'rust_analyzer_load', severity: 'warning', path: projectPath, message: status.message ?? `Analyzer health: ${status.health}`});
+    // Discover declared module files before emitting any symbols: source
+    // ownership must not depend on whether a caller is analyzed before its
+    // callee's module. Outline declarations select request sites; only a unique
+    // analyzer definition enrolls another file. No path/name convention does.
+    const outlines = new Map();
     for (const current of sources.values()) {
+      analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
+      const outline = initialized.capabilities.documentSymbolProvider ?
+        await analyzer.request('textDocument/documentSymbol', {textDocument: {uri: current.uri}}) : [];
+      outlines.set(current.uri, outline);
+      const modules = [];
+      const collectModules = items => { for (const item of items ?? []) {
+        if (item.kind === 2 && item.selectionRange) modules.push(item.selectionRange.start);
+        collectModules(item.children);
+      }};
+      collectModules(outline);
+      for await (const {definitions} of orderedDefinitions(modules,
+        position => analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position}))) {
+        const locations = definitions ? (Array.isArray(definitions) ? definitions : [definitions]) : [];
+        const selected = new Map(locations.map(item => {
+          const uri = item.targetUri ?? item.uri, range = item.targetSelectionRange ?? item.range;
+          return [JSON.stringify([uri, range]), uri];
+        }));
+        if (selected.size !== 1) continue;
+        const uri = [...selected.values()][0];
+        if (uri?.startsWith('file:') && !sources.has(uri)) {
+          const filename = fileURLToPath(uri);
+          if (fs.existsSync(filename)) sources.set(uri, source(filename, root, compilationId));
+        }
+      }
+      analyzer.notify('textDocument/didClose', {textDocument: {uri: current.uri}});
+    }
+    for (const current of sources.values()) {
+      const origin = sourceBoundary(root, current.filename);
+      if (origin) diagnostics.push(origin);
       send('source', current.artifact);
       analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
       const graph = await syntaxGraph(analyzer, current);
@@ -169,7 +199,7 @@ async function analyze(root, manifest, metadata, configuration) {
       };
       const extents = new Map();
       if (initialized.capabilities.documentSymbolProvider) {
-        const outline = await analyzer.request('textDocument/documentSymbol', {textDocument: {uri: current.uri}});
+        const outline = outlines.get(current.uri);
         const collect = items => { for (const item of items ?? []) {
           if (item.selectionRange && item.range) {
             const key = rangeKey(item.selectionRange);
