@@ -1222,22 +1222,24 @@ impl ReadView {
     // SQLite TEXT operations (which stop at embedded NULs) for line positions.
     fn source_line(&self, hash: &str, offset: u64) -> Result<u64> {
         self.check()?;
-        let (start, checkpoint) = self
+        let checkpoint = self
             .line_checkpoints
             .borrow()
             .range((hash.to_owned(), 0)..=(hash.to_owned(), offset))
             .next_back()
-            .map(|((_, start), checkpoint)| (*start, *checkpoint))
-            .unwrap_or((
-                0,
-                LineCheckpoint {
-                    line: 1,
-                    previous_cr: false,
-                },
-            ));
-        if start == offset {
+            .map(|((_, start), checkpoint)| (*start, *checkpoint));
+        if let Some((start, checkpoint)) = checkpoint
+            && start == offset
+        {
             return Ok(checkpoint.line);
         }
+        let (start, checkpoint) = checkpoint.unwrap_or((
+            0,
+            LineCheckpoint {
+                line: 1,
+                previous_cr: false,
+            },
+        ));
         let rowid = self
             .connection
             .prepare_cached("SELECT rowid FROM contents WHERE hash=?")?
@@ -1922,6 +1924,8 @@ mod tests {
             .unwrap();
         writer.publish().unwrap();
         let view = crate::query::fixture_view(path).unwrap();
+        assert!(view.source_line("not-indexed", 0).is_err());
+        assert_eq!(view.source_line(&hash, 8193).unwrap(), 2);
         // Include a CRLF crossing the blob chunk boundary, offsets inside
         // multibyte text and backward seeks after later checkpoints exist.
         let offsets = (0..text.len())
@@ -1939,6 +1943,17 @@ mod tests {
             );
             assert!(view.line_checkpoints.borrow().len() <= MAX_LINE_CHECKPOINTS);
         }
+        let cancellation = crate::execution::QueryCancellation::default();
+        let execution = crate::execution::Execution::new(Default::default(), None)
+            .unwrap()
+            .with_cancellation(Some(cancellation.clone()));
+        *view.execution.lock().unwrap() = Some(execution);
+        cancellation.cancel();
+        assert!(matches!(
+            view.source_line(&hash, 8193),
+            Err(Error::QueryCancelled)
+        ));
+        *view.execution.lock().unwrap() = None;
         view.query(
             serde_json::from_value(serde_json::json!({"op":"symbol_context","symbol_id":"opaque"}))
                 .unwrap(),

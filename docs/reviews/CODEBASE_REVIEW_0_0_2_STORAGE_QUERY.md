@@ -48,7 +48,9 @@ does not add a source-history cache or use current disk text. The regression
 covers CRLF across the blob chunk boundary, embedded NUL, multibyte text,
 backward offsets, bounded hints and request cleanup. The original report's
 suggestion of two unconditional scans per declaration is inaccurate: released
-code asks for the declaration line, not a separate extent line.
+code asks for the declaration line, not a separate extent line. An uncached
+offset zero still resolves/opens indexed content, preserving the prior failure
+behavior for missing content; only an existing exact checkpoint avoids that read.
 
 Root validation requested:
 
@@ -77,16 +79,79 @@ cargo test -p know-code-core --locked --test graph graph_coverage_keeps_empty_ro
 cargo test -p know-code-core --locked --test graph
 ```
 
-## Current-source baseline
+## Per-ID disposition
 
-| IDs | Released-source disposition |
-| --- | --- |
-| H6, M14, M15 | Already fixed: `store::ensure_cleanup_indexes` installs the three cleanup/FK probe indexes; the existing regression checks access paths, retained data and FK coherence. |
-| H10, H11 | Already fixed: a bounded frontier probe precedes expansion at maximum depth; adjacency predicates precede the SQL row cap. Existing dense-frontier and rejected-kind regressions cover these paths. |
-| L19 | Already fixed with H10: `GraphResult::limit` deduplicates limit labels before insertion. |
-| L21 | Already fixed: compact symbol projection uses 17-location lookahead, keeps at most 16 and labels limited declarations for concrete supports. |
-| M16 | Already fixed and release-validated: explicit staging PASSIVE checkpoints and active-job maintenance reservation supplement the shared disk-pressure pause/resume path. No resource cap is raised here. |
-| M22 | Accepted independent graph/result/page budgets. No change to make their limits equal. |
+“Fixed before this lane” refers to released source, not a newly executed test.
+“Changed here” requires root's matching build/regression result before claiming
+validation. Outstanding measurements below remain outstanding.
 
-The remaining assigned IDs are still being checked; final dispositions and any
-additional focused regressions will be added before this lane is closed.
+| ID | Disposition | Current source and regression witness |
+| --- | --- | --- |
+| H6 | Fixed before this lane. | `store::ensure_cleanup_indexes`: `unit_artifact_owner(owner_generation,artifact_id)`; cleanup-index plan/retained-fact/FK regression. |
+| H10 | Fixed before this lane. | `graph::query` probes the frontier before adjacency expansion at maximum depth; `depth_frontier_is_only_probed_without_expansion_or_out_of_depth_boundaries`. |
+| H11 | Fixed before this lane. | `edge_predicates` applies kind/implicit/exact filters before SQL row caps; `edge_filters_apply_before_the_sql_row_cap_in_both_directions`. |
+| M14 | Fixed before this lane. | `artifact_content(content_hash)` covers the contents child-FK probe; shared cleanup-index regression. |
+| M15 | Fixed before this lane. | `generation_unit_owner(owner_generation,compilation_id)` covers compilation retention probes; shared cleanup-index regression. |
+| M16 | Fixed before this lane; no caps changed. | `Writer::maintain_staging` runs explicit PASSIVE after 64 committed payloads. Existing pinned-reader/WAL reuse, typed-stop/storage-error and active-reservation regressions; see [WAL_PRESSURE.md](../WAL_PRESSURE.md) for retained actual Polly and failed-run history. |
+| M17 | Accepted bound; scale/contention measurement remains open. | `recovery::validate_candidate` retains a 120-second integrity/checkpoint deadline under the supplied interruptible Control. [INDEX_RECOVERY.md](../INDEX_RECOVERY.md) explicitly distinguishes timeout from corruption and requires explicit retry after a failed allocated attempt. |
+| M21 | Confirmed repeated work; optimization awaits measurement. | `visits` preserves `(node,possible,context)` and up to eight paths; `dispatch::neighbors` is called again on admitted revisits. SQL preparation is already cached. No general 8× slowdown is established. |
+| M22 | Accepted independent budgets. | [QUERY_LIFECYCLE.md](../QUERY_LIFECYCLE.md) distinguishes logical graph/materialization, page and full response caps. `response_limit_exceeded` remains a typed whole-response outcome; limits are not forced equal. |
+| M23 | Changed here; root validation requested above. | Summary coverage now retains root/path/proof/witness/compatibility/boundary contexts; explicit full workspace detail remains available. |
+| M24 | Changed here; root validation requested above. | Cached point statements and joined per-reference classification replace repeated preparation/point SQL. |
+| M25 | Changed here; root validation requested above. | Request-local, bounded hash/offset checkpoints reduce repeated source-prefix work while preserving byte-based newline semantics. |
+| M26 | Claim overstated; SQL setup measurement remains open. | `symbols_sql` groups/orders matching finding keys before SQL LIMIT; Rust collects only `limit+1` keys. Exact-name/FTS paths have `symbol_filters_use_name_or_fts_lookups`; browsing and target-equivalent grouping remain accepted behavior. |
+| L16 | Residual cleanup measurement remains open; not fixed by a new bound. | `Writer::drop` still deletes staging/manifests and reclaims without a progress handler. Missing cleanup/FK probes are repaired; `publication_checkpoint_and_failed_writer_cleanup_release_the_cursor_fence` verifies cleanup is outside the cursor mutex, not that all cleanup is fast. |
+| L17 | Plan/write-cost measurement remains open. | `symbol_test_mask` cannot provide an ordinary seek for the current bitwise predicates, but “never usable” is stronger than demonstrated. A covering scan or future plan is not ruled out by static inspection. Index retained pending measured evidence. |
+| L18 | Changed here; root validation requested above. | Shared idempotent `compilation_project(project_path,id)` plus exact replacement-probe plan assertion. |
+| L19 | Fixed before this lane. | `GraphResult::limit` deduplicates labels on insertion; depth-frontier regression does not accumulate per-neighbor depth labels. |
+| L20 | Confirmed metadata parsing; setup-cost measurement remains open. | `Contexts::load` parses current compilation references for exact consumer/fingerprint compatibility. These are compilation metadata, not all graph facts. No resident/global graph cache added. |
+| L21 | Fixed before this lane. | Shared compact `graph::symbol` reads at most 17 declaration locations, retains 16, and labels limited supports; `graph::tests::compact_symbol_search_bounds_declarations_and_labels_every_exact_support`. |
+
+The self-recursion behavior associated with the adjacent provider finding is
+also present in released core: `root_self_calls_are_terminal_findings_and_mutual_recursion_stays_bounded`
+tests callers/callees terminal self-findings and bounded impact recursion. This
+lane does not edit provider extraction.
+
+## Remaining measurement and design boundaries
+
+**L16:** first measure cancelled/failed staging cleanup after the repaired probe
+indexes, with current and cursor-retained facts and a competing writer. A narrow
+possible follow-up is a short independent cleanup deadline/progress handler,
+rather than the already-cancelled analysis Control. That needs a deterministic
+interruption regression before implementation. Decide whether manifest deletion
+and reclamation must share one transaction: current separate statements may
+commit some cleanup before a later interruption. Preserve current/pinned owners
+under either choice. Interrupted cleanup must leave discoverable, charged
+reclamation debt that the existing write/maintenance path retries; deleting a
+staging receipt before recording debt must not make retained bytes unaccounted
+or leave pressure data without a retry path. The retiring writer must release
+its fence even when cleanup is interrupted. No new sweeper or cap increase is implied.
+
+**M21/L20:** retain separate timing and work counts for first expansion versus
+revisited contexts and metadata setup on named graph fixtures. An adjacency memo
+must cap retained evidence bytes, preserve context/path-specific proof selection,
+charge actual uncached proof work and keep cancellation/time/state bounds. A
+whole-graph cache is unwarranted. A per-ReadView metadata cache may give little
+benefit to fresh-view callers and retain unnecessary state; measure that lifecycle
+before changing it. Existing converging-context and compiler-witness regressions
+remain mandatory for any optimization.
+
+**M17/M26/L17:** measure sealing under accepted resource/contention conditions,
+SQL grouping for broad browsing versus focused lookup, and actual mask-index
+plans/write cost. Keep failed observations and distinguish setup/cold work from
+the accepted warm focused lookup gate. None is closed by this static review.
+
+Registry versioning (architecture 4) belongs to the runtime lane. Recovery/disk
+module decomposition (architecture 5) is not needed for the confirmed narrow
+fixes here. A typed operation rewrite (architecture 7) is not introduced without
+a concrete cross-entry validation defect; root owns the current MCP/CLI boundary
+changes. This avoids a second query engine or cross-lane source edits.
+
+## Validation handoff
+
+All owned Rust files pass standalone `rustfmt --edition 2024 --check`; all diffs
+pass `git diff --check`. No cargo/build/native/runtime/VM command ran in this
+lane. In addition to the focused commands above, root should run affected core
+`--test context`, `--test publication`, `--test target_grouping`, the full graph
+integration target and the normal workspace gates once integrated. Broader
+release/performance claims require their actual resulting receipts.
