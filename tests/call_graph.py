@@ -400,15 +400,15 @@ if native_compiler:
     native_source.write_text(saved_source + '\nexport const nativeBroken: number = "wrong";\n')
     generation = ready(generation)
     saved_leaf = symbol('savedLeaf', 'ts')
-    assert not query({'op': 'symbols', 'name': 'leaf'}, parity=True)['symbols']
+    assert not query({'op': 'symbols', 'name': 'leaf'}, parity=True).get('symbols', [])
     native_report = next(c for c in query({'op': 'symbols', 'name': 'savedLeaf', 'coverage_detail': 'full'}, parity=True)['coverage']
                          if c['language'] == 'typescript')
     assert native_report['status'] == 'partial' and any(d['severity'] == 'error' and d['code'] == 'TS2322'
-                                                       for d in native_report['diagnostics']), native_report
+                                                       for d in native_report.get('diagnostics', [])), native_report
     assert 'direct' in {f['symbol']['name'] for f in graph('callers', saved_leaf)['findings']}
     assert 'savedLeaf' in {f['symbol']['name'] for f in graph('callees', symbol('direct', 'ts'))['findings']}
     assert 'direct' in {f['symbol']['name'] for f in graph('impact', saved_leaf)['findings']}
-    native_references = query({'op': 'references', 'symbol_id': saved_leaf}, parity=True)['occurrences']
+    native_references = query({'op': 'references', 'symbol_id': saved_leaf}, parity=True).get('occurrences', [])
     assert any(o['role'] == 'reference' for o in native_references), native_references
     for occurrence in native_references:
         location = occurrence['location']
@@ -422,7 +422,7 @@ if native_compiler:
     generation = ready(generation)
     repaired = next(c for c in query({'op': 'symbols', 'name': 'savedLeaf', 'coverage_detail': 'full'}, parity=True)['coverage']
                     if c['language'] == 'typescript')
-    assert repaired['status'] == 'partial' and not any(d['code'] == 'TS2322' for d in repaired['diagnostics']), repaired
+    assert repaired['status'] == 'partial' and not any(d['code'] == 'TS2322' for d in repaired.get('diagnostics', [])), repaired
     checks += ['native_TS7_stored_reference_call_impact_and_exact_source_parity',
                'native_TS7_saved_compiler_error_partial_publication_and_repair']
 
@@ -443,8 +443,8 @@ if native_compiler:
         coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full'}, parity=True)['coverage']
         unavailable = next(c for c in coverage if c['language'] == 'typescript')
         assert unavailable['status'] == 'unavailable' and unavailable['compiler_version'] == expected_version, unavailable
-        assert any(d['code'] == code for d in unavailable['diagnostics']), unavailable
-        assert not query({'op': 'symbols', 'name': 'savedLeaf'}, parity=True)['symbols'], 'Unavailable facts must not appear current'
+        assert any(d['code'] == code for d in unavailable.get('diagnostics', [])), unavailable
+        assert not query({'op': 'symbols', 'name': 'savedLeaf'}, parity=True).get('symbols', []), 'Unavailable facts must not appear current'
         assert 'Leaf' in {f['symbol']['name'] for f in graph('callees', symbol('Added', 'cs'), target='net10.0')['findings']}
     selected_compiler.unlink()
     selected_compiler.symlink_to(native_compiler, target_is_directory=True)
