@@ -19,6 +19,21 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
 ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
+# Optional test provisioning only: normal runs retain the pinned 5.9 compiler.
+# The real worker must discover this installed package through ordinary selection.
+selected_compiler_root = os.environ.get('KNOW_CODE_TEST_TYPESCRIPT_ROOT')
+native_compiler = Path(selected_compiler_root).resolve(strict=True) if selected_compiler_root else None
+selected_compiler = WORKSPACE / 'ts/node_modules/typescript'
+if native_compiler:
+    assert Path(selected_compiler_root).is_absolute()
+    compiler_manifest = native_compiler / 'package.json'
+    assert json.loads(compiler_manifest.read_text())['version'] == '7.0.2'
+    selected_compiler.parent.mkdir()
+    selected_compiler.symlink_to(native_compiler, target_is_directory=True)
+    (RUN / 'native-compiler-provision.json').write_text(json.dumps({
+        'version': '7.0.2', 'package_root': str(native_compiler), 'selected_entry': str(selected_compiler),
+        'package_manifest_sha256': hashlib.sha256(compiler_manifest.read_bytes()).hexdigest(),
+        'source': 'externally restored exact package; no TypeScript dependency restoration requested'}, indent=2)+'\n')
 (WORKSPACE / 'ts/tsconfig.json').write_text(json.dumps({'compilerOptions': {'strict': True, 'noEmit': True, 'skipLibCheck': True, 'target': 'ES2022', 'module': 'NodeNext', 'moduleResolution': 'NodeNext'}, 'include': ['*.ts']}))
 ts_source = '''// π😀 source coordinates
 export function leaf() { /* π😀 retained declaration */ return 1; }
@@ -140,6 +155,14 @@ def symbol(name, language, signature=None):
 def graph(op, identifier, **options):
     return query(dict(op=op, symbol_id=identifier, **options), parity=True)['graph']
 
+
+if native_compiler:
+    native_coverage = [c for c in query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full'}, parity=True)['coverage']
+                       if c['language'] == 'typescript']
+    assert native_coverage and all(c['compiler_version'] == '7.0.2' for c in native_coverage), native_coverage
+    assert all(c['status'] == 'partial' and c['capabilities']['project_links'] == 'unavailable'
+               and c['analysis_options']['knowCodeNativeCompiler'] == '7.0.2' for c in native_coverage), native_coverage
+    checks.append('selected_native_TS7_compiler_and_honest_consumer_context_coverage')
 
 ts_leaf = symbol('leaf', 'ts')
 callers = graph('callers', ts_leaf, paths_per_symbol=2)
@@ -367,9 +390,77 @@ assert any(c['status'] == 'partial' for c in query({'op': 'symbols', 'name': 'Br
 (WORKSPACE / 'cs/Code.cs').write_text(healthy_cs)
 generation = ready(generation)
 checks += ['fresh compiler-error partial graph with unresolved callsite and repair']
+if native_compiler:
+    # Reuse the real graph/native parity helpers for references, exact source,
+    # saved partial publication and repair. Partial native scope remains partial.
+    native_source = WORKSPACE / 'ts/code.ts'
+    native_consumer = WORKSPACE / 'ts/consumer.ts'
+    saved_source = native_source.read_text().replace('leaf', 'savedLeaf')
+    native_consumer.write_text(native_consumer.read_text().replace('leaf', 'savedLeaf'))
+    native_source.write_text(saved_source + '\nexport const nativeBroken: number = "wrong";\n')
+    generation = ready(generation)
+    saved_leaf = symbol('savedLeaf', 'ts')
+    assert not query({'op': 'symbols', 'name': 'leaf'}, parity=True)['symbols']
+    native_report = next(c for c in query({'op': 'symbols', 'name': 'savedLeaf', 'coverage_detail': 'full'}, parity=True)['coverage']
+                         if c['language'] == 'typescript')
+    assert native_report['status'] == 'partial' and any(d['severity'] == 'error' and d['code'] == 'TS2322'
+                                                       for d in native_report['diagnostics']), native_report
+    assert 'direct' in {f['symbol']['name'] for f in graph('callers', saved_leaf)['findings']}
+    assert 'savedLeaf' in {f['symbol']['name'] for f in graph('callees', symbol('direct', 'ts'))['findings']}
+    assert 'direct' in {f['symbol']['name'] for f in graph('impact', saved_leaf)['findings']}
+    native_references = query({'op': 'references', 'symbol_id': saved_leaf}, parity=True)['occurrences']
+    assert any(o['role'] == 'reference' for o in native_references), native_references
+    for occurrence in native_references:
+        location = occurrence['location']
+        stored = query({'op': 'source', 'artifact_id': location['artifact_id']}, parity=True)['source']
+        raw = (WORKSPACE / stored['path']).read_bytes()
+        assert stored['content_hash'] == location['content_hash'] == hashlib.sha256(raw).hexdigest()
+        assert stored['text'].encode() == raw
+        if occurrence['role'] != 'definition':
+            assert raw[location['start_byte']:location['end_byte']].decode() == 'savedLeaf'
+    native_source.write_text(saved_source)
+    generation = ready(generation)
+    repaired = next(c for c in query({'op': 'symbols', 'name': 'savedLeaf', 'coverage_detail': 'full'}, parity=True)['coverage']
+                    if c['language'] == 'typescript')
+    assert repaired['status'] == 'partial' and not any(d['code'] == 'TS2322' for d in repaired['diagnostics']), repaired
+    checks += ['native_TS7_stored_reference_call_impact_and_exact_source_parity',
+               'native_TS7_saved_compiler_error_partial_publication_and_repair']
+
+    # These are owned symlink/metadata changes followed by explicit refreshes;
+    # compiler installation watching is not being claimed. Never modify the
+    # externally provisioned compiler or ask package tooling to repair fixtures.
+    unsupported = RUN / 'unsupported-compiler'
+    unsupported.mkdir()
+    (unsupported / 'package.json').write_text(json.dumps({'name': 'typescript', 'version': '7.0.999', 'exports': {'.': './version.cjs'}}))
+    (unsupported / 'version.cjs').write_text('module.exports = {version: "7.0.999"};\n')
+    for replacement, code, expected_version in [(RUN / 'missing-compiler', 'compiler_unavailable', 'unavailable'),
+                                                 (unsupported, 'unsupported_compiler', '7.0.999')]:
+        assert selected_compiler.is_symlink()
+        selected_compiler.unlink()
+        selected_compiler.symlink_to(replacement, target_is_directory=True)
+        run([HOST, 'index', WORKSPACE])
+        generation = ready(generation)
+        coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full'}, parity=True)['coverage']
+        unavailable = next(c for c in coverage if c['language'] == 'typescript')
+        assert unavailable['status'] == 'unavailable' and unavailable['compiler_version'] == expected_version, unavailable
+        assert any(d['code'] == code for d in unavailable['diagnostics']), unavailable
+        assert not query({'op': 'symbols', 'name': 'savedLeaf'}, parity=True)['symbols'], 'Unavailable facts must not appear current'
+        assert 'Leaf' in {f['symbol']['name'] for f in graph('callees', symbol('Added', 'cs'), target='net10.0')['findings']}
+    selected_compiler.unlink()
+    selected_compiler.symlink_to(native_compiler, target_is_directory=True)
+    run([HOST, 'index', WORKSPACE])
+    generation = ready(generation)
+    restored = next(c for c in query({'op': 'symbols', 'name': 'savedLeaf', 'coverage_detail': 'full'}, parity=True)['coverage']
+                    if c['language'] == 'typescript')
+    assert restored['compiler_version'] == '7.0.2' and restored['status'] == 'partial'
+    assert 'direct' in {f['symbol']['name'] for f in graph('callers', symbol('savedLeaf', 'ts'))['findings']}
+    checks.append('native_TS7_missing_and_unsupported_compiler_boundaries_without_fallback_and_explicit_repair')
+
 summary = {'passed': True, 'profile': PROFILE, 'database': DATABASE, 'generation': generation,
            'checked_source_ranges': locations, 'checks': checks,
-           'capabilities': 'explicitly partial; selected project bodies link; broader dispatch closure remains partial'}
+           'typescript_compiler': '7.0.2 native' if native_compiler else 'provider default',
+           'capabilities': ('native consumer-Program facts partial; independent project links unavailable' if native_compiler else
+                            'explicitly partial; selected project bodies link; broader dispatch closure remains partial')}
 (RUN / 'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
 (ROOT / '.artifacts/call-graph').mkdir(parents=True,exist_ok=True)
 (ROOT / '.artifacts/call-graph/latest.json').write_text(json.dumps(summary, indent=2)+'\n')
