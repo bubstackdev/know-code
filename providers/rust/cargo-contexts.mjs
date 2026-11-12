@@ -155,7 +155,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       jsonFile(configuration, {directory, snapshots, toolRoots});
       send('progress', {stage: 'analysis', projectPath: manifest,
         message: attempt ? 'Recapturing unproven Cargo metadata once with discovered saved inputs.' : 'Evaluating actual Cargo library, binary and test compiler contexts.'});
-      const args = ['check', '--offline', '--workspace', '--all-targets', '--jobs', '1', '--message-format=json', '--manifest-path', manifest,
+      const args = ['check', '--offline', '--workspace', '--all-targets', '--keep-going', '--jobs', '1', '--message-format=json', '--manifest-path', manifest,
         '--target-dir', targetDirectory, ...cargoSelection(policy)];
       if (target) args.push('--target', target);
       const result = spawnSync('cargo', args, {cwd: path.dirname(manifest), env: {...compilerEnvironment(),
