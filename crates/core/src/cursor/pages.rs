@@ -556,7 +556,11 @@ fn entry(
     execution: Execution,
 ) -> Result<Entry> {
     if position >= preamble.page_count {
-        return Err(Error::CursorInvalidated);
+        // A caller can alter only the token's position while other holders
+        // still own a valid frozen result. Do not invalidate their cursor.
+        return Err(Error::InvalidRequest(
+            "cursor page position is out of range".into(),
+        ));
     }
     let offset = FIXED as u64 + u64::from(preamble.header_len) + u64::from(position) * ENTRY as u64;
     let bytes = block(reader, offset, ENTRY, execution)?;
@@ -989,6 +993,31 @@ mod tests {
         assert_eq!(get(&bytes, 0, 8192), old);
     }
     #[test]
+    fn maximum_cap_metadata_growth_is_explicit_and_never_changes_frozen_findings() {
+        let maximum = execution::MAX_RESPONSE_BYTES as usize;
+        let bytes = encode(
+            result("symbols", vec![json!({"body":"x".repeat(maximum - 4096)})]),
+            options("symbols", 1, 1, maximum),
+            execution(),
+        )
+        .unwrap();
+        let original = get(&bytes, 0, maximum);
+        let current = WorkspaceStatus {
+            generation: 8,
+            error: "e".repeat(8192),
+            ..Default::default()
+        };
+        let mut options = settings(0, maximum);
+        options.coordination = Some(&current);
+        options.freshness = "stale";
+        assert!(matches!(
+            read(Cursor::new(&bytes), options, execution()),
+            Err(Error::ResponseLimitExceeded)
+        ));
+        assert_eq!(get(&bytes, 0, maximum), original);
+        assert_eq!(original["generation"], 7);
+    }
+    #[test]
     fn atomic_context_path_and_required_header_cannot_be_stripped() {
         let input = result(
             "contexts",
@@ -1147,8 +1176,29 @@ mod tests {
         ));
         assert!(matches!(
             validate(Cursor::new(&original), u32::MAX, PREFIX, 7, execution()),
-            Err(Error::CursorInvalidated)
+            Err(Error::InvalidRequest(_))
         ));
+    }
+    #[test]
+    fn out_of_range_position_is_request_error_and_valid_page_remains_replayable() {
+        let bytes = encode(
+            result("symbols", vec![json!({"id":"a"}), json!({"id":"b"})]),
+            options("symbols", 2, 1, 1024),
+            execution(),
+        )
+        .unwrap();
+        let original = get(&bytes, 0, 1024);
+        for position in [2, u32::MAX] {
+            assert!(matches!(
+                read(Cursor::new(&bytes), settings(position, 1024), execution()),
+                Err(Error::InvalidRequest(_))
+            ));
+            assert!(matches!(
+                validate(Cursor::new(&bytes), position, PREFIX, 7, execution()),
+                Err(Error::InvalidRequest(_))
+            ));
+            assert_eq!(get(&bytes, 0, 1024), original);
+        }
     }
     #[test]
     fn checksum_valid_malformed_json_or_inconsistent_header_is_invalid() {
