@@ -14,6 +14,31 @@ export const flagValues = (args, name) => args.flatMap((value, index) =>
   value === name ? [args[index + 1]] : value.startsWith(`${name}=`) ? [value.slice(name.length + 1)] : []);
 const flag = (args, name) => flagValues(args, name)[0];
 
+// Bare proc_macro is Cargo's sysroot prelude injection, not an artifact join.
+// Direct extern lookup uses crate/all search paths; Cargo's typed dependency
+// paths cannot replace this sysroot crate. Refuse broader paths rather than
+// guessing which same-named binary the compiler selected.
+export function externArguments(record) {
+  const values = flagValues(record.args, '--extern'), dependencies = [], sysroot = [];
+  const search = record.args.flatMap((value, index) => value === '-L' ? [record.args[index + 1]] :
+    value.startsWith('-L') && value.length > 2 ? [value.slice(2)] : []);
+  for (const value of values) {
+    const separator = value.indexOf('=');
+    if (separator < 1) {
+      if (value !== 'proc_macro' || !flagValues(record.args, '--crate-type').some(value => value.split(',').includes('proc-macro')) ||
+          values.some(other => other.startsWith('proc_macro=')) ||
+          search.some(value => typeof value !== 'string' || !/^(?:dependency|native|framework)=.+/.test(value)))
+        gap('pathless extern dependency lacks an unambiguous sysroot selection');
+      sysroot.push(value);
+    } else {
+      const name = value.slice(0, separator), filename = value.slice(separator + 1);
+      if (!/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(name) || !filename) gap('unsupported extern alias/artifact');
+      dependencies.push({name, filename: path.resolve(record.cwd, filename)});
+    }
+  }
+  return {dependencies, sysroot: [...new Set(sysroot)]};
+}
+
 export function cargoArtifactIdentity(artifact) {
   return JSON.stringify([artifact.package_id, artifact.manifest_path, artifact.target,
     artifact.profile, artifact.features, artifact.filenames]);
@@ -50,7 +75,7 @@ export function contextArguments(record) {
 }
 
 export function compilerCfg(record, command) {
-  const parsed = contextArguments(record);
+  const parsed = contextArguments(record), externs = externArguments(record);
   const effective = command(record.compiler, [...parsed.query, '--print', 'cfg'], record.cwd).split(/\r?\n/).filter(Boolean).sort();
   const baselineArgs = parsed.target ? ['--target', parsed.target] : [];
   const baseline = command(record.compiler, [...baselineArgs, '--print', 'cfg'], record.cwd).split(/\r?\n/).filter(Boolean).sort();
@@ -66,7 +91,10 @@ export function compilerCfg(record, command) {
     gap(`missing rust-src prerequisite for captured Cargo compiler sysroot ${sysroot}; install rust-src separately and refresh`);
   const stat = fs.statSync(record.compiler), imageKey = JSON.stringify([record.compiler, stat.size, stat.mtimeMs, stat.ctimeMs]);
   if (!compilerImages.has(imageKey)) compilerImages.set(imageKey, fileEvidence([record.compiler], {artifact: true})[record.compiler]);
-  return {...parsed, effective, baseline, removals: baseline.filter(value => !effective.includes(value)), sysroot,
+  const sysrootExternInputs = externs.sysroot.flatMap(name =>
+    [path.join(library, name, 'Cargo.toml'), path.join(library, name, 'src/lib.rs')]);
+  const sysrootExternHashes = fileEvidence(sysrootExternInputs);
+  return {...parsed, sysrootExterns: externs.sysroot, sysrootExternHashes, effective, baseline, removals: baseline.filter(value => !effective.includes(value)), sysroot,
     compilerVersion: command(record.compiler, ['-Vv'], record.cwd), compilerSha256: compilerImages.get(imageKey)};
 }
 
@@ -144,11 +172,7 @@ export function capturedUnit(record, artifact, command, setupInputs = []) {
   const inputHashes = fileEvidence([...inputs.files, artifact.manifest_path, ...setupInputs, ...targetInput]);
   for (const filename of inputs.files)
     if (record.beforeInputs?.[filename] !== inputHashes[filename]) gap('consumed input lacks a matching pre-compilation snapshot');
-  const dependencies = flagValues(record.args, '--extern').map(value => {
-    const separator = value.indexOf('=');
-    if (separator < 1) gap('pathless extern dependency cannot select an exact producer');
-    return path.resolve(record.cwd, value.slice(separator + 1));
-  });
+  const dependencies = externArguments(record).dependencies.map(item => item.filename);
   const dependencyHashes = fileEvidence(dependencies, {artifact: true});
   for (const filename of dependencies)
     if (record.beforeArtifacts?.[filename] !== dependencyHashes[filename]) gap('extern artifact lacks matching compiler-consumption snapshot');
@@ -160,6 +184,7 @@ export function capturedUnitCurrent(unit, artifact) {
   try {
     return unit.record.status === 0 && unit.artifactIdentity === cargoArtifactIdentity(artifact) &&
       Object.entries(unit.inputHashes).every(([filename, expected]) => fileDigest(filename, MAX_INPUT).digest === expected) &&
+      Object.entries(unit.cfg.sysrootExternHashes ?? {}).every(([filename, expected]) => fileDigest(filename, MAX_INPUT).digest === expected) &&
       Object.entries(unit.outputHashes).every(([filename, expected]) => fileDigest(filename, MAX_ARTIFACT).digest === expected) &&
       Object.entries(unit.dependencyHashes).every(([filename, expected]) => fileDigest(filename, MAX_ARTIFACT).digest === expected) &&
       Object.entries(unit.inputs.environment).every(([name, expected]) =>
@@ -174,10 +199,7 @@ export function connectCapturedUnits(units) {
     producers.set(filename, producers.has(filename) ? null : index);
   }
   return units.map(unit => {
-    try { return {...unit, dependencies: flagValues(unit.record.args, '--extern').map(value => {
-    const separator = value.indexOf('=');
-    if (separator < 1) gap('pathless extern dependency cannot select an exact producer');
-    const name = value.slice(0, separator), filename = path.resolve(unit.record.cwd, value.slice(separator + 1));
+    try { return {...unit, dependencies: externArguments(unit.record).dependencies.map(({name, filename}) => {
     if (!/^[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(name) || !producers.has(filename) || producers.get(filename) === null) gap('extern alias/artifact producer is unavailable');
     const index = producers.get(filename);
     if (unit.dependencyHashes[filename] !== units[index].outputHashes[filename]) gap('extern producer content differs from caller consumption evidence');
@@ -195,6 +217,9 @@ export function selectedProject(units, selected, metadata) {
     for (const dependency of units[index].dependencies) visit(dependency.unit);
   }
   visit(selected);
+  if (reachable.some(index => units[index].cfg.sysrootExterns?.includes('proc_macro')) &&
+      reachable.some(index => units[index].cfg.name === 'proc_macro'))
+    gap('explicit reachable crate conflicts with the sysroot proc_macro injection');
   const owner = new Map(), removals = JSON.stringify(units[selected].cfg.removals);
   const sysroot = units[selected].cfg.sysroot, compilerVersion = units[selected].cfg.compilerVersion;
   for (const index of reachable) {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {boundedRead, writeDerivedFile} from './preparation.mjs';
-import {contextArguments, fileEvidence, flagValues} from './contexts.mjs';
+import {contextArguments, externArguments, fileEvidence, flagValues} from './contexts.mjs';
 
 const LIMIT = 8 * 1024 * 1024;
 const [compiler, ...args] = process.argv.slice(2);
@@ -45,11 +45,7 @@ try {
       if (createHash('sha256').update(bytes).digest('hex') !== snapshot.sha256) throw new Error('Rust context unavailable: package snapshot changed');
       record.beforeSnapshot = snapshot;
     } else record.beforeInputs = fileEvidence(configuration.inputs);
-    record.beforeArtifacts = fileEvidence(flagValues(args, '--extern').map(value => {
-      const separator = value.indexOf('=');
-      if (separator < 1) throw new Error('Rust context unavailable: pathless extern artifact');
-      return path.resolve(record.cwd, value.slice(separator + 1));
-    }), {artifact: true});
+    record.beforeArtifacts = fileEvidence(externArguments(record).dependencies.map(item => item.filename), {artifact: true});
   }
   const result = spawnSync(compiler, args, {cwd: record.cwd, env: process.env, encoding: 'utf8',
     timeout: 120000, maxBuffer: LIMIT, stdio: compilerStdio()});

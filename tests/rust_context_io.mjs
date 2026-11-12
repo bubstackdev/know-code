@@ -6,6 +6,18 @@ import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {writeDerivedFile} from '../providers/rust/preparation.mjs';
 import {removeCapturedOutput} from '../providers/rust/cargo-contexts.mjs';
+import {externArguments} from '../providers/rust/contexts.mjs';
+
+const macroCommand = {cwd: process.cwd(), args: ['--crate-type', 'proc-macro', '-L', 'dependency=/owned/deps', '--extern', 'proc_macro']};
+assert.deepEqual(externArguments(macroCommand), {dependencies: [], sysroot: ['proc_macro']});
+for (const args of [
+  ['--crate-type', 'lib', '--extern', 'proc_macro'],
+  ['--crate-type', 'proc-macro', '--extern', 'unknown'],
+  ...['crate=/foreign', 'all=/foreign', '/foreign'].map(search => [...macroCommand.args, '-L', search]),
+  [...macroCommand.args, '--extern', 'proc_macro=/foreign/library'],
+]) assert.throws(() => externArguments({...macroCommand, args}), /pathless extern/);
+assert.deepEqual(externArguments({...macroCommand, args: ['--extern', 'renamed=/owned/dependency']}),
+  {dependencies: [{name: 'renamed', filename: '/owned/dependency'}], sysroot: []});
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const directory = path.join(repository, '.artifacts/rust-context-io', `${Date.now()}-${process.pid}`);
@@ -71,6 +83,7 @@ removeCapturedOutput(cache, ownedOutput); assert(!fs.existsSync(ownedOutput));
 fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify({passed: true, assertions: [
   'FIFO setup/source/artifact reads fail without blocking', 'derived FIFO target replaced atomically',
   'partial-write ENOSPC simulation cleans the owned temporary file', 'unsupported jobserver format refused before tool execution',
+  'bare Cargo proc_macro requires a proc-macro unit and sysroot-only direct lookup; unknown/conflicting search forms rejected',
   'fake artifact cleanup preserves foreign/state/symlink sentinels and removes only owned target/build files'],
   simulatedWriteFailure: {ownedFilesBeforeFailure: ownedBeforeFailure, retainedFilesAfterCleanup: 0}}, null, 2));
 process.stdout.write(`${directory}\n`);
