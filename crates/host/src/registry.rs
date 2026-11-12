@@ -42,6 +42,7 @@ fn columns(connection: &Connection, table: &str) -> Result<BTreeSet<String>> {
 }
 
 fn legacy_shape(connection: &Connection) -> Result<()> {
+    let mut known_table = false;
     for (table, required) in [
         (
             "workspaces",
@@ -61,12 +62,29 @@ fn legacy_shape(connection: &Connection) -> Result<()> {
         ("discovery_suppressed", &["root"][..]),
     ] {
         let existing = columns(connection, table)?;
+        if !existing.is_empty() {
+            known_table |= connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?)",
+                [table],
+                |row| row.get::<_, bool>(0),
+            )?;
+        }
         if !existing.is_empty() && required.iter().any(|column| !existing.contains(*column)) {
             return Err(know_code_core::Error::UpdateRequired(format!(
                 "unrecognized legacy registry table {table}; registry migration was refused"
             ))
             .into());
         }
+    }
+    let nonempty: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type IN ('table','view') AND name NOT GLOB 'sqlite_*')",
+        [], |row| row.get(0),
+    )?;
+    if nonempty && !known_table {
+        return Err(know_code_core::Error::UpdateRequired(
+            "unrecognized nonempty legacy registry; initialization was refused".into(),
+        )
+        .into());
     }
     Ok(())
 }
@@ -307,6 +325,44 @@ mod tests {
             assert!(!data.join("registry.db-wal").exists());
             assert!(!data.join("registry.db-shm").exists());
         }
+    }
+
+    #[test]
+    fn foreign_only_zero_schema_is_not_adopted_but_discovery_subset_is_preserved() {
+        for schema in [
+            "CREATE TABLE foreign_state(value TEXT); INSERT INTO foreign_state VALUES('preserve');",
+            "CREATE VIEW foreign_state AS SELECT 'preserve' AS value;",
+        ] {
+            let data = directory();
+            let path = data.join("registry.db");
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(schema).unwrap();
+            drop(connection);
+            let original = std::fs::read(&path).unwrap();
+            assert!(
+                open(&data)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("unrecognized nonempty legacy registry")
+            );
+            let connection = open_read_only(&path).unwrap();
+            assert_eq!(supported(&connection).unwrap(), 0);
+            assert!(columns(&connection, "workspaces").unwrap().is_empty());
+            drop(connection);
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert!(!data.join("registry.db-wal").exists());
+        }
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE discovery_suppressed(root TEXT PRIMARY KEY); INSERT INTO discovery_suppressed VALUES('/saved/root');").unwrap();
+        initialize(&connection).unwrap();
+        let root: String = connection
+            .query_row("SELECT root FROM discovery_suppressed", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(root, "/saved/root");
+        assert_eq!(supported(&connection).unwrap(), VERSION);
     }
 
     #[test]
