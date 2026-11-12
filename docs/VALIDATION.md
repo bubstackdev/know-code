@@ -30,8 +30,8 @@ elapsed seconds without introducing a test scheduler.
 | --- | --- |
 | `quick` | `protocol`, `provider-source`, `native-header` (C and C++), `typescript`: source/codec/compiler-JS checks without a product build or cold Rust compilation. |
 | `core` | Quick plus producer fault cases, all matching-profile Rust workspace tests, managed path checks and the public TS/C#/CLI/MCP/native/coordinator/query baseline. Exact 27 IDs: `--list`. |
-| `extended` | The remaining 19 existing matrix/adapter checks, including full npm/pnpm endpoints, direct C# context/SDK/target cases, deeper resolution/project-links/dispatch and experimental providers. |
-| `all` | All 46 IDs / 47 existing commands, preserving their original order and cases. |
+| `extended` | The remaining 20 matrix/adapter checks, including full npm/pnpm endpoints, direct C# context/SDK/target cases, deeper resolution/project-links/dispatch and experimental providers. |
+| `all` | All 47 IDs / 48 commands, preserving their original order and cases. |
 
 `rust` can compile its own tests without a prior product build. Other source-only
 IDs also skip producer verification: `build-record`, `jsonrpc`,
@@ -90,3 +90,12 @@ verifies its producer before/after. The default quick selection passed in about
 one second on this machine (`quick-tier-01`); core's elapsed duration has not been
 measured separately. This is narrower coverage than `all`, not an equal-coverage
 performance comparison.
+
+
+The 0.0.3 `rust-managed` check is change-triggered for Cargo preparation, trust,
+compiler-wrapper preservation and setup input/cache behavior. It uses the same
+worker harness with owned local Git/path dependencies, tests scripts/macros only
+under the managed policy, and retains malformed/oversized-cache and explicit
+retry cases. It needs installed Rust/analyzer tools but no product native build
+or hosted dependency download. Run it during relevant adapter work; it does not
+replace assembled coordinator/native, exact Cargo-context or release gates.

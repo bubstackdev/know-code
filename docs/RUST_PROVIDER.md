@@ -25,10 +25,7 @@ enclosing Cargo workspace must be inside the registered root. Registering only
 a member directory whose Cargo workspace is outside that root fails with an
 actionable instruction to register the enclosing workspace/repository root;
 the worker does not emit ownership scopes the host cannot later refresh. The
-first discovery scans member directories for `.rs` files, excluding target,
-Git and dependency/artifact directories; it may retain orphan/unowned Rust
-files. This is recorded as a coverage limit, not claimed compilation ownership
-proof. Compiler-resolved definitions outside that discovered set are external.
+source inventory begins at Cargo target roots and enrolls additional modules only from unique analyzer-resolved module declarations. Orphan/vendor files are excluded. This is still a combined analyzer view rather than exhaustive per-unit compiler ownership. Definitions outside retained first-party source stay external.
 
 Input paths include member/workspace manifests, an existing Cargo lockfile and
 ancestor Cargo configuration/toolchain selection files. The coordinator still
@@ -68,8 +65,7 @@ Accepted v0.0.3 policy: Cargo build scripts and procedural macros may run under
 the existing personal repository trust grant and shared resource limits. They
 execute project/dependency code; untrusted workspaces must not run them. Reuse
 the common execution-grant path, with generated/configuration provenance and
-cancellation. This policy is not implemented yet: the current adapter behavior
-below still disables build scripts and procedural macros.
+cancellation. The current 0.0.3 source implements this managed preparation policy; the shipped 0.0.2 adapter and absent-policy legacy direct workers keep scripts/macros disabled.
 
 The worker runs `cargo`, `rustc` and `rust-analyzer` in each selected workspace
 directory, allowing rustup's repository selection to apply. It records `rustc
@@ -89,13 +85,7 @@ path from installing rust-src. The focused regression uses real rustup shims,
 an isolated missing pin and a local download trap: no installation command or
 download request is permitted, even if the embedding host enables auto-install.
 
-Cargo is offline. Dependency restoration is **not yet implemented for Rust**;
-dependencies must already be available. Analyzer checking, build scripts,
-procedural macros and cache priming are disabled. The adapter does not launch
-Cargo builds, tests or repository code generators. A fixture build script writes
-a marker when executed; the tests verify that indexing and saved updates leave
-that marker absent. A cfg declared only by that script remains an explicit
-generated/configuration gap.
+Managed dependency setup probes the full resolved graph offline, fetching missing dependencies through Cargo only under the personal execution grant. Existing lockfiles are honored with `--locked`; user-selected offline settings and disabled Rustup installation remain authoritative. Shared checkpoints deduplicate setup and preserve failed attempts until explicit refresh. Saved source changes reuse dependency setup while fresh analyzer preparation follows Cargo invalidation. Trusted workers enable build scripts and procedural macros with central target outputs, one Cargo build job and one analyzer thread. The analyzer's own wrapper replacement is disabled so selected repository/environment wrappers survive. No final application or test product is requested. Legacy direct requests remain offline with script/macro execution disabled.
 
 One analyzer lives at a time. Definition requests run in ordered windows of
 four; the external-source cache accounts up to 16 MiB of retained payload and
@@ -226,3 +216,35 @@ Retained evidence: [summary](../.artifacts/rust-real/summary.json),
 [pre-fetch output](../.artifacts/rust-real/before-fetch.json),
 [dependency fetch log](../.artifacts/rust-real/fetch.stderr.log), and
 [original after-test inventory](../.artifacts/rust-real/original-after-test.json).
+
+
+## 0.0.3 managed preparation checkpoint
+
+The focused owned fixture passed at `a5bd126`: missing dependency restoration
+is denied without execution permission; a local Git dependency is restored;
+trusted build-script cfg/marker and real proc-macro compilation occur centrally;
+repository and environment wrappers reach actual compilation with one Cargo
+job; ordinary saves reuse setup; an external macro submodule save recompiles;
+missing/malformed/oversized derived plans recover; failed setup needs explicit
+retry. Dependency source stays outside published first-party facts. Evidence:
+`.artifacts/implementation-0.0.3/wave-01/rust-managed-preparation-01/` and
+`.artifacts/rust-managed/1794519920221947000/summary.json`.
+
+Compilation inputs now include resolved manifests, local target/build-script
+roots and a bounded watch-only source superset for external path crates. This
+is invalidation input, not semantic extraction from filesystem matches. The
+fixture proves provider input exposure and manual refreshed-source behavior;
+coordinator scheduling still needs assembled acceptance. Arbitrary rerun,
+include/generated and environment inputs remain explicit coverage gaps. Setup
+cache/config reads and writes have bounds; malformed derived plans are rebuilt
+rather than trusted by matching fingerprints alone.
+
+Compiler-backed direct calls, value/type dependencies and ancestor evidence now
+use the shared graph fact/query path, with partial capabilities. Stored
+Swift/Rust graph and native parity assertions passed before a later unrelated
+sibling-invalidation assertion failed; the combined fixture is still under
+verification. Exact ordinary/test/binary compiler contexts remain required for
+promotion. A finite compiler-artifact-to-separate-analyzer-graph probe passed
+five owned no-wrapper contexts; it has not been adopted as the production
+context planner. Historical real-corpus measurements above retain their original
+scripts-disabled/restoration-external scope.
