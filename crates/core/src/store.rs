@@ -297,10 +297,15 @@ pub(crate) fn ensure_cleanup_indexes(connection: &Connection) -> Result<()> {
 }
 
 pub(crate) fn reclaim(connection: &Connection) -> Result<()> {
-    connection.execute_batch("DELETE FROM compilations WHERE NOT EXISTS(SELECT 1 FROM generation_units u WHERE u.owner_generation=compilations.generation AND u.compilation_id=compilations.id);
+    let retained_empty = if crate::cursor::storage_active(connection)? {
+        " UNION SELECT generation FROM cursor_generation_pins"
+    } else {
+        ""
+    };
+    connection.execute_batch(&format!("DELETE FROM compilations WHERE NOT EXISTS(SELECT 1 FROM generation_units u WHERE u.owner_generation=compilations.generation AND u.compilation_id=compilations.id);
       DELETE FROM artifacts WHERE NOT EXISTS(SELECT 1 FROM unit_artifacts u WHERE u.owner_generation=artifacts.generation AND u.artifact_id=artifacts.id);
-      DELETE FROM generations WHERE id NOT IN (SELECT generation FROM generation_units UNION SELECT owner_generation FROM generation_units UNION SELECT generation FROM staging_generations);
-      DELETE FROM contents WHERE hash NOT IN (SELECT content_hash FROM artifacts);")?;
+      DELETE FROM generations WHERE id NOT IN (SELECT generation FROM generation_units UNION SELECT owner_generation FROM generation_units UNION SELECT generation FROM staging_generations UNION SELECT current_generation FROM state WHERE current_generation IS NOT NULL{retained_empty});
+      DELETE FROM contents WHERE hash NOT IN (SELECT content_hash FROM artifacts);"))?;
     Ok(())
 }
 
@@ -327,6 +332,7 @@ pub struct Writer {
     health: Option<crate::recovery::IndexReadGuard>,
     control: crate::resource::Control,
     staged_payloads: u8,
+    empty_removal_allowed: bool,
 }
 
 impl Writer {
@@ -491,6 +497,7 @@ impl Writer {
             health: health.clone(),
             control: control.clone(),
             staged_payloads: 0,
+            empty_removal_allowed: false,
         })
         })
         })();
@@ -499,6 +506,17 @@ impl Writer {
         } else {
             result
         }
+    }
+
+    /// A worker-free scoped removal may intentionally remove the last unit.
+    /// Never turn a first analysis or an empty worker stream into a ready index.
+    pub(crate) fn allow_empty_removal(&mut self) -> Result<()> {
+        self.empty_removal_allowed = self.connection.query_row(
+            "SELECT current_generation IS NOT NULL FROM state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(())
     }
 
     pub fn stage(&mut self, payload: envelope::Payload) -> Result<()> {
@@ -852,7 +870,7 @@ impl Writer {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let (count,missing): (u64,u64) = tx.query_row("SELECT count(*),count(*)-count(r.compilation_id) FROM generation_units u LEFT JOIN reports r ON u.owner_generation=r.generation AND u.compilation_id=r.compilation_id WHERE u.generation=?",[self.generation],|r| Ok((r.get(0)?,r.get(1)?)))?;
-        if count == 0 || missing != 0 {
+        if (count == 0 && !self.empty_removal_allowed) || missing != 0 {
             return Err(Error::Protocol(
                 "analysis has no compilations or lacks completion reports".into(),
             ));

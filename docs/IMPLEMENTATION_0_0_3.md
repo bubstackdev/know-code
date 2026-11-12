@@ -27,3 +27,13 @@ The current protocol already carries source-backed relationships, capability rep
 TS6 worker-only and native TS7.0.2 API feasibility are retained in `.artifacts/ts7-feasibility/CHECKPOINT.json` and [TS7 readiness](TYPESCRIPT_7_READINESS.md). The shipped compiler guard still accepts only 5.9.x. Native API observations do not establish fact publication, generic identity parity, independent project-body links or production transport bounds.
 
 Estate work remains behind required TypeScript/Swift/Rust/Xcode work. Its accepted first slice is bounded symbol search over registered repositories, with explicit truncation and per-workspace drill-down; no estate cursors or semantic cross-repository graph composition.
+
+## First integration checkpoint
+
+TypeScript source now accepts selected 5.9.x and 6.0.x compilers. The existing identity/generic/Unicode semantic fixture passed against both 5.9.3 and exact restored 6.0.2; native TS7 remains a separate lane, not a version-guard relaxation. Evidence: `.artifacts/implementation-0.0.3/wave-01/typescript-{59,60}-semantic-01/`.
+
+The shared writer permits an intentional worker-free scoped removal to publish the last unit's deletion after a prior usable publication. Empty initial/unscoped analysis and ordinary empty worker output remain rejected. Current and cursor-pinned empty generations survive reclamation; old readers retain their exact source, and released empty generations are reclaimed. All 17 publication regressions and strict core Clippy passed. The first focused test caught cursor tables absent before retention activation; the failure is retained and the cleanup query now guards that case. Evidence: `.artifacts/implementation-0.0.3/wave-01/{empty-publication-focused-01,empty-publication-focused-02,publication-regressions-01,core-clippy-01}/`.
+
+This is specifically the scoped-removal path. Full refresh/rebuild of an empty workspace and initial unsupported/no-source behavior still need their own end-to-end acceptance; this checkpoint does not waive them. No storage schema or query contract changed.
+
+The updated Swift reader compiled with strict warnings and captured an owned fixture's actual relationship roles (45 records, seven call occurrences). Immediate global/property initializers and a deferred stored closure all lacked `CALLEDBY`, so containment alone cannot establish their execution owners. That evidence guides conservative partial extraction; it does not establish Swift graph release acceptance. Raw evidence: `.artifacts/implementation-0.0.3/swift-relations-01/`.

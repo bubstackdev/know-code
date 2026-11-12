@@ -431,6 +431,92 @@ fn missing_reports_and_truncated_protocol_never_count_as_ready() {
 }
 
 #[test]
+fn last_project_removal_publishes_empty_and_preserves_reader_generations() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    let first = writer.publish().unwrap();
+    let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+    let old_pin = retention.pin_current().unwrap();
+    let old = old_pin.open_view_in_scope(&common::scope(&path)).unwrap();
+    let second =
+        know_code_core::update::index_scoped(&path, vec![], Some(&["tsconfig.json".into()]))
+            .unwrap();
+    assert!(second > first);
+    let current = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
+    let result = current.query(request("symbols")).unwrap();
+    assert_eq!(result.generation, second);
+    assert!(result.symbols.is_empty() && result.coverage.is_empty());
+    assert_eq!(old.query(request("symbols")).unwrap().symbols.len(), 1);
+    let source = old
+        .query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
+        .unwrap();
+    assert_eq!(source.source.unwrap().text, "Greeter old");
+    drop(old);
+    drop(current);
+    let empty_pin = retention.pin_current().unwrap();
+    assert_eq!(empty_pin.generation(), second);
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter returned");
+    let third = writer.publish().unwrap();
+    assert!(third > second);
+    let empty = empty_pin.open_view_in_scope(&common::scope(&path)).unwrap();
+    assert_eq!(empty.generation, second);
+    assert!(empty.query(request("symbols")).unwrap().symbols.is_empty());
+    drop(empty);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let retained: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM generations WHERE id=?)",
+            [second],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(retained, "empty pinned generation was reclaimed");
+    retention.release(&old_pin).unwrap();
+    retention.release(&empty_pin).unwrap();
+    let retained: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM generations WHERE id=?)",
+            [second],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!retained, "released empty generation was not reclaimed");
+    assert_eq!(
+        ReadView::open_in_scope(&path, &common::scope(&path))
+            .unwrap()
+            .generation,
+        third
+    );
+}
+
+#[test]
+fn empty_analysis_cannot_create_or_replace_a_published_graph() {
+    let path = database();
+    assert!(
+        know_code_core::update::index_scoped(&path, vec![], Some(&["missing".into()])).is_err()
+    );
+    assert!(matches!(
+        ReadView::open_in_scope(&path, &common::scope(&path)),
+        Err(know_code_core::Error::NotReady)
+    ));
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    let generation = writer.publish().unwrap();
+    assert!(know_code_core::update::index(&path, vec![]).is_err());
+    assert!(
+        Writer::open_incremental(&path, &["tsconfig.json".into()])
+            .unwrap()
+            .publish()
+            .is_err()
+    );
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
+    assert_eq!(view.generation, generation);
+    assert_eq!(view.query(request("symbols")).unwrap().symbols.len(), 1);
+}
+
+#[test]
 fn incremental_publication_reuses_unchanged_units_and_reclaims_replaced_facts() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();

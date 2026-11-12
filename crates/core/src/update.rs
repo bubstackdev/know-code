@@ -340,6 +340,9 @@ pub(crate) fn index_published(
         )?,
         Publication::Serving(_) => Writer::open_controlled(database, replacements, control)?,
     };
+    if workers.is_empty() && replacements.is_some() {
+        writer.allow_empty_removal()?;
+    }
     let preparation_path = database.with_extension("preparation.json");
     let mut preparations: BTreeMap<String, PreparationResult> =
         match std::fs::read(&preparation_path) {
