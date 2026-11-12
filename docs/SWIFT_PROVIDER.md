@@ -79,8 +79,11 @@ at version 1. An optional `scheme_path` must identify an existing, absolute,
 normalized `.xcscheme` file; wrong branches/versions and invalid paths fail before
 provider acknowledgment or tooling. Legacy requests without policy retain their
 low-level behavior. The explicit saved path participates in Xcode input evidence
-and reported selection. Actual shared-scheme membership, automatic sole-scheme
-selection and planner target/configuration mapping remain required Xcode work;
+and reported selection. The accepted Xcode policy selects the shared scheme Test action configuration
+for the app, dependencies and tests; it does not expand the Run configuration.
+Missing Test action/configuration must be actionable. Actual shared-scheme
+membership, automatic sole-scheme selection and planner target/configuration
+mapping remain required Xcode work;
 accepting a policy path does not establish a supported Xcode graph. The shared
 schema/settings integration is owned by the integrator.
 
