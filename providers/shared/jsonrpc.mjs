@@ -7,30 +7,46 @@ export class JsonRpcProcess {
     Object.assign(this,{program,timeout,onNotification,onRequest,onFailure});
     this.nextId = 1;
     this.pending = new Map();
-    this.buffer = Buffer.alloc(0);
+    this.header = Buffer.allocUnsafe(8196);
+    this.headerSize = 0;
+    this.body = undefined;
+    this.bodySize = 0;
+    this.writes = [];
+    this.writeHead = 0;
+    this.queuedBytes = 0;
     this.stderr = '';
     this.child = spawn(program,args,{cwd,env,stdio:['pipe','pipe','pipe']});
     this.child.stderr.on('data', b => { this.stderr = (this.stderr + b.toString()).slice(-16384); });
     this.child.on('error', e => this.fail(new Error(`cannot start ${program}: ${e.message}; install the selected language toolchain`)));
     this.child.on('exit', (code, signal) => this.fail(new Error(`${program} exited (${signal ?? code}): ${this.stderr}`)));
     this.child.stdin.on('error', e => this.fail(e));
+    this.child.stdin.on('drain', () => {
+      try { this.flush(); } catch (error) { this.fail(error); this.terminate(); }
+    });
     this.child.stdout.on('data', b => {
       try {
-        this.buffer = Buffer.concat([this.buffer,b]);
-        for (;;) {
-          const end = this.buffer.indexOf('\r\n\r\n');
-          if (end < 0) {
-            if (this.buffer.length > 8192) throw new Error('oversized JSON-RPC header');
-            break;
+        let offset = 0;
+        while (offset < b.length) {
+          if (!this.body) {
+            this.header[this.headerSize++] = b[offset++];
+            if (this.headerSize < 4 || this.header.readUInt32BE(this.headerSize-4) !== 0x0d0a0d0a) {
+              if (this.headerSize === this.header.length) throw new Error('oversized JSON-RPC header');
+              continue;
+            }
+            const match = /^Content-Length: (\d+)$/im.exec(this.header.subarray(0,this.headerSize-4).toString('ascii'));
+            const size = Number(match?.[1]);
+            if (!Number.isSafeInteger(size) || !size || size > 8*1024*1024) throw new Error('invalid/oversized JSON-RPC frame');
+            this.body = Buffer.allocUnsafe(size);
+            this.bodySize = this.headerSize = 0;
           }
-          if (end > 8192) throw new Error('oversized JSON-RPC header');
-          const match = /^Content-Length: (\d+)$/im.exec(this.buffer.subarray(0,end).toString('ascii'));
-          const size = Number(match?.[1]);
-          if (!Number.isSafeInteger(size) || !size || size > 8*1024*1024) throw new Error('invalid/oversized JSON-RPC frame');
-          if (this.buffer.length < end+4+size) break;
-          const message = JSON.parse(this.buffer.subarray(end+4,end+4+size));
-          this.buffer = this.buffer.subarray(end+4+size);
-          this.receive(message);
+          const size = Math.min(this.body.length-this.bodySize,b.length-offset);
+          b.copy(this.body,this.bodySize,offset,offset+size);
+          offset += size; this.bodySize += size;
+          if (this.bodySize === this.body.length) {
+            const message = JSON.parse(this.body);
+            this.body = undefined; this.bodySize = 0;
+            this.receive(message);
+          }
         }
       } catch (e) { this.fail(e); this.terminate(); }
     });
@@ -39,6 +55,8 @@ export class JsonRpcProcess {
     this.failure ??= error;
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear();
+    this.writes = []; this.writeHead = this.queuedBytes = 0;
+    this.body = undefined; this.bodySize = this.headerSize = 0;
     this.onFailure?.(error);
   }
   receive(message) {
@@ -64,7 +82,27 @@ export class JsonRpcProcess {
     if (this.failure) throw this.failure;
     const body = Buffer.from(JSON.stringify({jsonrpc:'2.0',...value}));
     if (body.length > 8*1024*1024) throw new Error('resource-limited: outgoing JSON-RPC frame exceeds 8 MiB');
-    this.child.stdin.write(Buffer.concat([Buffer.from(`Content-Length: ${body.length}\r\n\r\n`),body]));
+    const header = Buffer.from(`Content-Length: ${body.length}\r\n\r\n`);
+    // Include Node's submitted-but-undrained bytes in the same finite bound.
+    // Never keep submitting frames after write(false), or queue without limit.
+    if (this.queuedBytes + this.child.stdin.writableLength + header.length + body.length > 16*1024*1024+16384)
+      throw new Error('resource-limited: outgoing JSON-RPC queue exceeds 16 MiB');
+    const frame = Buffer.concat([header,body]);
+    this.writes.push(frame); this.queuedBytes += frame.length;
+    this.flush();
+  }
+  flush() {
+    if (this.failure || this.child.stdin.writableNeedDrain) return;
+    while (this.writeHead < this.writes.length) {
+      const frame = this.writes[this.writeHead];
+      this.writes[this.writeHead++] = undefined;
+      this.queuedBytes -= frame.length;
+      if (!this.child.stdin.write(frame)) break;
+    }
+    if (this.writeHead === this.writes.length) { this.writes = []; this.writeHead = 0; }
+    else if (this.writeHead >= 1024 && this.writeHead >= this.writes.length/2) {
+      this.writes = this.writes.slice(this.writeHead); this.writeHead = 0;
+    }
   }
   notify(method, params) { this.write({method,params}); }
   request(method, params) {
