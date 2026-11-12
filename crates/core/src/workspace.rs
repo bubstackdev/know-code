@@ -337,6 +337,24 @@ pub fn extra_inputs(database: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         other => other,
     })
 }
+
+// A successful empty census may remove a prior serving graph. Read only unit
+// ownership, never salvage facts/inputs from a damaged replacement source.
+fn empty_removal_projects(database: &Path) -> Result<Vec<String>> {
+    let guard = crate::recovery::IndexReadGuard::open_unbudgeted(database)?;
+    let result = (|| {
+        crate::query::ReadView::readiness(guard.physical_path())?;
+        let conn =
+            Connection::open_with_flags(guard.physical_path(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let mut statement = conn.prepare("SELECT DISTINCT c.project_path FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=(SELECT current_generation FROM state)")?;
+        let scopes = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        guard.check()?;
+        Ok(scopes)
+    })();
+    crate::index_result(&guard, result)
+}
 /// A replacement plans from saved inputs and logical preparation checkpoints.
 /// Before selector publication, its verified external inputs come from the
 /// private destination, never the damaged selected database.
@@ -599,16 +617,34 @@ pub fn refresh_controlled(
     cs.retain(|p| selected(p));
     rust.retain(|p| selected(p));
     swift.retain(|p| selected(p));
-    let swift_inferred = !swift_sources.is_empty()
-        && replacements.is_none_or(|r| r.iter().any(|s| s.starts_with("$swift-inferred:")));
-    if let Some(replacements) = replacements {
+    let swift_group = |source: &str| {
+        let directory = Path::new(source).parent().unwrap_or(root);
+        let relative = directory.strip_prefix(root).unwrap_or(directory);
+        let group = if relative.as_os_str().is_empty() {
+            ".".into()
+        } else {
+            relative.to_string_lossy().replace('\\', "/")
+        };
+        format!("$swift-inferred:{group}")
+    };
+    if let Some(scopes) = replacements {
+        let selected: BTreeSet<_> = scopes
+            .iter()
+            .filter(|scope| scope.starts_with("$swift-inferred:"))
+            .collect();
+        swift_sources.retain(|source| selected.contains(&swift_group(source)));
+        let present: BTreeSet<_> = swift_sources
+            .iter()
+            .map(|source| swift_group(source))
+            .collect();
         swift.extend(
-            replacements
+            scopes
                 .iter()
-                .filter(|s| s.starts_with("$swift-inferred:"))
+                .filter(|scope| present.contains(*scope))
                 .cloned(),
         );
     }
+    let swift_inferred = !swift_sources.is_empty();
     let mut workers = vec![];
     if inferred || !ts.is_empty() {
         workers.push(WorkerCommand {
@@ -736,6 +772,13 @@ pub fn refresh_controlled(
             },
         });
     }
+    let removal_scopes;
+    let replacements = if workers.is_empty() && replacements.is_none() && destination.is_none() {
+        removal_scopes = empty_removal_projects(database)?;
+        Some(removal_scopes.as_slice())
+    } else {
+        replacements
+    };
     if workers.is_empty() && replacements.is_none() {
         return Err(Error::Provider(
             "no supported TypeScript, C#, Rust Cargo, or Swift source/project inputs found".into(),

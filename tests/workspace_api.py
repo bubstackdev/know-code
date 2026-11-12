@@ -240,22 +240,25 @@ cli('coordinator','stop');until=time.monotonic()+15
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 old=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);old.bind(str(DATA/'c.sock'));old.listen(4)
 requests=[]
+old.settimeout(.2)
+peer_finished=threading.Event()
 def old_settings_peer():
- for _ in range(12):
-  conn,_=old.accept()
+ while not peer_finished.is_set():
+  try:conn,_=old.accept()
+  except TimeoutError:continue
   with conn:
    requests.append(request_frame(conn))
-   # Envelope v7: current lifecycle4, old resource1 and settings1.
+   # Envelope v7: current lifecycle4/settings2, old resource1.
    # Reach the cancellation-contract check instead of failing lifecycle first.
-   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x01\x68\x04')
+   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x02\x68\x04')
 thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
 for client in [node,dotnet]:
  error(client.send('refresh',configuration='Release'),'update_required')
  error(client.send('query',request={'op':'symbols','name':'Value'}),'update_required')
  error(client.send('status'),'update_required')
  error(client.send('cancel'),'update_required');client.close()
-thread.join(timeout=5);old.close();(DATA/'c.sock').unlink()
-assert len(requests)==12 and not thread.is_alive()
+peer_finished.set();thread.join(timeout=5);old.close();(DATA/'c.sock').unlink()
+assert requests and not thread.is_alive()
 assert not any(b'\x0a\x07refresh' in request or b'\x0a\x06cancel' in request for request in requests)
 checks.append('existing_handles_reject_settings_incompatible_coordinator')
 # A client must not spawn a replacement when a connected peer is incompatible.

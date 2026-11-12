@@ -517,6 +517,89 @@ fn empty_analysis_cannot_create_or_replace_a_published_graph() {
 }
 
 #[test]
+fn empty_worker_cannot_remove_its_scope_while_other_units_survive() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    writer
+        .stage(Payload::Compilation(Compilation {
+            id: "other".into(),
+            language: "typescript".into(),
+            project_path: "other.json".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    writer
+        .stage(Payload::Report(AnalysisReport {
+            compilation_id: "other".into(),
+            status: "complete".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    let published = writer.publish().unwrap();
+    let response_path = path.with_extension("empty-worker-frames");
+    let mut response = std::fs::File::create(&response_path).unwrap();
+    for payload in [
+        Payload::Provider(ProviderInfo {
+            language: "typescript".into(),
+            ..Default::default()
+        }),
+        Payload::Complete(Completion { success: true }),
+    ] {
+        write_frame(
+            &mut response,
+            &Envelope {
+                protocol_version: VERSION,
+                job_id: format!("{}-0", published + 1),
+                payload: Some(payload),
+            },
+        )
+        .unwrap();
+    }
+    let root = path.parent().unwrap();
+    let data = root.join("personal-trust");
+    know_code_core::settings::set_project_execution(root, &data, true).unwrap();
+    let result = know_code_core::update::index_scoped(
+        &path,
+        vec![know_code_core::update::WorkerCommand {
+            execution_grant: know_code_core::settings::project_execution_grant(root, &data)
+                .unwrap(),
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "/bin/cat >/dev/null; /bin/cat \"$1\"".into(),
+                "owned-worker".into(),
+                response_path.to_string_lossy().into_owned(),
+            ],
+            request: AnalyzeRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        }],
+        Some(&["other.json".into()]),
+    );
+    assert!(
+        matches!(&result, Err(know_code_core::Error::Provider(message)) if message.contains("without any compilation")),
+        "{result:?}"
+    );
+    let current = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
+    let result = current.query(request("symbols")).unwrap();
+    assert_eq!(result.generation, published);
+    assert_eq!(result.symbols.len(), 1);
+    let complete = current
+        .query(
+            serde_json::from_str(r#"{"op":"symbols","name":"Greeter","coverage_detail":"full"}"#)
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        complete.coverage.len(),
+        2,
+        "empty worker removed its previous unit"
+    );
+}
+
+#[test]
 fn incremental_publication_reuses_unchanged_units_and_reclaims_replaced_facts() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();
@@ -871,6 +954,17 @@ fn revocation_between_workers_prevents_new_execution_and_preserves_prior_generat
             ..Default::default()
         })];
         if number == 0 {
+            payloads.push(Payload::Compilation(Compilation {
+                id: "first-worker".into(),
+                language: "typescript".into(),
+                project_path: "first/tsconfig.json".into(),
+                ..Default::default()
+            }));
+            payloads.push(Payload::Report(AnalysisReport {
+                compilation_id: "first-worker".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }));
             payloads.push(Payload::Progress(Progress {
                 stage: "owned-revoke".into(),
                 ..Default::default()
