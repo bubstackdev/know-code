@@ -121,6 +121,12 @@ validate(selected)
 assert not marker.exists(), 'PATH rustc overrode the actual Cargo compiler/sysroot'
 recorded = [json.loads(line) for line in positive_log.read_text().splitlines()]
 assert any(item.get('method') == 'initialize' and item.get('result', {}).get('capabilities', {}).get('diagnosticProvider') for item in recorded)
+for item in recorded:
+    if item.get('method') == 'initialize':
+        options = item['params']['initializationOptions']
+        assert options['procMacro']['attributes']['enable'] is True
+        assert options['procMacro']['ignored'] == {}
+        assert options['diagnostics']['enable'] is True and options['diagnostics']['disabled'] == []
 assert any(item.get('method') == 'textDocument/diagnostic' and item.get('result', {}).get('kind') == 'full' for item in recorded)
 assert all('previousResultId' not in item.get('params', {}) for item in recorded if item.get('method') == 'textDocument/diagnostic')
 assert any(item.get('method') == 'textDocument/prepareCallHierarchy' for item in recorded), 'canonical declaration proof was not retained'

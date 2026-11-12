@@ -305,7 +305,10 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       initializationOptions: {checkOnSave: false, check: {enable: false},
         cargo: selected ? {offline: true, cfgs: selected.graph.cargoCfgs, buildScripts: {enable: false, useRustcWrapper: false}} : cargo,
         ...(selected ? {linkedProjects: [selected.graph.project], cfg: selected.graph.analyzerCfg} : {}),
-        procMacro: {enable: selected ? replayMacros : trustedPreparation, processes: 1}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
+        procMacro: {enable: selected ? replayMacros : trustedPreparation, processes: 1,
+          ...(replayMacros ? {attributes: {enable: true}, ignored: {}} : {})},
+        cachePriming: {enable: false}, numThreads: 1,
+        diagnostics: {enable: true, ...(replayMacros ? {disabled: []} : {})},
         hover: {documentation: {enable: false}, memoryLayout: {enable: false}}}});
     if (initialized.capabilities.positionEncoding && initialized.capabilities.positionEncoding !== 'utf-16') throw new Error('unsupported rust-analyzer position encoding');
     const legend = initialized.capabilities.semanticTokensProvider?.legend;
