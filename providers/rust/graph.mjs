@@ -13,7 +13,7 @@ const DECLARATIONS = {
   typeParameter: ['TYPE_PARAM'], constParameter: ['CONST_PARAM'], property: ['RECORD_FIELD'], enumMember: ['VARIANT'],
   variable: ['IDENT_PAT'], parameter: ['IDENT_PAT', 'SELF_PARAM'], selfKeyword: ['SELF_PARAM'],
   selfTypeKeyword: ['STRUCT', 'ENUM', 'TRAIT', 'TYPE_ALIAS', 'TYPE_PARAM', 'UNION'],
-  namespace: ['MOD', 'SOURCE_FILE'], macro: ['MACRO_RULES', 'MACRO_DEF', 'FN']
+  namespace: ['MOD', 'SOURCE_FILE'], macro: ['MACRO_RULES', 'MACRO_DEF', 'FN'], procMacro: ['FN'], derive: ['FN']
 };
 
 export const authoredDeclaration = (anchors, start, end, kind) => DECLARATIONS[kind]?.includes(anchors.get(`${start}:${end}`)) ?? false;
@@ -93,7 +93,7 @@ export class RustGraph {
     if (!nodes.some(node => node.kind === 'NAME_REF')) return undefined;
     if (nodes.some(node => node.kind === 'USE')) return 'imports';
     if (nodes.some(node => TYPES.has(node.kind))) return 'type_reference';
-    if (nodes.some(node => node.kind === 'PATH_EXPR' || node.kind === 'FIELD_EXPR' || node.kind === 'RECORD_EXPR')) return 'reference';
+    if (nodes.some(node => node.kind === 'PATH_EXPR' || node.kind === 'FIELD_EXPR' || node.kind === 'RECORD_EXPR' || node.kind === 'MACRO_CALL')) return 'reference';
     return undefined;
   }
   callAt(start, end) {

@@ -11,9 +11,10 @@ import {syntaxGraph, outgoingCalls, authoredDeclaration} from './graph.mjs';
 import {rustPolicy, cargoSelection, analyzerCargo} from './policy.mjs';
 import {prepareCargo} from './preparation.mjs';
 import {collectCargoContexts} from './cargo-contexts.mjs';
+import {fileEvidence} from './contexts.mjs';
 
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
-const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'const', 'static', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
+const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'procMacro', 'derive', 'const', 'static', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
 
 function command(tool, args, cwd, options) {
   const result = spawnSync(tool, args, {cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: compilerEnvironment(options)});
@@ -105,8 +106,11 @@ function inputPaths(metadata, manifest, policy) {
   return [...result].filter(p => fs.existsSync(p));
 }
 
-function toolsFor(manifest) {
+function toolsFor(manifest, managed = false) {
   const directory = path.dirname(manifest);
+  // Managed Cargo may select build.rustc independently of PATH. Its successful
+  // captured compiler supplies the actual sysroot/rust-src prerequisite below.
+  if (managed) return {compilerVersion: 'Cargo-selected compiler captured per unit', analyzerVersion: command('rust-analyzer', ['--version'], directory)};
   const compilerVersion = command('rustc', ['-Vv'], directory);
   const sysroot = command('rustc', ['--print', 'sysroot'], directory);
   const librarySources = path.join(sysroot, 'lib/rustlib/src/rust/library');
@@ -155,6 +159,13 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     if (selected.unit.inputHashes[current.filename] !== current.artifact.sha256)
       throw new Error('Rust saved source changed after its compiler-context snapshot; refresh saved inputs');
   const semanticInputs = new Map(selected ? selected.graph.reachable.flatMap(index => Object.entries(collection.units[index].inputHashes)) : []);
+  const macroSources = new Set(selected?.graph.macroDylibs.flatMap(item => item.sourceFiles) ?? []);
+  const replayMacros = !!selected?.graph.macroDylibs.length && trustedPreparation;
+  if (replayMacros) {
+    const current = fileEvidence(selected.graph.macroDylibs.map(item => item.path), {artifact: true});
+    for (const item of selected.graph.macroDylibs) if (current[item.path] !== item.sha256)
+      throw new Error('Captured procedural-macro dylib changed before analyzer replay');
+  }
   const generatedInputs = [];
   if (selected) for (const current of sources.values()) for (const output of collection.buildScripts) {
     if (typeof output.outDir !== 'string' || !path.isAbsolute(output.outDir)) continue;
@@ -173,7 +184,8 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     ...(selected ? {rustContextPolicy: 1, context: {cargoPackageId: selected.unit.cargo.package_id, target: selected.unit.cargo.target,
       profile: selected.unit.cargo.profile, features: selected.unit.cargo.features, cfg: selected.unit.cfg.effective,
       compilerSha256: selected.unit.cfg.compilerSha256, captureAttempts: collection.captureAttempts}, generatedInputs,
-      analyzerReplay: {cfg: selected.graph.analyzerCfg, cargoCfgs: selected.graph.cargoCfgs, buildScripts: false}} : {}),
+      analyzerReplay: {cfg: selected.graph.analyzerCfg, cargoCfgs: selected.graph.cargoCfgs, buildScripts: false,
+        procMacros: replayMacros, macroDylibs: selected.graph.macroDylibs.map(item => ({path: item.path, sha256: item.sha256}))}} : {}),
     dependencyInputTracking: 'Cargo-selected local dependency package roots: bounded watch-only .rs superset, excluding artifact directories and symlink traversal',
     coverage: selected ? 'Captured selected-root compiler context; compiler/analyzer graph capabilities remain partial.' :
       'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
@@ -191,7 +203,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
   }
   if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
-  const analyzer = new Analyzer(directory);
+  const analyzer = new Analyzer(directory, selected ? {RUSTC: selected.unit.record.compiler} : {});
   const emitted = new Set();
   const externalSources = new ExternalSources();
   const declarationOrigins = new Map();
@@ -241,6 +253,8 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     if (selected && semanticInputs.has(target.filename) && semanticInputs.get(target.filename) !== target.artifact.sha256)
       throw new Error('Rust dependency source changed after its compiler-context snapshot; refresh saved inputs');
     const anchor = target.byte(definition.range.start), endAnchor = target.byte(definition.range.end);
+    if (selected && ['function', 'method'].includes(kind) && macroSources.has(target.filename) &&
+        !selected.unit.cargo.target.kind.includes('proc-macro')) { omittedOrigins++; return undefined; }
     if (!await authoredTarget(target, anchor, endAnchor, kind)) { omittedOrigins++; return undefined; }
     const id = `${compilationId}:${relative(root, target.filename)}:${anchor}`;
     if (!emitted.has(id)) {
@@ -266,24 +280,45 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       initializationOptions: {checkOnSave: false, check: {enable: false},
         cargo: selected ? {offline: true, cfgs: selected.graph.cargoCfgs, buildScripts: {enable: false, useRustcWrapper: false}} : cargo,
         ...(selected ? {linkedProjects: [selected.graph.project], cfg: selected.graph.analyzerCfg} : {}),
-        procMacro: {enable: trustedPreparation}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
+        procMacro: {enable: selected ? replayMacros : trustedPreparation, processes: 1}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
         hover: {documentation: {enable: false}, memoryLayout: {enable: false}}}});
     if (initialized.capabilities.positionEncoding && initialized.capabilities.positionEncoding !== 'utf-16') throw new Error('unsupported rust-analyzer position encoding');
     const legend = initialized.capabilities.semanticTokensProvider?.legend;
     if (!legend) throw new Error('rust-analyzer lacks semantic token support');
     analyzer.notify('initialized', {});
     const status = await analyzer.ready();
+    if (replayMacros && status.health !== 'ok') {
+      send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
+        {code: 'rust_macro_replay_unavailable', severity: 'error', path: projectPath,
+          message: status.message ?? 'Captured procedural macros could not be loaded; no macro-disabled binding fallback was published.'}],
+        capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
+      return;
+    }
     if (status.health !== 'ok') diagnostics.push({code: 'rust_analyzer_load', severity: 'warning', path: projectPath, message: status.message ?? `Analyzer health: ${status.health}`});
     // Discover declared module files before emitting any symbols: source
     // ownership must not depend on whether a caller is analyzed before its
     // callee's module. Outline declarations select request sites; only a unique
     // analyzer definition enrolls another file. No path/name convention does.
     const outlines = new Map();
+    const macroTokens = new Map();
+    let cachedTokenValues = 0;
     for (const current of sources.values()) {
       analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
       const outline = initialized.capabilities.documentSymbolProvider ?
         await analyzer.request('textDocument/documentSymbol', {textDocument: {uri: current.uri}}) : [];
       outlines.set(current.uri, outline);
+      if (replayMacros) {
+        const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
+        cachedTokenValues += tokens?.data?.length ?? 0;
+        if (cachedTokenValues > 1000000) {
+          send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
+            {code: 'rust_macro_replay_limited', severity: 'error', path: projectPath,
+              message: 'Macro-enabled semantic preflight exceeds its bounded token allowance; no fallback bindings were published.'}],
+            capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
+          return;
+        }
+        macroTokens.set(current.uri, tokens);
+      }
       const modules = [];
       const collectModules = items => { for (const item of items ?? []) {
         if (item.kind === 2 && item.selectionRange) modules.push(item.selectionRange.start);
@@ -305,6 +340,18 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         }
       }
       analyzer.notify('textDocument/didClose', {textDocument: {uri: current.uri}});
+    }
+    if (replayMacros) {
+      const errors = [...analyzer.diagnostics.entries()].filter(([uri]) => sources.has(uri))
+        .flatMap(([uri, items]) => items.filter(item => item.severity === 1).map(item => ({code: String(item.code ?? 'rust_analyzer'),
+          severity: 'error', path: relative(root, fileURLToPath(uri)), message: item.message.slice(-4096)}))).slice(0, 100);
+      if (errors.length) {
+        send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
+          {code: 'rust_macro_replay_unavailable', severity: 'error', path: projectPath,
+            message: 'Macro-enabled analyzer reported errors before publication; no macro-disabled binding fallback was published.'}, ...errors],
+          capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
+        return;
+      }
     }
     for (const current of sources.values()) {
       const origin = sourceBoundary(root, current.filename);
@@ -347,7 +394,8 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         }};
         collect(outline);
       }
-      const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
+      const tokens = macroTokens.get(current.uri) ?? await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
+      macroTokens.delete(current.uri);
       function* positions() {
        let line = 0, character = 0;
        for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {
@@ -458,7 +506,7 @@ try {
       await analyze(root, manifest, discovered, request.configuration || 'Debug', policy, undefined, request, prepared);
       continue;
     }
-    const tools = toolsFor(manifest);
+    const tools = toolsFor(manifest, true);
     const metadata = prepareCargo({request, root, manifest, metadata: discovered, policy,
       identity: [tools.compilerVersion, tools.analyzerVersion, command('cargo', ['--version'], path.dirname(manifest))], command, inputPaths, send});
     for (const target of policy.targets.length ? policy.targets : [undefined]) {

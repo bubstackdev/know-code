@@ -9,8 +9,8 @@ export const compilerEnvironment = ({restore = false} = {}) => ({...process.env,
 
 // Only Rust readiness/diagnostic policy lives here; SwiftPM shares transport.
 export class Analyzer extends JsonRpcProcess {
-  constructor(cwd) {
-    super('rust-analyzer', [], {cwd, env: compilerEnvironment()});
+  constructor(cwd, environment = {}) {
+    super('rust-analyzer', [], {cwd, env: {...compilerEnvironment(), ...environment}});
     this.diagnostics = new Map();
     this.onRequest = (method, params) => method === 'workspace/configuration' ? params.items.map(() => null) : null;
     this.onFailure = error => this.readyReject?.(error);

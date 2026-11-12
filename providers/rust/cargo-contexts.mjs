@@ -208,11 +208,13 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
               const consumed = compilerInputs(candidates[0]);
               const files = packages.get(artifact.manifest_path);
               if (files) for (const filename of consumed.files) files.add(filename);
-              for (const output of candidates[0].artifacts.filter(item => item.emit === 'metadata')) recapture.add(path.resolve(candidates[0].cwd, output.artifact));
+              for (const output of candidates[0].artifacts.filter(item => item.emit === 'metadata' ||
+                  artifact.target.kind.includes('proc-macro') && item.emit === 'link')) recapture.add(path.resolve(candidates[0].cwd, output.artifact));
             } catch { /* Unknown dep-info forms remain explicit gaps, not guessed inputs. */ }
-          } else if (!artifact.target.kind.some(kind => ['custom-build', 'proc-macro'].includes(kind))) {
-            // Cargo check identifies owned non-tool artifacts directly. Their
-            // removal is recovery of our cache, never a semantic producer join.
+          } else if (!artifact.target.kind.includes('custom-build')) {
+            // Cargo identifies owned metadata/required proc-macro tool outputs
+            // directly. Their removal recovers our cache; it is not a semantic
+            // producer join and never requests final application/test linking.
             for (const filename of artifact.filenames) recapture.add(path.resolve(filename));
           }
         }

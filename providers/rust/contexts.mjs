@@ -61,6 +61,9 @@ export function compilerCfg(record, command) {
   // build.rustc wrapper is not equivalent merely because it prints a version.
   if (fs.realpathSync(record.compiler) !== fs.realpathSync(path.join(sysroot, 'bin/rustc')))
     gap('Cargo compiler cannot be proven equivalent to the analyzer sysroot compiler');
+  const library = path.join(sysroot, 'lib/rustlib/src/rust/library');
+  if (!fs.existsSync(path.join(library, 'Cargo.toml')) || !fs.existsSync(path.join(library, 'core/src/lib.rs')))
+    gap(`missing rust-src prerequisite for captured Cargo compiler sysroot ${sysroot}; install rust-src separately and refresh`);
   const stat = fs.statSync(record.compiler), imageKey = JSON.stringify([record.compiler, stat.size, stat.mtimeMs, stat.ctimeMs]);
   if (!compilerImages.has(imageKey)) compilerImages.set(imageKey, fileEvidence([record.compiler], {artifact: true})[record.compiler]);
   return {...parsed, effective, baseline, removals: baseline.filter(value => !effective.includes(value)), sysroot,
@@ -206,12 +209,23 @@ export function selectedProject(units, selected, metadata) {
     }
   }
   const directories = [...new Set(reachable.flatMap(index => units[index].inputs.files.map(filename => path.dirname(filename))))];
+  const macroDylibs = [];
   const crates = reachable.map(index => {
     const unit = units[index], member = metadata.workspace_members.includes(unit.cargo.package_id);
     const procMacro = unit.cargo.target.kind.includes('proc-macro');
-    if (procMacro) gap('captured procedural-macro replay requires proven expansion-origin identities');
+    const macroArtifacts = procMacro ? unit.record.artifacts.filter(item => item.emit === 'link' &&
+      unit.cargo.filenames.includes(path.resolve(unit.record.cwd, item.artifact))) : [];
+    if (procMacro && macroArtifacts.length !== 1) gap('procedural macro has no unique captured emitted dylib');
+    const dylib = procMacro ? path.resolve(unit.record.cwd, macroArtifacts[0].artifact) : undefined;
+    if (procMacro) {
+      for (const consumer of reachable) for (const edge of units[consumer].dependencies)
+        if (edge.unit === index && (edge.artifact !== dylib || units[consumer].dependencyHashes[dylib] !== unit.outputHashes[dylib]))
+          gap('procedural-macro dylib differs from exact caller extern consumption');
+      macroDylibs.push({path: dylib, sha256: unit.outputHashes[dylib], sourceFiles: unit.inputs.files.filter(filename => filename.endsWith('.rs'))});
+    }
     return {display_name: unit.cfg.name, root_module: unit.cfg.root, edition: unit.cfg.edition,
       cfg: unit.cfg.effective, env: unit.record.environment, is_workspace_member: member,
+      ...(procMacro ? {is_proc_macro: true, proc_macro_dylib_path: dylib, proc_macro_cwd: unit.record.cwd} : {}),
       ...(unit.cfg.target ? {target: unit.cfg.target} : {}),
       deps: unit.dependencies.map(item => ({crate: reachable.indexOf(item.unit), name: item.name})),
       source: {include_dirs: directories, exclude_dirs: []}};
@@ -224,7 +238,7 @@ export function selectedProject(units, selected, metadata) {
     const separator = value.indexOf('=');
     return `!${separator < 0 ? value : value.slice(0, separator + 1) + JSON.parse(value.slice(separator + 1))}`;
   });
-  return {reachable, project: {sysroot, sysroot_src: path.join(sysroot, 'lib/rustlib/src/rust/library'), crates},
+  return {reachable, macroDylibs, project: {sysroot, sysroot_src: path.join(sysroot, 'lib/rustlib/src/rust/library'), crates},
     analyzerCfg: {setTest: false}, cargoCfgs: [...(removeAnalyzerCfg ? ['!rust_analyzer'] : []), ...overrides],
     firstPartyFiles: metadata.workspace_members.includes(units[selected].cargo.package_id) ?
       units[selected].inputs.files.filter(filename => filename.endsWith('.rs')) : []};
