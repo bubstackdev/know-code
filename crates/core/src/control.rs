@@ -232,8 +232,22 @@ mod data_acl {
             }
         }
         pub(super) fn get(file: &std::fs::File) -> io::Result<Self> {
-            // SAFETY: borrowed live fd; returned allocation is exclusively owned.
-            Self::allocated(unsafe { acl_get_fd_np(file.as_raw_fd(), EXTENDED) })
+            Self::get_fd(file.as_raw_fd())
+        }
+        fn get_fd(fd: libc::c_int) -> io::Result<Self> {
+            // SAFETY: the kernel validates fd; successful allocation is owned.
+            let raw = unsafe { acl_get_fd_np(fd, EXTENDED) };
+            if raw.is_null() {
+                let error = io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ENOENT) {
+                    return Err(error);
+                }
+                // Darwin represents an absent extended ACL as ENOENT, also
+                // immediately after successfully setting an empty ACL. Only
+                // that exact absence becomes an owned empty representation.
+                return Self::allocated(unsafe { acl_init(0) });
+            }
+            Ok(Self(raw))
         }
         pub(super) fn set(&self, file: &std::fs::File) -> io::Result<()> {
             // SAFETY: live fd and ACL; the kernel copies rather than takes it.
@@ -275,6 +289,14 @@ mod data_acl {
             }
             Ok(copy)
         }
+    }
+    #[test]
+    fn invalid_descriptor_acl_error_is_not_treated_as_absence() {
+        let error = match Acl::get_fd(-1) {
+            Ok(_) => panic!("invalid descriptor must not become an empty ACL"),
+            Err(error) => error,
+        };
+        assert_eq!(error.raw_os_error(), Some(libc::EBADF));
     }
     pub(super) fn clear(file: &std::fs::File) -> io::Result<()> {
         if !Acl::get(file)?.has_entries()? {
