@@ -155,7 +155,8 @@ for language, leaf_name, direct_name, reference_name in [
     value_use = next(finding for finding in impact['findings'] if finding['symbol']['id'] == reference_id)
     assert value_use['paths'] and all(edge['kind'] == 'reference' and edge['resolution'] == 'compiler_bound'
                                     for path in value_use['paths'] for edge in path), value_use
-    reports = query({'op': 'symbols', 'name': leaf_name, 'coverage_detail': 'full'}, equivalent=True)['coverage']
+    reports = [report for report in query({'op': 'symbols', 'name': leaf_name, 'coverage_detail': 'full'}, equivalent=True)['coverage']
+               if report['language'] == language]
     assert reports and all(report['capabilities']['calls'] == 'partial'
                            and report['capabilities']['dependencies'] == 'partial'
                            and report['capabilities']['dispatch'] == 'partial' for report in reports), reports
@@ -265,13 +266,18 @@ assert all(item['status'] == 'complete' for item in query({'op': 'symbols'})['co
 
 # Keep one real cursor across removal of all owned language inputs. The saved
 # sources move outside discovery, but remain durable evidence for pinned reads.
-retained = query({'op': 'symbols', 'name': 'reply', 'limit': 1, 'page_size': 1}, equivalent=True)
+# Creating separate queries creates separate opaque cursors. Establish one
+# cursor, then compare native clients while replaying that same token.
+retained = query({'op': 'symbols', 'name': 'reply', 'limit': 1, 'page_size': 1})
 assert retained['generation'] == generation and len(retained['symbols']) == 1, retained
 cursor = retained['page']['cursor']
 location = retained['symbols'][0]['locations'][0]
 saved_swift = swift.read_bytes()
 assert saved_swift[location['start_byte']:location['end_byte']].decode() == 'reply', location
 retained_page = {key: value for key, value in retained.items() if key not in ('freshness', 'coordination')}
+initial_replay = query({'op': 'next_page', 'cursor': cursor}, equivalent=True)
+assert initial_replay['freshness'] == 'current', initial_replay
+assert {key: value for key, value in initial_replay.items() if key not in ('freshness', 'coordination')} == retained_page
 removed = RUN / 'removed-inputs'
 removed.mkdir()
 for directory in ('typescript', 'csharp', 'rust', 'swift', 'swift-package'):
