@@ -122,7 +122,7 @@ validation. Outstanding measurements below remain outstanding.
 | M25 | Changed here; root validation requested above. | Request-local, bounded hash/offset checkpoints reduce repeated source-prefix work while preserving byte-based newline semantics. |
 | M26 | Claim overstated; SQL setup measurement remains open. | `symbols_sql` groups/orders matching finding keys before SQL LIMIT; Rust collects only `limit+1` keys. Exact-name/FTS paths have `symbol_filters_use_name_or_fts_lookups`; browsing and target-equivalent grouping remain accepted behavior. |
 | L16 | Residual cleanup measurement remains open; not fixed by a new bound. | `Writer::drop` still deletes staging/manifests and reclaims without a progress handler. Missing cleanup/FK probes are repaired; `publication_checkpoint_and_failed_writer_cleanup_release_the_cursor_fence` verifies cleanup is outside the cursor mutex, not that all cleanup is fast. |
-| L17 | Changed after actual pinned query-plan comparison; retirement regression pending. | No use in 96 real shapes with either statistics state and unchanged selected/projected results. Optional index retires through compatible setup and is no longer built during migration. This is scoped planner evidence, not proof SQLite can never use a mask index. |
+| L17 | Changed after actual pinned query-plan comparison; root retirement regression passed. | No use in 96 real shapes with either statistics state and unchanged selected/projected results. Optional index retires through compatible setup and is no longer built during migration. This is scoped planner evidence, not proof SQLite can never use a mask index. |
 | L18 | Changed here; root validation requested above. | Shared idempotent `compilation_project(project_path,id)` plus exact replacement-probe plan assertion. |
 | L19 | Fixed before this lane. | `GraphResult::limit` deduplicates labels on insertion; depth-frontier regression does not accumulate per-neighbor depth labels. |
 | L20 | Confirmed metadata parsing; setup-cost measurement remains open. | `Contexts::load` parses current compilation references for exact consumer/fingerprint compatibility. These are compilation metadata, not all graph facts. No resident/global graph cache added. |
@@ -242,6 +242,16 @@ KNOW_CODE_BUILD_PROFILE=debug python3 tests/query_cancellation.py
 ```
 
 ## Static checks and broader handoff
+
+The commands marked “root validation requested” above are the original lane
+handoff, not a statement that all remain unrun. Root Rust `rust-03` passed at
+`9b23c25`; the all-four-API compact response/cursor checks passed in
+`.artifacts/snow-leopard/wave-01/response-budget-01/summary.json`; and the complete
+classification/retirement target passed at `3a7df92` in
+`.artifacts/snow-leopard/wave-01/mask-retirement-01/summary.json`. These saved
+focused results validate the named changes at their recorded source/diff. They
+do not certify later edits or replace the pending full Debug/optimized/package
+and deferred encoding gates.
 
 Root's assembled `939d4dc` Rust run is retained as failed at
 `.artifacts/snow-leopard/wave-01/rust-02/`: 167 core tests passed, including the
