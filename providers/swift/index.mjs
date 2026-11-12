@@ -73,10 +73,10 @@ export function sourceFile(filename, root) {
 }
 export function compilerDiagnostics(stderr, root) {
   const diagnostics = [];
-  const pattern = /^(.*?):\d+:\d+: (error|warning|note): (.*)$/gm;
+  const pattern = /^(?:(.*?):\d+(?::\d+)?: )?(error|warning|note|remark): (.*)$/gm;
   for (const match of stderr.matchAll(pattern)) {
-    diagnostics.push({code: 'swift_compiler', severity: match[2] === 'note' ? 'info' : match[2],
-      message: match[3], path: relative(root, path.resolve(root, match[1]))});
+    diagnostics.push({code: 'swift_compiler', severity: ['note', 'remark'].includes(match[2]) ? 'info' : match[2],
+      message: match[3], path: match[1] && match[1] !== '<unknown>' ? relative(root, path.resolve(root, match[1])) : ''});
     if (diagnostics.length === 100) break;
   }
   if (!diagnostics.length && stderr.trim()) diagnostics.push({code: 'swift_compiler', severity: 'error', message: stderr.trim().slice(0, 16000), path: ''});

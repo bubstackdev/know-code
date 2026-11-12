@@ -17,6 +17,19 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), KNOW_CODE_BUILD_PROFILE=PROFILE)
 ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 HARNESS = ROOT / 'tests/worker_harness.mjs'
+# Actual compiler forms include unlocated option warnings. They must not turn
+# otherwise healthy source analysis into a compiler-error report.
+diagnostic_check = subprocess.run(['node', '--input-type=module', '-e', '''
+import assert from 'node:assert/strict';
+import {compilerDiagnostics} from './providers/swift/index.mjs';
+const root = process.cwd();
+const warnings = compilerDiagnostics('<unknown>:0: warning: ignoring -experimental-lazy-typecheck (requires -enable-library-evolution)\\nwarning: driver warning\\n', root);
+assert.deepEqual(warnings.map(d => [d.severity, d.path]), [['warning', ''], ['warning', '']]);
+const mixed = compilerDiagnostics(`${root}/Sample.swift:3:7: error: missing value\\n<unknown>:0: note: compiler context\\nremark: compiler remark\\n`, root);
+assert.deepEqual(mixed.map(d => [d.severity, d.path]), [['error', 'Sample.swift'], ['info', ''], ['info', '']]);
+assert.equal(compilerDiagnostics('unrecognized compiler failure', root)[0].severity, 'error');
+'''], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
+assert diagnostic_check.returncode == 0, diagnostic_check.stderr
 subprocess.run([sys.executable, ROOT / 'scripts/build_record.py', 'verify', PROFILE], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
 READER = ROOT / f'.artifacts/build/{PROFILE}/swift/indexstore-reader'
 reader_sha256 = hashlib.sha256(READER.read_bytes()).hexdigest()

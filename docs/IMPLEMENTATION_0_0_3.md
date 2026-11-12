@@ -149,5 +149,14 @@ succeeded. Evidence: `xcode-graph-plan-01/`,
 The shared ingester still reports honest partial graph capabilities; this is
 finite compiler/protocol evidence, not storage/native parity, real-corpus or
 installed production certification. No indexing shortcut removal was justified
-or attempted. Sampled aggregate compiler/probe RSS stayed around 638–645 MiB;
-these samples are neither hard limits nor true peaks.
+or attempted. Independent review confirmed the finite token/edge claims but
+found that lazy/skip flags were explicitly ignored without library evolution.
+These passes therefore do not qualify their active behavior for
+library-evolution targets; a separate fixture is required. The compiler's
+`<unknown>:0: warning:` form was also incorrectly falling through to the
+unrecognized-error fallback. Shared diagnostic parsing now preserves its
+warning severity and empty source path, with a focused regression in the
+existing Swift provider check; unknown failure text still remains an error.
+The original receipts retain the conservative false-error reports.
+Sampled aggregate compiler/probe RSS stayed around 638–645 MiB; these samples
+are neither hard limits nor true peaks.

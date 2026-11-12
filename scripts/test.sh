@@ -126,7 +126,7 @@ run_check() {
     dispatch) python3 tests/dispatch.py ;;
     rust-provider) python3 tests/rust_provider.py ;;
     rust-managed) python3 tests/rust_managed.py ;;
-    rust-contexts) node tests/rust_contexts.mjs; node tests/rust_context_collection.mjs ;;
+    rust-contexts) node tests/rust_context_io.mjs; node tests/rust_contexts.mjs; node tests/rust_context_collection.mjs ;;
     swift-provider) python3 tests/swift_provider.py ;;
     swiftpm-provider) python3 tests/swiftpm_provider.py ;;
     xcode-provider) python3 tests/xcode_provider.py ;;
