@@ -16,7 +16,7 @@ fs.symlinkSync(compilerRoot,path.join(workspace,'node_modules/typescript'),'dir'
 const write=(name,text)=>{const file=path.join(workspace,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,text);return file;};
 const options={strict:true,target:'es2022',module:'nodenext',moduleResolution:'nodenext',composite:true};
 const dep=write('dep/tsconfig.json',JSON.stringify({compilerOptions:options,files:['code.ts']}));
-write('dep/code.ts','export interface Shape { value: number; }\nexport const count = 41;\nexport function leaf(value: number) { return value + 1; }\nexport class Box<T> { constructor(public item: T) {} }\n');
+write('dep/code.ts','export interface Shape { value: number; }\nexport const count = 41;\nexport function leaf(value: number) { return value + 1; }\nexport class Box<T> { constructor(public item: T) { const constructorLocal = item; } }\n');
 const source=write('app/code.ts','import {leaf as invoke, count, Box, type Shape} from "../dep/code.js";\n// π😀 before UTF-8 anchors\nexport function start(input: Shape) { const café = count; return invoke(café) + input.value; }\nexport function other(input: number) { const café = input; return café; }\nconst text = new Box("text"); const number = new Box(1); text.item; number.item;\n');
 const config=write('app/tsconfig.json',JSON.stringify({compilerOptions:options,files:['code.ts'],references:[{path:'../dep'}]}));
 const disabled=write('app/tsconfig.disabled.json',JSON.stringify({compilerOptions:{...options,disableSourceOfProjectReferenceRedirect:true},files:['code.ts'],references:[{path:'../dep'}]}));
@@ -82,9 +82,14 @@ function inspect(frames) {
   const disabledId='ts:app/tsconfig.disabled.json';
   assert(!frames.some(f=>f.source?.compilationId===disabledId&&f.source.path==='dep/code.ts'),'disabled redirect must not borrow another Program source');
   assert(!relationships.some(e=>e.sourceId.startsWith(disabledId+':')&&symbols.get(e.targetId)?.name==='leaf'&&e.resolution==='compiler_bound'));
-  const items=[...symbols.values()].filter(s=>s.id.startsWith(appId+':')&&s.name==='item');
+  const items=[...symbols.values()].filter(s=>s.id.startsWith(appId+':')&&s.name==='item'&&s.kind==='Property');
   assert.equal(items.length,1,'generic property views need the exact compiler declaration root');
   assert.equal(items[0].signature,'T');
+  const parameters=[...symbols.values()].filter(s=>s.id.startsWith(appId+':')&&s.name==='item'&&s.kind==='FunctionScopedVariable');
+  assert.equal(parameters.length,1,'constructor parameter and generated property have different semantic kinds');
+  assert.notEqual(parameters[0].id,items[0].id);
+  assert(occurrences.some(o=>o.symbolId===parameters[0].id&&o.role==='declaration'));
+  assert(occurrences.some(o=>o.symbolId===parameters[0].id&&o.role==='reference'));
   const appText=fs.readFileSync(source,'utf8');
   for(const expression of ['text.item','number.item']) {
     const position=appText.indexOf(expression)+expression.lastIndexOf('item');

@@ -118,7 +118,7 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
     emitFrame('progress',{stage:'analysis',projectPath,message:`Extracting exact native TypeScript ${version} compiler facts; independent project links remain unavailable.`});
     let batch={compilationId:id,symbols:[],occurrences:[],relationships:[]};
     const flush=()=>{if(batch.symbols.length||batch.occurrences.length||batch.relationships.length)emitFrame('facts',batch);batch={compilationId:id,symbols:[],occurrences:[],relationships:[]};};
-    const declarationCache=new WeakMap(),canonicalCache=new WeakMap(),emitted=new Set(),anchored=new Set(),unsupportedViews=new WeakSet();
+    const declarationCache=new WeakMap(),canonicalCache=new WeakMap(),parameterFields=new WeakMap(),emitted=new Set(),anchored=new Set(),unsupportedViews=new WeakSet();
     let current,artifactId,offsets,missing=0,transientViews=0;
     const declarations=symbol=>{
       if(!symbol)return [];
@@ -126,15 +126,34 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
       return declarationCache.get(symbol);
     };
     const same=(a,b)=>a===b||!!a&&!!b&&a.pos===b.pos&&a.end===b.end&&a.kind===b.kind&&a.getSourceFile().fileName===b.getSourceFile().fileName;
+    function parameterField(declaration,name) {
+      if(parameterFields.has(declaration))return parameterFields.get(declaration);
+      let field;
+      const owner=declaration.parent?.parent;
+      if(ts.isParameterDeclaration(declaration)&&ts.isConstructorDeclaration(declaration.parent)
+        &&owner?.name&&(ts.isClassDeclaration(owner)||ts.isClassExpression(owner))
+        &&declaration.modifiers?.some(m=>[ts.SyntaxKind.PublicKeyword,ts.SyntaxKind.PrivateKeyword,ts.SyntaxKind.ProtectedKeyword,ts.SyntaxKind.ReadonlyKeyword].includes(m.kind))) {
+        const classSymbol=checker.getSymbolAtLocation(owner.name);
+        if(classSymbol?.flags&api.SymbolFlags.Class) {
+          const member=checker.getPropertyOfType(checker.getDeclaredTypeOfSymbol(classSymbol),name);
+          if(member&&(member.flags&api.SymbolFlags.Property)&&declarations(member).some(d=>same(d,declaration)))field=member;
+        }
+      }
+      parameterFields.set(declaration,field);return field;
+    }
     function canonical(symbol) {
       if(canonicalCache.has(symbol))return canonicalCache.get(symbol);
       let selected=symbol;
       const roots=declarations(symbol);
-      // Only a compiler lookup at the one exact declaration can establish a
-      // declaration root here. Multiple-root synthetic views are never picked.
-      if(symbol.flags&api.SymbolFlags.Transient&&roots.length===1&&roots[0].name) {
-        const rootSymbol=checker.getSymbolAtLocation(roots[0].name);
-        if(rootSymbol&&!(rootSymbol.flags&api.SymbolFlags.Transient)&&declarations(rootSymbol).some(d=>same(d,roots[0])))selected=rootSymbol;
+      // The raw handle count matters too: one resolved branch must not conceal
+      // another unresolved declaration. Preserve semantic kind when a parameter
+      // and its generated property share the same physical declaration.
+      if(symbol.flags&api.SymbolFlags.Transient&&(symbol.declarations?.length??0)===1&&roots.length===1&&roots[0].name) {
+        const peer=candidate=>candidate&&candidate.name===symbol.name&&!(candidate.flags&api.SymbolFlags.Transient)
+          &&candidate.flags===(symbol.flags&~api.SymbolFlags.Transient)&&declarations(candidate).some(d=>same(d,roots[0]));
+        let rootSymbol=checker.getSymbolAtLocation(roots[0].name);
+        if(!peer(rootSymbol))rootSymbol=parameterField(roots[0],symbol.name);
+        if(peer(rootSymbol))selected=rootSymbol;
       }
       canonicalCache.set(symbol,selected);return selected;
     }
@@ -172,7 +191,10 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
         emitted.add(key);batch.symbols.push({id:key,name:symbol.name,kind:api.SymbolFlags[symbol.flags]??String(symbol.flags),
           signature:type?checker.typeToString(type):symbol.name,external:!nodes.some(d=>indexed.has(path.resolve(d.getSourceFile().fileName)))});
       }
-      if(symbol.flags&api.SymbolFlags.Module)for(const node of nodes)if(ts.isSourceFile(node)){occurrence(key,node,'declaration');occurrence(key,node,'definition');}
+      for(const node of nodes)if(node.getSourceFile()===current) {
+        const name=ts.isSourceFile(node)?node:node.name;
+        if(name){occurrence(key,name,'declaration');occurrence(key,node,'definition');}
+      }
       return key;
     }
     const graph=graphFacts(ts,checker,{emit,synthetic,occurrence:(symbol,node,role)=>{occurrence(symbol,node,role);if(role==='declaration')occurrence(symbol,node,'definition');},dispatchKey:()=>'',implementationProofs:false,
@@ -193,6 +215,10 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
           const found=checker.getSymbolAtLocation(node);
           if(found&&!checker.isUnknownSymbol(found)) {
             const declared=declarations(found).some(d=>same(d.name,node));
+            if(declared&&ts.isParameterDeclaration(node.parent)) {
+              const field=parameterField(node.parent,found.name);
+              if(field&&field!==found)emit(field);
+            }
             const symbols=[!declared&&(found.flags&api.SymbolFlags.Alias)?checker.getAliasedSymbol(found):found];
             if(ts.isShorthandPropertyAssignment(node.parent)) {
               const value=checker.getShorthandAssignmentValueSymbol(node.parent);if(value&&value!==found)symbols.push(value);
