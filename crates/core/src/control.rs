@@ -28,16 +28,69 @@ pub fn socket_path(root: &Path) -> PathBuf {
 /// An explicit DATA override designates a dedicated per-user state directory.
 /// Tighten only its owned leaf, preserving caller path spelling and aliases.
 pub fn prepare_data_root(root: &Path) -> Result<()> {
-    let account_home = std::env::var_os("HOME").map(PathBuf::from);
-    prepare_data_root_owned(root, unsafe { libc::geteuid() }, account_home.as_deref())
+    let configured_home = std::env::var_os("HOME").map(PathBuf::from);
+    let user = unsafe { libc::geteuid() };
+    let actual_home = user_home(user)?;
+    prepare_data_root_owned(root, user, &actual_home, configured_home.as_deref())
+}
+fn user_home(user: libc::uid_t) -> Result<PathBuf> {
+    use std::{ffi::CStr, os::unix::ffi::OsStrExt};
+    // Directory-service records can exceed the usual suggested size. Bound
+    // both allocation and retries; an unavailable account never permits chmod.
+    let mut size = 16 * 1024;
+    loop {
+        let mut buffer = vec![0u8; size];
+        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut found = std::ptr::null_mut();
+        // SAFETY: all outputs and the backing buffer remain live until pw_dir
+        // has been copied. getpwuid_r initializes record only on success.
+        let status = unsafe {
+            libc::getpwuid_r(
+                user,
+                record.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut found,
+            )
+        };
+        if status == libc::ERANGE && size < 1024 * 1024 {
+            size *= 2;
+            continue;
+        }
+        if status != 0 || found.is_null() {
+            return Err(Error::InvalidRequest(format!(
+                "cannot resolve effective-user home safely (getpwuid_r status {status}); restore the local account record before using coordinator DATA"
+            )));
+        }
+        let record = unsafe { record.assume_init() };
+        if record.pw_dir.is_null() {
+            return Err(Error::InvalidRequest(
+                "effective-user account has no home directory; cannot secure coordinator DATA"
+                    .into(),
+            ));
+        }
+        // SAFETY: successful getpwuid_r supplies a NUL-terminated pw_dir in
+        // the still-live backing buffer.
+        let bytes = unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes();
+        let home = PathBuf::from(std::ffi::OsStr::from_bytes(bytes));
+        if !home.is_absolute() {
+            return Err(Error::InvalidRequest(
+                "effective-user account home must be absolute; cannot secure coordinator DATA"
+                    .into(),
+            ));
+        }
+        return Ok(home);
+    }
 }
 fn prepare_data_root_owned(
     root: &Path,
     expected: libc::uid_t,
-    account_home: Option<&Path>,
+    actual_home: &Path,
+    configured_home: Option<&Path>,
 ) -> Result<()> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-    let account_home = account_home.map(std::fs::canonicalize).transpose()?;
+    let actual_home = std::fs::canonicalize(actual_home)?;
+    let configured_home = configured_home.map(std::fs::canonicalize).transpose()?;
     let absolute = if root.is_absolute() {
         root.to_owned()
     } else {
@@ -72,7 +125,8 @@ fn prepare_data_root_owned(
         .create(root)?;
     let canonical = std::fs::canonicalize(root)?;
     if canonical.parent().is_none()
-        || account_home
+        || actual_home.starts_with(&canonical)
+        || configured_home
             .as_ref()
             .is_some_and(|path| path.starts_with(&canonical))
         || git_metadata(&canonical)
@@ -121,8 +175,122 @@ fn prepare_data_root_owned(
     if owned.mode() & 0o7777 != 0o700 {
         directory.set_permissions(std::fs::Permissions::from_mode(0o700))?;
     }
+    clear_data_acl(&directory)?;
     same_directory()?;
     Ok(())
+}
+#[cfg(target_os = "macos")]
+fn clear_data_acl(directory: &std::fs::File) -> Result<()> {
+    data_acl::clear(directory).map_err(|error| {
+        std::io::Error::new(error.kind(), format!("cannot remove extended access from owned coordinator DATA: {error}; secure this dedicated directory before retrying")).into()
+    })
+}
+#[cfg(not(target_os = "macos"))]
+fn clear_data_acl(_: &std::fs::File) -> Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "securing coordinator DATA ACLs requires supported macOS APIs",
+    )
+    .into())
+}
+// The Darwin extended-ACL ABI is declared by the installed SDK sys/acl.h;
+// libc does not expose these functions. All file changes use the owned fd.
+#[cfg(target_os = "macos")]
+mod data_acl {
+    use std::{io, os::fd::AsRawFd};
+    const EXTENDED: libc::c_int = 0x100;
+    unsafe extern "C" {
+        fn acl_init(count: libc::c_int) -> *mut libc::c_void;
+        fn acl_free(acl: *mut libc::c_void) -> libc::c_int;
+        fn acl_get_fd_np(fd: libc::c_int, kind: libc::c_int) -> *mut libc::c_void;
+        fn acl_set_fd_np(fd: libc::c_int, acl: *mut libc::c_void, kind: libc::c_int)
+        -> libc::c_int;
+        fn acl_valid(acl: *mut libc::c_void) -> libc::c_int;
+        fn acl_get_entry(
+            acl: *mut libc::c_void,
+            entry: libc::c_int,
+            output: *mut *mut libc::c_void,
+        ) -> libc::c_int;
+        #[cfg(test)]
+        fn acl_to_text(acl: *mut libc::c_void, length: *mut libc::ssize_t) -> *mut libc::c_char;
+    }
+    pub(super) struct Acl(*mut libc::c_void);
+    impl Drop for Acl {
+        fn drop(&mut self) {
+            // SAFETY: Acl owns exactly one successful ACL allocation.
+            unsafe {
+                acl_free(self.0);
+            }
+        }
+    }
+    impl Acl {
+        fn allocated(raw: *mut libc::c_void) -> io::Result<Self> {
+            if raw.is_null() {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(Self(raw))
+            }
+        }
+        pub(super) fn get(file: &std::fs::File) -> io::Result<Self> {
+            // SAFETY: borrowed live fd; returned allocation is exclusively owned.
+            Self::allocated(unsafe { acl_get_fd_np(file.as_raw_fd(), EXTENDED) })
+        }
+        pub(super) fn set(&self, file: &std::fs::File) -> io::Result<()> {
+            // SAFETY: live fd and ACL; the kernel copies rather than takes it.
+            if unsafe { acl_set_fd_np(file.as_raw_fd(), self.0, EXTENDED) } == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        }
+        pub(super) fn has_entries(&self) -> io::Result<bool> {
+            // Darwin returns 0 for a found entry, -1/EINVAL for no first entry.
+            // Validate first, so an invalid ACL is never mistaken for empty.
+            if unsafe { acl_valid(self.0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let mut entry = std::ptr::null_mut();
+            if unsafe { acl_get_entry(self.0, 0, &mut entry) } == 0 {
+                return Ok(true);
+            }
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::EINVAL) {
+                Ok(false)
+            } else {
+                Err(error)
+            }
+        }
+        #[cfg(test)]
+        pub(super) fn text(&self) -> io::Result<Vec<u8>> {
+            // SAFETY: valid live ACL; returned text is owned until acl_free.
+            let text = unsafe { acl_to_text(self.0, std::ptr::null_mut()) };
+            if text.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            let copy = unsafe { std::ffi::CStr::from_ptr(text) }
+                .to_bytes()
+                .to_vec();
+            unsafe {
+                acl_free(text.cast());
+            }
+            Ok(copy)
+        }
+    }
+    pub(super) fn clear(file: &std::fs::File) -> io::Result<()> {
+        if !Acl::get(file)?.has_entries()? {
+            return Ok(());
+        }
+        // SAFETY: zero entries requests an owned empty extended ACL.
+        let empty = Acl::allocated(unsafe { acl_init(0) })?;
+        empty.set(file)?;
+        if Acl::get(file)?.has_entries()? {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "extended ACL remains after removal",
+            ));
+        }
+        Ok(())
+    }
 }
 /// The local coordinator is per effective user, even when a pathname or
 /// existing descriptor was supplied through a less-private directory.
@@ -1024,6 +1192,107 @@ mod privacy_tests {
     }
 
     #[test]
+    fn actual_account_home_is_protected_with_missing_or_misleading_configured_home() {
+        let root = root();
+        let actual = root.join("actual-account-home");
+        let configured = root.join("configured-home");
+        for path in [&actual, &configured] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let uid = unsafe { libc::geteuid() };
+        // Inject two owned paths rather than changing process HOME or touching
+        // the real account directory. Both homes and their ancestors refuse.
+        for home in [None, Some(configured.as_path())] {
+            for path in [&actual, &root] {
+                let before = mode(path);
+                assert!(prepare_data_root_owned(path, uid, &actual, home).is_err());
+                assert_eq!(mode(path), before);
+            }
+        }
+        assert!(prepare_data_root_owned(&configured, uid, &actual, Some(&configured)).is_err());
+        assert_eq!(mode(&configured), 0o755);
+        let unresolved = root.join("missing-account-home");
+        assert!(prepare_data_root_owned(&configured, uid, &unresolved, None).is_err());
+        assert_eq!(mode(&configured), 0o755);
+        // The actual platform lookup must return an absolute account path,
+        // independently of environment HOME. This does not mutate that path.
+        assert!(user_home(uid).unwrap().is_absolute());
+    }
+
+    #[test]
+    fn inherited_extended_acl_is_removed_only_from_the_owned_data_leaf() {
+        let root = root();
+        let parent = root.join("acl-parent");
+        std::fs::create_dir(&parent).unwrap();
+        // chmod operates only on this unique owned fixture. Grant a real
+        // inheritable everyone ACL so mode0700 alone cannot satisfy this test.
+        let output = std::process::Command::new("/bin/chmod")
+            .args([
+                "+a",
+                "everyone allow list,search,file_inherit,directory_inherit",
+            ])
+            .arg(&parent)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "owned ACL setup failed: {output:?}"
+        );
+        let parent_file = std::fs::File::open(&parent).unwrap();
+        let parent_acl = data_acl::Acl::get(&parent_file).unwrap();
+        assert!(parent_acl.has_entries().unwrap());
+        let before_acl = parent_acl.text().unwrap();
+        let before_mode = mode(&parent);
+        let data = parent.join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let data_file = std::fs::File::open(&data).unwrap();
+        assert!(
+            data_acl::Acl::get(&data_file)
+                .unwrap()
+                .has_entries()
+                .unwrap()
+        );
+        let retained = data.join("retained");
+        std::fs::write(&retained, b"retained state").unwrap();
+        let retained_file = std::fs::File::open(&retained).unwrap();
+        let retained_acl = data_acl::Acl::get(&retained_file).unwrap().text().unwrap();
+        let retained_mode = mode(&retained);
+        let alias = root.join("data-alias");
+        symlink(data.canonicalize().unwrap(), &alias).unwrap();
+        prepare_data_root(&alias).unwrap();
+        assert_eq!(mode(&data), 0o700);
+        assert!(
+            !data_acl::Acl::get(&data_file)
+                .unwrap()
+                .has_entries()
+                .unwrap()
+        );
+        assert_eq!(
+            data_acl::Acl::get(&parent_file).unwrap().text().unwrap(),
+            before_acl
+        );
+        assert_eq!(mode(&parent), before_mode);
+        assert_eq!(
+            data_acl::Acl::get(&retained_file).unwrap().text().unwrap(),
+            retained_acl
+        );
+        assert_eq!(mode(&retained), retained_mode);
+        assert_eq!(std::fs::read(&retained).unwrap(), b"retained state");
+        assert!(std::fs::symlink_metadata(&alias).unwrap().is_symlink());
+        // Repeating privacy validation on the now-empty ACL performs no ACL
+        // replacement (the same read-only path is used by ensure_running).
+        let before = std::fs::metadata(&data).unwrap();
+        prepare_data_root(&alias).unwrap();
+        let after = std::fs::metadata(&data).unwrap();
+        assert_eq!(
+            (before.ctime(), before.ctime_nsec()),
+            (after.ctime(), after.ctime_nsec())
+        );
+    }
+
+    #[test]
     fn data_root_refusal_never_chmods_foreign_owner_home_repo_or_git_metadata() {
         let root = root();
         let account_home = root.join("account-home");
@@ -1034,27 +1303,39 @@ mod privacy_tests {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let uid = unsafe { libc::geteuid() };
-        assert!(prepare_data_root_owned(&data, different_uid(), Some(&account_home)).is_err());
+        assert!(
+            prepare_data_root_owned(&data, different_uid(), &account_home, Some(&account_home))
+                .is_err()
+        );
         assert_eq!(mode(&data), 0o755);
         std::fs::create_dir(repository.join(".git")).unwrap();
         for path in [&root, &account_home, &repository, &repository.join(".git")] {
             let before = mode(path);
-            assert!(prepare_data_root_owned(path, uid, Some(&account_home)).is_err());
+            assert!(
+                prepare_data_root_owned(path, uid, &account_home, Some(&account_home)).is_err()
+            );
             assert_eq!(mode(path), before);
         }
         let alias = root.join("git-alias");
         symlink(repository.join(".git").canonicalize().unwrap(), &alias).unwrap();
         assert!(
-            prepare_data_root_owned(&alias.join("new-state"), uid, Some(&account_home)).is_err()
+            prepare_data_root_owned(
+                &alias.join("new-state"),
+                uid,
+                &account_home,
+                Some(&account_home)
+            )
+            .is_err()
         );
         assert!(!repository.join(".git/new-state").exists());
         let before = mode(Path::new("/"));
-        assert!(prepare_data_root_owned(Path::new("/"), uid, None).is_err());
+        assert!(prepare_data_root_owned(Path::new("/"), uid, &account_home, None).is_err());
         assert_eq!(mode(Path::new("/")), before);
         // Dedicated descendants underneath a source checkout remain valid.
         prepare_data_root_owned(
             &repository.join(".artifacts/data"),
             uid,
+            &account_home,
             Some(&account_home),
         )
         .unwrap();
