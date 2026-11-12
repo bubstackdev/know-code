@@ -5,12 +5,14 @@ import {readRequest, send} from '../shared/protocol.mjs';
 import {preparePackages, nodePreparationPolicy} from './preparation.mjs';
 import {typescriptInstallation} from './package-tools.mjs';
 import {analyze} from './analysis.mjs';
+import {nativeCompiler,NATIVE_TYPESCRIPT_VERSIONS} from './native.mjs';
 import {classificationPolicy,compilationClassification} from './test-classification.mjs';
 import {ProjectSetupError,boundedText} from './project-errors.mjs';
 
 const ownRequire = createRequire(import.meta.url);
 
-function compilerFor(directory, root, declared) {
+const nativeCompilers = new Map();
+async function compilerFor(directory, root, declared) {
   directory=path.resolve(directory);root=path.resolve(root);
   const inside=directory===root||directory.startsWith(root+path.sep);
   const installation=typescriptInstallation(directory,root);
@@ -26,8 +28,13 @@ function compilerFor(directory, root, declared) {
   let ts;
   try {ts=ownRequire(filename);}
   catch(error) {throw new ProjectSetupError('typescript_load_failed',`Cannot load selected TypeScript: ${error.message}`);}
+  if(NATIVE_TYPESCRIPT_VERSIONS.has(ts.version)) {
+    const packageRoot=installation?fs.realpathSync(installation.entry):path.dirname(ownRequire.resolve('typescript/package.json'));
+    if(!nativeCompilers.has(packageRoot))nativeCompilers.set(packageRoot,nativeCompiler(packageRoot,ts.version));
+    return nativeCompilers.get(packageRoot);
+  }
   if (typeof ts.version!=='string'||!(ts.version.startsWith('5.9.')||ts.version.startsWith('6.0.')))
-    throw new ProjectSetupError('unsupported_compiler',`unsupported TypeScript ${ts.version??'unknown'}: this provider supports 5.9.x and 6.0.x; native TypeScript 7 analysis is not available yet; no compiler substitution was made`,ts.version??'unavailable');
+    throw new ProjectSetupError('unsupported_compiler',`unsupported TypeScript ${ts.version??'unknown'}: this provider supports 5.9.x, 6.0.x and the explicitly selected native 7.0.2 frontend; no compiler substitution was made`,ts.version??'unavailable');
   return ts;
 }
 
@@ -71,7 +78,8 @@ try {
     try {
       const setupFailure=setupDiagnostics.failure(path.dirname(config));
       if(setupFailure)throw setupFailure;
-      const ts = compiler(path.dirname(config));
+      const ts = await compiler(path.dirname(config));
+      if(ts.native) {for(const filename of ts.plan(config).fileNames)owned.add(path.resolve(filename));continue;}
       const read = ts.readConfigFile(config, ts.sys.readFile);
       if (read.error) throw new ProjectSetupError('invalid_project_configuration',ts.flattenDiagnosticMessageText(read.error.messageText,'\n'),ts.version);
       const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(config), undefined, config);
@@ -89,7 +97,9 @@ try {
     try {
       const setupFailure=setupDiagnostics.failure(path.dirname(config));
       if(setupFailure)throw setupFailure;
-      const result = analyze(compiler(path.dirname(config)), root, config, [], setupDiagnostics(path.dirname(config)), root, compilationSend(path.dirname(config)), request.preparationFingerprint, testPolicy);
+      const ts=await compiler(path.dirname(config));
+      const args=[root,config,[],setupDiagnostics(path.dirname(config)),root,compilationSend(path.dirname(config)),request.preparationFingerprint,testPolicy];
+      const result=ts.native?ts.analyze(...args):analyze(ts,...args);
       queue.push(...result.references);
       for (const file of result.files) owned.add(file);
     } catch(error) {unavailable(config,error);}
@@ -110,7 +120,9 @@ try {
     try {
       const setupFailure=setupDiagnostics.failure(directory);
       if(setupFailure)throw setupFailure;
-      analyze(compiler(directory), root, null, files, setupDiagnostics(directory), directory, compilationSend(directory), request.preparationFingerprint, testPolicy);
+      const ts=await compiler(directory);
+      const args=[root,null,files,setupDiagnostics(directory),directory,compilationSend(directory),request.preparationFingerprint,testPolicy];
+      if(ts.native)ts.analyze(...args);else analyze(ts,...args);
     }
     catch(error) {
       if(!(error instanceof ProjectSetupError))throw error;

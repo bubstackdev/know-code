@@ -1,6 +1,8 @@
 import {compilerBaseTypes} from './symbols.mjs';
 // TypeScript semantics only. Storage, candidate expansion and walks live in Rust.
-export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationship, dispatchKey}) {
+export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationship, dispatchKey,
+  symbolName = symbol => symbol.getName(), declarations = symbol => symbol.declarations ?? [],
+  signatureDeclaration = signature => signature?.declaration, implementationProofs = true}) {
   let file, artifactId, offsets;
   const point = node => ({artifactId, startByte: offsets[node.getStart(file)], endByte: offsets[node.getEnd()]});
   const relation = (sourceId, targetId, kind, node, implicit=false, dispatch='',dispatchKey='') => {
@@ -29,10 +31,10 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
           if(seen.get(type)?.has(relationKind))return;
           if(!seen.has(type))seen.set(type,new Set());seen.get(type).add(relationKind);
           for(const member of checker.getPropertiesOfType(type)) {
-            const implementation=checker.getPropertyOfType(current,member.getName());
+            const implementation=checker.getPropertyOfType(current,symbolName(member));
             if(!implementation)continue;
-            const mine=implementation.valueDeclaration??implementation.declarations?.[0];
-            const theirs=member.valueDeclaration??member.declarations?.[0];
+            const mine=implementation.valueDeclaration??declarations(implementation)[0];
+            const theirs=member.valueDeclaration??declarations(member)[0];
             if(!mine||!theirs)continue;
             // Declaration-only heritage is explicit evidence. Never discover
             // arbitrary structurally similar classes across the workspace.
@@ -40,7 +42,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
             const methods=d=>ts.isMethodDeclaration(d)||ts.isMethodSignature(d);
             if(methods(mine)&&methods(theirs))relation(functionId(mine),functionId(theirs),relationKind,syntax,false,'',dispatchKey(type,theirs));
             else if((ts.isGetAccessorDeclaration(mine)||ts.isSetAccessorDeclaration(mine)) && (ts.isGetAccessorDeclaration(theirs)||ts.isSetAccessorDeclaration(theirs))) {
-              for(const a of implementation.declarations??[])for(const b of member.declarations??[])
+              for(const a of declarations(implementation))for(const b of declarations(member))
                 if(a.kind===b.kind&&(ts.isGetAccessorDeclaration(a)||ts.isSetAccessorDeclaration(a)))relation(functionId(a),functionId(b),relationKind,syntax,false,'',dispatchKey(type,b));
             }
           }
@@ -76,7 +78,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
     }
     if ((ts.isClassDeclaration(node)||ts.isInterfaceDeclaration(node)||ts.isTypeAliasDeclaration(node)||ts.isEnumDeclaration(node)) && named(node)) {
       const owner=emit(named(node));relation(context.owner,owner,'contains',node.name);
-      if(ts.isClassDeclaration(node)||ts.isInterfaceDeclaration(node))implementations(node);
+      if(implementationProofs&&(ts.isClassDeclaration(node)||ts.isInterfaceDeclaration(node)))implementations(node);
       return {...context,owner};
     }
     if (ts.isVariableDeclaration(node)||ts.isPropertyDeclaration(node)) {
@@ -84,7 +86,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
       if(!symbol)return context;
       const owner=emit(symbol);relation(context.owner,owner,'contains',node.name);
       if(node.initializer && (ts.isPropertyDeclaration(node)||context.initialization)) {
-        const execution=synthetic(node,'initializer',`<initialize ${symbol.getName()}>`);
+        const execution=synthetic(node,'initializer',`<initialize ${symbolName(symbol)}>`);
         relation(owner,execution,'initializes',node.name);
         return {owner,execution,initialization:true};
       }
@@ -120,7 +122,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
   function accessorCalls(access,symbol,context,site) {
     if (!(symbol.flags&ts.SymbolFlags.Accessor)) return;
     const {read,write}=accessDirection(access);
-    for(const declaration of symbol.declarations??[]) {
+    for(const declaration of declarations(symbol)) {
       if(read&&ts.isGetAccessorDeclaration(declaration)||write&&ts.isSetAccessorDeclaration(declaration))
         relation(context.execution,functionId(declaration),'call',site,true,
           access.expression.kind===ts.SyntaxKind.SuperKeyword?'direct':'virtual',
@@ -131,7 +133,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
     const target=emit(symbol);
     if(declaration) {relation(context.owner,target,'contains',node);return;}
     const kind=symbol.flags&(ts.SymbolFlags.Type|ts.SymbolFlags.Namespace)?'type_reference':'reference';
-    relation(context.owner,!symbol.declarations?.length&&(symbol.flags&ts.SymbolFlags.Transient)?'':target,kind,node);
+    relation(context.owner,!declarations(symbol).length&&(symbol.flags&ts.SymbolFlags.Transient)?'':target,kind,node);
     if (ts.isPropertyAccessExpression(node.parent)&&node.parent.name===node)
       accessorCalls(node.parent,symbol,context,node);
   }
@@ -145,7 +147,7 @@ export function graphFacts(ts, checker, {emit, synthetic, occurrence, relationsh
     }
     if(ts.isCallExpression(node)||ts.isNewExpression(node)||ts.isTaggedTemplateExpression(node)) {
       const signature=checker.getResolvedSignature(node);
-      const declaration=signature?.declaration;
+      const declaration=signatureDeclaration(signature);
       let expression=ts.isTaggedTemplateExpression(node)?node.tag:node.expression;
       while(ts.isParenthesizedExpression(expression))expression=expression.expression;
       let binding=checker.getSymbolAtLocation(expression);
