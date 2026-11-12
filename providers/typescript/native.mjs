@@ -90,7 +90,7 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
       }
       if(metadata.isDefaultLibrary||metadata.isFromExternalLibrary)continue;
       const origin=sourceBoundary(root,filename);
-      if(origin) {if(diagnostics.length<100)diagnostics.push(origin);omitted++;continue;}
+      if(origin) {if(diagnostics.length<100)diagnostics.push({...origin,message:'Native analysis omits this source body and its facts because its workspace origin is outside or unverified; compiler-backed external identities and signatures may remain.'});omitted++;continue;}
       const file=program.getSourceFile(filename);
       if(!file){omitted++;continue;}
       const utf8=Buffer.from(file.text,'utf8'),sourcePath=relative(root,file.fileName);
@@ -118,8 +118,8 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
     emitFrame('progress',{stage:'analysis',projectPath,message:`Extracting exact native TypeScript ${version} compiler facts; independent project links remain unavailable.`});
     let batch={compilationId:id,symbols:[],occurrences:[],relationships:[]};
     const flush=()=>{if(batch.symbols.length||batch.occurrences.length||batch.relationships.length)emitFrame('facts',batch);batch={compilationId:id,symbols:[],occurrences:[],relationships:[]};};
-    const declarationCache=new WeakMap(),canonicalCache=new WeakMap(),emitted=new Set(),anchored=new Set();
-    let current,artifactId,offsets,missing=0;
+    const declarationCache=new WeakMap(),canonicalCache=new WeakMap(),emitted=new Set(),anchored=new Set(),unsupportedViews=new WeakSet();
+    let current,artifactId,offsets,missing=0,transientViews=0;
     const declarations=symbol=>{
       if(!symbol)return [];
       if(!declarationCache.has(symbol))declarationCache.set(symbol,(symbol.declarations??[]).map(handle=>handle.resolve()).filter(Boolean));
@@ -154,14 +154,18 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
     }
     function emit(raw) {
       if(!raw||checker.isUnknownSymbol(raw))return '';
-      const symbol=canonical(raw),nodes=declarations(symbol);
+      const symbol=canonical(raw);
+      // Shared declaration anchors alone cannot distinguish compiler-specialized
+      // or multiple-root views. Keep only proven canonical declaration symbols;
+      // a runtime symbol id or a selected branch must not become a public id.
+      if(symbol.flags&api.SymbolFlags.Transient) {
+        if(!unsupportedViews.has(symbol)){unsupportedViews.add(symbol);transientViews++;}
+        return '';
+      }
+      const nodes=declarations(symbol);
       if(!nodes.length){missing++;return '';}
       const facade={declarations:nodes,flags:symbol.flags,getName:()=>symbol.name};
-      let key=symbolIdentity(root,id,facade);
-      if(symbol.flags&api.SymbolFlags.Transient) {
-        const roots=nodes.map(d=>[relative(root,d.getSourceFile().fileName),d.pos,d.end]).sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
-        key+=`:native-view:${createHash('sha256').update(JSON.stringify(roots)).digest('hex')}`;
-      }
+      const key=symbolIdentity(root,id,facade);
       if(!emitted.has(key)) {
         const declaration=symbol.valueDeclaration?.resolve()??nodes[0];
         const type=checker.getTypeOfSymbolAtLocation(symbol,declaration);
@@ -210,8 +214,10 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
       ...program.getSyntacticDiagnostics(),...program.getSemanticDiagnostics()];
     diagnostics.push(...compilerDiagnostics.slice(0,100).map(d=>({code:`TS${d.code}`,severity:d.category===api.DiagnosticCategory.Error?'error':'warning',
       path:d.fileName?relative(root,d.fileName):'',message:boundedText(d.text)})),...setupDiagnostics.slice(0,100));
+    if(transientViews)diagnostics.push({code:'native_transient_views_omitted',severity:'warning',path:projectPath,
+      message:`${transientViews} compiler transient symbol views lack a proven single declaration root. Exact references for these views are omitted rather than collapsing specializations or choosing one branch.`});
     if(missing||omitted)diagnostics.push({code:'native_typescript_omissions',severity:'warning',path:projectPath,
-      message:`${missing} unresolved or unsupported symbol sites and ${omitted} omitted source artifacts; no exact reference or source ownership was invented.`});
+      message:`${missing} unresolved or unsupported symbol lookups and ${omitted} omitted source artifacts; no exact reference or source ownership was invented.`});
     if(compilerDiagnostics.length>100)diagnostics.push({code:'diagnostics_truncated',severity:'info',path:'',message:`${compilerDiagnostics.length} compiler diagnostics; first100 retained.`});
     emitFrame('report',{compilationId:id,status:'partial',diagnostics,
       capabilities:{calls:'partial',dependencies:'partial',dispatch:'partial',project_links:'unavailable',...(testPolicy?{test_classification:'partial'}:{})}});

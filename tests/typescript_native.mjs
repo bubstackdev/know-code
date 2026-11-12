@@ -85,6 +85,13 @@ function inspect(frames) {
   const items=[...symbols.values()].filter(s=>s.id.startsWith(appId+':')&&s.name==='item');
   assert.equal(items.length,1,'generic property views need the exact compiler declaration root');
   assert.equal(items[0].signature,'T');
+  const appText=fs.readFileSync(source,'utf8');
+  for(const expression of ['text.item','number.item']) {
+    const position=appText.indexOf(expression)+expression.lastIndexOf('item');
+    const startByte=Buffer.byteLength(appText.slice(0,position));
+    const uses=occurrences.filter(o=>o.role==='reference'&&o.startByte===startByte&&o.artifactId.startsWith('app/code.ts@')&&o.symbolId.startsWith(appId+':'));
+    assert.deepEqual(uses.map(o=>o.symbolId),[items[0].id],'each generic use must bind to the proven declaration root');
+  }
   return {compilations,reports,symbols,occurrences,relationships};
 }
 const initial=inspect(worker('initial'));
