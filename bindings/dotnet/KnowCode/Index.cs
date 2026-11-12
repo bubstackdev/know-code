@@ -8,8 +8,18 @@ namespace KnowCode;
 /// <summary>One shared embedding/server-host scope. Omit to use the account-wide scope.</summary>
 public sealed record QueryLimitScope(string Directory);
 
-public sealed class Index(string database, QueryLimitScope? queryLimitScope = null)
+public sealed class Index
 {
+    private readonly string database;
+    private readonly QueryLimitScope? queryLimitScope;
+
+    public Index(string database, QueryLimitScope? queryLimitScope = null)
+    {
+        this.database = Native.ValidatePath(database, nameof(database));
+        if (queryLimitScope is not null) Native.ValidatePath(queryLimitScope.Directory, nameof(queryLimitScope));
+        this.queryLimitScope = queryLimitScope;
+    }
+
     public Task<JsonDocument> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default) =>
         QueryCoreAsync(() => JsonSerializer.Serialize(request, Native.JsonOptions), Stopwatch.GetTimestamp(), cancellationToken);
 
@@ -110,6 +120,18 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
 
 internal static partial class Native
 {
+    // Interop strings are NUL-terminated UTF-8. Reject paths that would select
+    // a different native file after truncation or replacement encoding.
+    internal static string ValidatePath(string value, string parameter)
+    {
+        ArgumentNullException.ThrowIfNull(value, parameter);
+        if (value.Contains('\0')) throw new ArgumentException("Paths cannot contain NUL.", parameter);
+        try { _ = new System.Text.UTF8Encoding(false, true).GetByteCount(value); }
+        catch (System.Text.EncoderFallbackException error)
+        { throw new ArgumentException("Paths must contain valid Unicode.", parameter, error); }
+        return value;
+    }
+
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

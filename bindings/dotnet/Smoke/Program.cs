@@ -1,5 +1,23 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--path-validation")
+{
+    // These constructor checks must work before any native library is loaded.
+    foreach (var path in new[] { "index.db\0other", "index-\uD800.db", "index-\uDC00.db" })
+    {
+        void Rejected(Action construct)
+        {
+            try { construct(); }
+            catch (ArgumentException) { return; }
+            throw new Exception("Interop accepted an unrepresentable path");
+        }
+        Rejected(() => _ = new KnowCode.Index(path));
+        Rejected(() => _ = new KnowCode.Index("index.db", new KnowCode.QueryLimitScope(path)));
+    }
+    _ = new KnowCode.Index("索引-🦀.db", new KnowCode.QueryLimitScope("範囲-🦀"));
+    Console.WriteLine("{\"passed\":true,\"check\":\"DotNet_paths_reject_NUL_and_unpaired_surrogates\"}");
+    return;
+}
 if (args[0] == "--admission-typed")
 {
     try {
