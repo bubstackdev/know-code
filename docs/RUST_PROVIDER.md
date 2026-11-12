@@ -248,3 +248,15 @@ promotion. A finite compiler-artifact-to-separate-analyzer-graph probe passed
 five owned no-wrapper contexts; it has not been adopted as the production
 context planner. Historical real-corpus measurements above retain their original
 scripts-disabled/restoration-external scope.
+
+
+The user subsequently accepted **compiler-captured contexts** as the production
+direction: Cargo check records actual library/binary/test compiler units, then
+rust-analyzer analyzes separately selected proven graphs. The second owned probe
+passes exact renamed/dev dependency joins, known-fixture cache reuse,
+source/artifact invalidation and failed-unit exclusion:
+`.artifacts/implementation-0.0.3/rust-context-feasibility-02/summary.json`.
+Implementation is in progress, not promoted. Effective implicit cfg and removal
+of analyzer defaults, ordinary module/include inputs, content-bound artifacts,
+shared-source ambiguity, selected wrappers and generated inputs still need
+production proof; paths/root hashes alone do not establish it.

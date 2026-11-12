@@ -232,13 +232,13 @@ assert query({'op': 'symbols', 'name': 'packageSaved'})['freshness'] == 'stale'
 compiler = next(item['compiler_version'] for item in coverage if item['language'] == 'swift')
 pin.write_text(re.search(r'Swift version (\d+\.\d+\.\d+)', compiler).group(1) + '\n')
 generation = wait(generation, allow_failed=True)
-scoped = query({'op': 'symbols', 'name': 'packageSaved','coverage_detail':'full'}, equivalent=True)['coverage']
+scoped = query({'op': 'symbols', 'name': 'packageSaved','coverage_detail':'full', 'detail_max_bytes':65536}, equivalent=True)['coverage']
 assert all(item['analysis_options']['toolchainSelection']['origin'] == 'repository_pin'
            for item in scoped if item['project_path'] == 'swift-package/Package.swift')
 pin.unlink()
 generation = wait(generation)
 assert all(item['analysis_options']['toolchainSelection']['swiftPin'] is None
-           for item in query({'op': 'symbols','limit':1,'coverage_detail':'full'})['coverage'] if item['project_path'] == 'swift-package/Package.swift')
+           for item in query({'op': 'symbols','limit':1,'coverage_detail':'full', 'detail_max_bytes':65536})['coverage'] if item['project_path'] == 'swift-package/Package.swift')
 
 added = WORKSPACE / 'swift/new/New.swift'
 added.parent.mkdir()

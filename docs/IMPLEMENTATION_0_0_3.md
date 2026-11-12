@@ -63,3 +63,38 @@ Debug build01 at `b0f0864` produced `d97f56ecd6db49f09e2ef4116103c985`. Focused 
 The intentional empty serving path now filters Swift loose sources to their exact selected directory groups before launching a worker. A complete empty census over a previously usable serving index supplies its current project paths as explicit removals through the existing update path, including an already-empty manifest. First/no usable publication and recovery/replacement destinations receive no such authorization. Each worker must emit at least one compilation before successful completion; unrelated surviving units can no longer mask an accidentally empty worker stream. All 18 publication regressions and strict workspace Clippy pass. The first new assertion requested compact coverage while expecting full coverage; its failure is retained and the assertion now explicitly requests full coverage. Evidence: `wave-01/{empty-publication-integration-unit-02,empty-publication-clippy-01}/`. Matching build02 passes; the expanded four-language graph/empty/cursor/refresh/restart fixture is still under verification. Empty recovery/replacement authorization remains open.
 
 A finite Rust context probe independently captured five actual Cargo/rustc ordinary/test library/binary/integration units, joined exact emitted artifact paths to Cargo provenance and extern inputs, then proved correct cfg-selected definitions/callees in separate analyzer graphs. The public `!rust_analyzer` cfg override also matched compiler-only branches. Evidence: `.artifacts/implementation-0.0.3/rust-context-feasibility-01/summary.json`. This is a dependency-free owned fixture with existing wrappers refused: production capture, renamed/dev dependencies, cache/failure invalidation, generated sources, duplicate-source contexts and cross-compilation are not certified.
+
+
+## Combined saved-input/native checkpoint
+
+At matching Debug producer `cea17ee9916c4de5a73ecc48b4608eae`, the expanded
+four-language fixture passes 20 assertions including stored Swift/Rust
+call/value/constant-impact parity, saved updates and pin repair, deletion of a
+Swift group without sibling reanalysis, all-input removal, pinned page/source
+retention, explicit empty refresh/restart and new-source rediscovery. Evidence:
+`.artifacts/implementation-0.0.3/wave-01/assembled-language-native-05/` (82-second
+fixture, not a throughput benchmark). The real sibling invalidation issue was
+fixed with component-aware candidate selection and shared group identity;
+all 19 publication regressions pass. A cold setup attempt exceeded the existing
+120-second fixture wait; the same retained index later reconciled to current in
+14 seconds, and the unchanged bound passed on subsequent runs. That timeout is
+retained, not a certified startup latency. Full coverage option inspection now
+requests an explicit 64 KiB detail budget; omitted optional details are expected
+under the compact default.
+
+The frozen Rust context-planning fixture at `d7c6b40` separately passes actual
+cfg replay, module/include-data witnesses, tampered-artifact rejection and
+shared-source/failed-unit boundaries. It ran from a source-hashed seven-file
+snapshot, without worker routing or native artifact claims. Evidence:
+`wave-01/rust-context-plan-01/` and its adjacent source manifest.
+
+The wired Xcode candidate now builds at research identity
+`0.1.0-know-code-index-only.4`. Both platform success cases pass exact loaded-PIF,
+selected-root/Test-configuration, forced guard, typed outcome and real module
+checks (`xcode-typed-success-01/`). The initial negative fixture's ordinary body
+error was tolerated by indexing-module preparation and returned typed success;
+that is retained as a behavior boundary, not proof that source code is valid.
+A true unavailable module/input failure and independent source graph/error
+checks remain required. The failed Swift concurrency/overload builds and their
+focused corrections are retained. No bridge adoption or installed support is
+claimed.
