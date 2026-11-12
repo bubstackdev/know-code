@@ -153,7 +153,7 @@ static class Tools
         var info = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
         info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         info.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
-        info.Environment["DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE"] = "1";
+        info.Environment["DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE"] = "true";
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("cannot start dotnet; install the required SDK");
         var stdout = Capture(process.StandardOutput, progress, directory, progress ? 4096 : 1024 * 1024);
@@ -282,7 +282,8 @@ static partial class Analysis
             var tree = await document.GetSyntaxTreeAsync();
             if (tree is null || sources.ContainsKey(tree)) continue;
             var text = (await document.GetTextAsync()).ToString();
-            if (!generated && document.FilePath is { } filename && SourceBoundary(request.WorkspaceRoot, filename) is { } boundary
+            if (document.FilePath is { } filename && (!generated || File.Exists(filename))
+                && SourceBoundary(request.WorkspaceRoot, filename) is { } boundary
                 && ++sourceBoundaries <= 100) diagnostics.Add(boundary);
             var utf8 = Encoding.UTF8.GetBytes(text);
             var hash = Convert.ToHexStringLower(SHA256.HashData(utf8));

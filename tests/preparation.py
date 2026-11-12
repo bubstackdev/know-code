@@ -45,7 +45,7 @@ loose.write_text('export const looseValue = 1;\n')
 </PropertyGroup><Target Name="CountRestores" BeforeTargets="Restore">
 <Error Condition="'$(MSBUILDDISABLENODEREUSE)' != '1'" Text="Restore enabled reusable MSBuild nodes" />
 <Error Condition="'$(DOTNET_CLI_USE_MSBUILD_SERVER)' != '0'" Text="Restore enabled the MSBuild server" />
-<Error Condition="'$(DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE)' != '1'" Text="Restore enabled workload update advertising" />
+<Error Condition="'$(DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE)' != 'true'" Text="Restore enabled workload update advertising" />
 <WriteLinesToFile File="$(MSBuildProjectExtensionsPath)restore-count.txt" Lines="restore" Overwrite="false" />
 </Target></Project>''')
 cs = WORKSPACE / 'csharp'
