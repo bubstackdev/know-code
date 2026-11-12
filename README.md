@@ -4,13 +4,13 @@ Know Code gives agents and applications a local, compiler-backed index of TypeSc
 
 TypeScript's compiler and Roslyn resolve symbols and references. Results retain source locations, compilation/target provenance, diagnostics and coverage. Call/dependency/dispatch coverage is explicitly partial; see the [supported graph forms and limits](docs/CALL_GRAPH.md).
 
-Release artifacts must pass final validation, signing/notarization and normal-security installation checks. A source build alone does not establish certification. [Release readiness](docs/RELEASE_PLAN.md) and the [pre-tag execution record](docs/PRETAG_EXECUTION.md) describe the gates and their artifact-bound evidence.
+v0.0.2, **Snow Leopard**, is a stabilization release in preparation: correctness, performance, reliability and simplification. See the [changelog](CHANGELOG.md) and [review ledger](docs/CODEBASE_REVIEW_0_0_2.md). Release artifacts must pass matching validation, signing/notarization and normal-security installation checks; a source build alone does not establish certification. The [release plan](docs/RELEASE_PLAN.md) preserves the published v0.0.1 baseline and its evidence.
 
 ## Get started
 
-v0.0.1 targets **macOS 15+ on Apple Silicon (ARM64)**. Install **Node.js 24** and the **.NET 10 SDK** separately and put them on PATH. Know Code detects missing or incompatible prerequisites; it does not install them. Repository-selected TypeScript and SDK versions must match the [supported compiler contract](docs/COMPILER_ACCEPTANCE.md); the TypeScript adapter currently supports 5.9.x.
+Know Code targets **macOS 15+ on Apple Silicon (ARM64)**. Install **Node.js 24** and the **.NET 10 SDK** separately and put them on PATH. Know Code detects missing or incompatible prerequisites; it does not install them. Repository-selected TypeScript and SDK versions must match the [supported compiler contract](docs/COMPILER_ACCEPTANCE.md); the TypeScript adapter currently supports 5.9.x.
 
-For packaged installation, download the shared runtime and native SDK archives from [GitHub Releases](https://github.com/bubstackdev/know-code/releases). Follow that release's artifact-verification instructions and the [installation guide](docs/INSTALLATION.md). The runtime is installed once per user; the npm and NuGet SDK archives are separate consumers of that runtime.
+For packaged installation, use the notarized, stapled DMG from [GitHub Releases](https://github.com/bubstackdev/know-code/releases) and follow that release's verification instructions and the [installation guide](docs/INSTALLATION.md). Runtime and native SDK archives are also available there. The runtime is installed once per user; the npm and NuGet SDK archives are separate consumers of that runtime.
 
 From the extracted runtime:
 
@@ -33,7 +33,7 @@ Configure your agent to launch the installed executable with an explicit workspa
 ~/.local/bin/know-code mcp --workspace /absolute/repository
 ```
 
-The MCP process uses stdin/stdout and waits for its client. [MCP setup and tools](docs/MCP.md) cover symbol/reference lookup, callers/callees/impact, bounded structured queries and source excerpts. HTTP transport is outside v0.0.1.
+The MCP process uses stdin/stdout and waits for its client. [MCP setup and tools](docs/MCP.md) cover symbol/reference lookup, callers/callees/impact, bounded structured queries and source excerpts. HTTP transport remains outside the release scope.
 
 Embed the same Rust operators with the native Node-API add-on (`@know-code/node`) or .NET library (`KnowCode`). [Workspace API examples](docs/WORKSPACE_API.md) show opening a repository, granting trust, waiting for indexing, querying and disposing clients. Storage and graph queries execute in the calling process; compiler analysis uses isolated workers.
 
@@ -56,9 +56,9 @@ bash scripts/build.sh
 bash scripts/test.sh
 ```
 
-Pass `release` to both scripts for optimized artifacts. The product build profile is separate from an indexed workspace's C# configuration. [Packaging](docs/PACKAGING.md) describes the runtime/SDK layout and artifact provenance.
+Pass `release` for optimized artifacts. The test script defaults to quick checks; [validation tiers](docs/VALIDATION.md) define the required release baseline and extended matrices. The product build profile is separate from an indexed workspace's C# configuration. [Packaging](docs/PACKAGING.md) describes the runtime/SDK layout and artifact provenance.
 
-Experimental [Swift/SwiftPM](docs/SWIFT_PROVIDER.md) and [Rust](docs/RUST_PROVIDER.md) adapters use the same core; they are not supported v0.0.1 languages. v0.0.2 plans cross-repository queries, Angular template references and refactoring continuity. Swift/Rust language support belongs to v0.0.3; Xcode remains a Swift follow-on. Embedding-based semantic search and searchable source history are outside v0.0.1.
+Experimental [Swift/SwiftPM](docs/SWIFT_PROVIDER.md) and [Rust](docs/RUST_PROVIDER.md) adapters use the same core; supported languages remain TypeScript and C#. v0.0.2 adds no new features. Cross-repository queries, Angular template references and refactoring continuity move to later releases with timing undecided. Xcode remains a Swift follow-on. Embedding-based semantic search and searchable source history remain outside the current release scope.
 
 See [design requirements](docs/DESIGN.md), [architecture](docs/ARCHITECTURE.md), [release plan](docs/RELEASE_PLAN.md) and [performance evaluation](docs/PERFORMANCE.md) for the durable requirements, roadmap and evidence boundaries.
 

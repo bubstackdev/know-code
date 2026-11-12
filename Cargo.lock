@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "know-code"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "know-code-core",
  "notify",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "know-code-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "libc",
  "prost",
@@ -517,14 +517,14 @@ dependencies = [
 
 [[package]]
 name = "know-code-ffi"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "know-code-core",
 ]
 
 [[package]]
 name = "know-code-node"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "know-code-core",
  "napi",

@@ -8,6 +8,8 @@ The user explicitly deferred the real video-encoding responsiveness/progress/int
 
 The user selected **0.0.2 as a stabilization-only “Snow Leopard” release**: correctness, performance, reliability and simplification. Previously assigned new features (including cross-repository queries, company onboarding, Angular template references and refactoring continuity) move to later releases with timing undecided. Experimental Swift/Rust work remains experimental. [The 0.0.2 review ledger](CODEBASE_REVIEW_0_0_2.md) records current findings, fixes, decisions and focused validation.
 
+The user has requested proceeding toward publication of v0.0.2. Package declarations now identify 0.0.2; [release notes](../CHANGELOG.md) summarize the stabilization changes. This version change requires fresh matching producer/package/signing/platform receipts; earlier stabilization runs do not certify the new artifacts. Native query9/cursor3 and worker7/store8 contracts are unchanged by the package-version bump. Until publication completes, v0.0.1 remains the published baseline.
+
 The sections below retain earlier source-bound planning/checkpoints. Their pending-work and version statements are historical and do not override this release status, current constants, or the user's stabilization-only decision.
 
 ## Accepted feature freeze — 2026-11-11

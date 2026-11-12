@@ -161,7 +161,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
     }
   });
   try {
-    const initialized = await client.request('build/initialize', {displayName: 'Know Code', version: '0.0.1',
+    const initialized = await client.request('build/initialize', {displayName: 'Know Code', version: '0.0.2',
       bspVersion: '2.2.0', rootUri: pathToFileURL(directory).href, capabilities: {languageIds: ['swift', 'c', 'cpp', 'objective-c', 'objective-cpp']}});
     if (!initialized.data?.sourceKitOptionsProvider || !initialized.data?.prepareProvider)
       throw new Error('incompatible SwiftPM build server: sourceKitOptions and indexing-only prepare are required; update the Swift toolchain/Know Code');

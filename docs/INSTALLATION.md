@@ -1,6 +1,6 @@
 # User-scoped runtime lifecycle
 
-The accepted layout keeps one shared runtime separate from the npm/NuGet SDKs. This is a local candidate installer for macOS 15+ on Apple Silicon; signing, notarization and clean/older-OS verification remain release gates. Install Node 24 and the .NET 10 SDK separately and put them on PATH. Know Code checks them and never installs toolchains.
+The accepted layout keeps one shared runtime separate from the npm/NuGet SDKs on macOS 15+ Apple Silicon. Use the notarized, stapled DMG from the selected GitHub release and its verification instructions; the extracted runtime archive supports the same lifecycle commands. Each new candidate requires its own signing, notarization and platform evidence. Install Node 24 and the .NET 10 SDK separately and put them on PATH. Know Code checks them and never installs toolchains.
 
 ## Commands
 
