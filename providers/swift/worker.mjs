@@ -49,7 +49,7 @@ function analyzeGroup(request, root, projectPath, files, toolchain, scratch) {
     message: 'Swift module/build options are inferred per directory; SwiftPM/Xcode configuration is not analyzed.'});
   const facts = ingestStore({id, root, sources, store, library, scratch});
   diagnostics.push(...facts.diagnostics);
-  send('report', {compilationId: id, status: failed || facts.partial ? 'partial' : 'complete', diagnostics});
+  send('report', {compilationId: id, status: failed || facts.partial ? 'partial' : 'complete', diagnostics, capabilities: facts.capabilities});
 }
 try {
   const request = readRequest();

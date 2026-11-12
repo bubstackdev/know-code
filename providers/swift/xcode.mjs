@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {send} from '../shared/protocol.mjs';
 import {relative} from './index.mjs';
+import {unavailableGraphCapabilities} from './graph.mjs';
 
 // The internal workspace belongs to the containing project, not another job.
 export function canonicalXcodeProject(file) {
@@ -25,7 +26,7 @@ export async function analyzeXcode({request, root, project, toolchain}) {
       toolchainSelection: toolchain.selection, requiredPlatforms: ['iphoneos', 'iphonesimulator'],
       planner: 'reliable_configured_target_planner_required', preparation: 'not_run'
     })});
-  send('report', {compilationId: id, status: 'partial', diagnostics: [{
+  send('report', {compilationId: id, status: 'partial', capabilities: unavailableGraphCapabilities, diagnostics: [{
     code: 'xcode_reliable_planner_required', severity: 'error', path: projectPath,
     message: 'Xcode project analysis needs a reliable planner that preserves device/simulator compilation contexts. '
       + 'The installed xcodebuild indexing-settings query can return simulator or x86_64 arguments despite an arm64 device request, '

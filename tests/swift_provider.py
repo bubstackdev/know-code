@@ -51,6 +51,7 @@ assert compilations[0]['inferred'] and 'Swift version 6.' in compilations[0]['co
 assert json.loads(compilations[0]['optionsJson'])['signatures'] == 'compiler_index_names_only'
 symbols = {symbol['id']: symbol for message in messages if 'facts' in message for symbol in message['facts']['symbols']}
 occurrences = [occ for message in messages if 'facts' in message for occ in message['facts']['occurrences']]
+relationships = [edge for message in messages if 'facts' in message for edge in message['facts']['relationships']]
 artifacts = {message['source']['id']: message['source'] for message in messages if 'source' in message}
 assert len(artifacts) == len(sources)
 for name in ('name', 'message', 'café'):
@@ -62,6 +63,29 @@ choices = [symbol for symbol in symbols.values() if symbol['name'] == 'choose(_:
 assert len(choices) == 2, choices
 assert all(len([occ for occ in occurrences if occ['symbolId'] == symbol['id'] and occ['role'] == 'reference']) == 1 for symbol in choices)
 assert any(symbol['name'] == 'String' and symbol['external'] for symbol in symbols.values())
+# A function value reference is not an invocation. Calls use compiler CALLEDBY
+# evidence; implicit accessors retain that distinction and source-bound sites.
+leaf = next(s['id'] for s in symbols.values() if s['name'] == 'swiftGraphLeaf(_:)')
+direct = next(s['id'] for s in symbols.values() if s['name'] == 'swiftGraphDirect()')
+reference = next(s['id'] for s in symbols.values() if s['name'] == 'swiftGraphReference()')
+assert any(e['sourceId'] == direct and e['targetId'] == leaf and e['kind'] == 'call' for e in relationships)
+assert not any(e['sourceId'] == reference and e['targetId'] == leaf and e['kind'] == 'call' for e in relationships)
+assert any(e['sourceId'] == reference and e['targetId'] == leaf and e['kind'] == 'reference' for e in relationships)
+for name in ('swiftGraphLoaded', 'swiftGraphClosure', 'stored'):
+    owner = next(s['id'] for s in symbols.values() if s['name'] == name)
+    assert not any(e['sourceId'] == owner and e['targetId'] == leaf and e['kind'] == 'call' for e in relationships)
+    assert any(e['sourceId'] == owner and e['targetId'] == leaf and e['kind'] == 'reference' for e in relationships)
+assert any(d['code'] == 'swift_graph_evidence_unavailable' for d in reports[0]['diagnostics'])
+assert any(e['kind'] == 'call' and e['implicit'] and symbols[e['targetId']]['name'] == 'getter:computed' for e in relationships)
+assert any(e['kind'] == 'type_reference' for e in relationships)
+assert any(e['kind'] == 'inherits' and symbols[e['sourceId']]['name'] == 'SwiftGraphDerived'
+           and symbols[e['targetId']]['name'] == 'SwiftGraphBase' for e in relationships)
+assert reports[0]['capabilities'] == {'calls': 'partial', 'dependencies': 'partial', 'dispatch': 'partial', 'project_links': 'unavailable'}
+for edge in relationships:
+    assert edge['resolution'] == 'compiler_bound'
+    assert edge['sourceId'] in symbols and edge['targetId'] in symbols
+    payload = __import__('base64').b64decode(artifacts[edge['artifactId']]['utf8'])
+    assert payload[edge['startByte']:edge['endByte']].decode('utf8'), edge
 import base64
 checked = 0
 for occurrence in occurrences:
@@ -117,6 +141,7 @@ assert not any((RUN / 'data/workers/swift').glob('job-*')), 'compiler scratch mu
 assert hashlib.sha256(READER.read_bytes()).hexdigest() == reader_sha256, 'test changed the built reader'
 summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'symbols': len(symbols), 'reader_sha256': reader_sha256,
            'occurrences': len(occurrences), 'unicode_ranges_checked': checked,
+           'relationships': len(relationships), 'graph_capabilities': reports[0]['capabilities'],
            'compiler': compilations[0]['compilerVersion'], 'scope': 'standalone_directory_groups',
            'explicit_packages': 'empty_package_partial_without_inference'}
 (RUN / 'summary.json').write_text(json.dumps(summary, indent=2))

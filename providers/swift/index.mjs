@@ -6,6 +6,7 @@ import {spawnSync} from 'node:child_process';
 import {send, MAX_FRAME} from '../shared/protocol.mjs';
 export {relative} from '../shared/source.mjs';
 import {relative} from '../shared/source.mjs';
+import {createGraph, graphCapabilities} from './graph.mjs';
 const repo = fileURLToPath(new URL('../..', import.meta.url));
 export const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const kinds = ['unknown', 'module', 'namespace', 'namespace_alias', 'macro', 'enum', 'struct', 'class',
@@ -127,6 +128,12 @@ export function ingestStore({id, root, sources, store, library, scratch, onInput
   const internal = new Set();
   const indexedFiles = new Set();
   const inputs = new Set();
+  const register = item => {
+    if (!item.usr) return;
+    const symbolId = `${id}:${item.usr}`;
+    if (!symbols.has(symbolId)) symbols.set(symbolId, {id: symbolId, name: item.name,
+      kind: kinds[item.kind] ?? `indexstore_kind_${item.kind}`, signature: item.name});
+  };
   // First pass retains symbol identities only, so declarations in later files
   // correctly classify earlier references. Occurrences remain on disk.
   for (const item of records(spool)) {
@@ -135,8 +142,9 @@ export function ingestStore({id, root, sources, store, library, scratch, onInput
     if (item.record || !sources.has(path.resolve(item.path)) || !item.usr) continue;
     const symbolId = `${id}:${item.usr}`;
     if (item.roles & 3) internal.add(symbolId);
-    if (!symbols.has(symbolId)) symbols.set(symbolId, {id: symbolId, name: item.name,
-      kind: kinds[item.kind] ?? `indexstore_kind_${item.kind}`, signature: item.name});
+    if (!Array.isArray(item.relations)) throw new Error('Swift IndexStore helper lacks compiler relations; rebuild/reinstall the matching Know Code runtime');
+    register(item);
+    for (const relation of item.relations) register(relation);
   }
   onInputs?.(inputs);
   for (const source of sources.values()) {
@@ -153,14 +161,23 @@ export function ingestStore({id, root, sources, store, library, scratch, onInput
   batch = [];
   let unavailableRanges = 0;
   let seen = new Set();
+  let relationships = [];
+  const graph = createGraph({id, symbols, emit: relationship => {
+    relationships.push(relationship);
+    if (relationships.length === 128) { send('facts', {compilationId: id, relationships}); relationships = []; }
+  }});
   for (const item of records(spool)) {
     // The native reader deduplicates records shared by units. Keep occurrence
     // deduplication scoped to one record rather than retaining a whole graph.
-    if (item.record) { seen = new Set(); continue; }
-    if (item.unit || !item.usr || item.roles & 256) continue;
+    if (item.record) { seen = new Set(); graph.reset(); continue; }
+    if (item.unit || !item.usr) continue;
     const source = sources.get(path.resolve(item.path));
     if (!source) continue;
     const range = tokenRange(source, item.line, item.column);
+    graph.occurrence(item, source, range);
+    // Implicit compiler anchors are call evidence when CALL supplies a site,
+    // not automatically independently written declaration/use occurrences.
+    if (item.roles & 256) continue;
     if (!range) { unavailableRanges++; continue; }
     const symbolId = `${id}:${item.usr}`;
     const role = item.roles & 3 ? 'declaration' : 'reference';
@@ -172,12 +189,13 @@ export function ingestStore({id, root, sources, store, library, scratch, onInput
     if (batch.length === 128) { send('facts', {compilationId: id, occurrences: batch}); batch = []; }
   }
   if (batch.length) send('facts', {compilationId: id, occurrences: batch});
-  const diagnostics = [];
+  if (relationships.length) send('facts', {compilationId: id, relationships});
+  const diagnostics = graph.diagnostics();
   const missingFiles = [...sources.keys()].filter(file => !indexedFiles.has(file));
   if (missingFiles.length) diagnostics.push({code: 'swift_index_missing_sources', severity: 'warning', path: '',
     message: `The compiler produced no primary index unit for ${missingFiles.map(file => relative(root, file)).join(', ')}`});
   if (unavailableRanges) diagnostics.push({code: 'swift_token_range_unavailable', severity: 'warning', path: '',
     message: `${unavailableRanges} compiler occurrences had unsupported source token ranges and were omitted.`});
   fs.unlinkSync(spool); fs.unlinkSync(sourceList);
-  return {partial: missingFiles.length > 0 || unavailableRanges > 0, diagnostics};
+  return {partial: missingFiles.length > 0 || unavailableRanges > 0, diagnostics, capabilities: graphCapabilities};
 }

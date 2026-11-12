@@ -55,6 +55,7 @@ def invoke(name):
     assert options['preparation'] == 'not_run'
     assert str(PROJECT / 'xcshareddata/xcschemes/Probe.xcscheme') in compilation['inputPaths']
     assert reports[0]['compilationId'] == compilation['id'] and reports[0]['status'] == 'partial'
+    assert reports[0]['capabilities']['calls'] == reports[0]['capabilities']['dependencies'] == 'unavailable'
     assert any(d['code'] == 'xcode_reliable_planner_required' for d in reports[0]['diagnostics'])
     assert not any('facts' in message or 'source' in message or 'preparation' in message for message in messages)
     assert not (WORKSPACE / 'PHASE_EXECUTED').exists()

@@ -4,6 +4,7 @@ import {pathToFileURL, fileURLToPath} from 'node:url';
 import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {send} from '../shared/protocol.mjs';
 import {checked, run, hash, relative, sourceFile, compilerDiagnostics, ingestStore} from './index.mjs';
+import {unavailableGraphCapabilities} from './graph.mjs';
 
 const packageManifest = file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file));
 export const canonicalManifest = file => packageManifest(file) ? path.join(path.dirname(file), 'Package.swift') : file;
@@ -18,7 +19,7 @@ function gap(root, project, toolchain, configuration, diagnostics) {
   const projectPath = relative(root, project), id = `swift:${projectPath}`;
   send('compilation', {id, language: 'swift', projectPath, configuration, compilerVersion: version,
     inputPaths: [...manifests(path.dirname(project)), ...toolchain.inputPaths], optionsJson: JSON.stringify({origin: 'swiftpm', supported: false, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection})});
-  send('report', {compilationId: id, status: 'partial', diagnostics});
+  send('report', {compilationId: id, status: 'partial', diagnostics, capabilities: unavailableGraphCapabilities});
 }
 function packageArguments(directory, state, configuration, sdk) {
   return ['package', '--sdk', sdk, '--package-path', directory, '--scratch-path', path.join(state, 'build'),
@@ -274,7 +275,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       diagnostics.push(...facts.diagnostics);
       if (droppedDiagnostics) diagnostics.push({code: 'diagnostics_truncated', severity: 'info', path: '', message: `${droppedDiagnostics} additional SwiftPM preparation diagnostics were omitted.`});
       if (!sources.size) diagnostics.push(diagnostic('swiftpm_no_source_inputs', 'No Swift source could be analyzed for this target.', projectPath));
-      send('report', {compilationId: id, status: partial || facts.partial || !sources.size ? 'partial' : 'complete', diagnostics});
+      send('report', {compilationId: id, status: partial || facts.partial || !sources.size ? 'partial' : 'complete', diagnostics, capabilities: facts.capabilities});
     }
   } finally {
     try { if (!client.failure) { await client.request('build/shutdown', {}); client.notify('build/exit', {}); } }

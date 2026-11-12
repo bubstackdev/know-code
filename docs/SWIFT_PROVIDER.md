@@ -4,7 +4,7 @@ Status: a development slice for standalone Swift and SwiftPM symbol/reference in
 
 ## Shared boundaries and supported scope
 
-The Node worker reuses [the shared Protobuf codec](../providers/shared/protocol.mjs), protocol v5, the 8 MiB frame bound, and 128-record fact batches. Its SwiftPM client reuses [the shared compiler-tool JSON-RPC transport](../providers/shared/jsonrpc.mjs) used by the Rust provider. The native helper reads the installed toolchain's public `libIndexStore` C API. It adds no IndexStoreDB database, storage engine, query engine, hosted service, or usage collector. Rust still owns publication, queries, native .NET/Node parity, and saved-file coordination.
+The Node worker reuses [the shared versioned Protobuf codec](../providers/shared/protocol.mjs), the 8 MiB frame bound, and 128-record fact batches. Its SwiftPM client reuses [the shared compiler-tool JSON-RPC transport](../providers/shared/jsonrpc.mjs) used by the Rust provider. The native helper reads the installed toolchain's public `libIndexStore` C API. It adds no IndexStoreDB database, storage engine, query engine, hosted service, or usage collector. Rust still owns publication, queries, native .NET/Node parity, and saved-file coordination.
 
 Standalone saved `.swift` files are grouped by immediate directory under `$swift-inferred:<relative directory>` (`.` at the workspace root). The adapter runs compiler type checking with inferred module settings; those assumptions are visible. Explicit SwiftPM/Xcode ownership excludes files from standalone fallback, including scoped refreshes. Broken explicit settings are never replaced with inference.
 
@@ -13,6 +13,38 @@ SwiftPM creates a separate compilation context for each source-bearing target, i
 Restored dependencies provide compiler inputs and external identities. Their source is not published as project source. Nested/local packages have their own selected package ownership; one package request does not duplicate another package's target facts. Local dependency inputs can still be watched when consumed for accurate binding. Aggregate product targets without source are not separate source compilations.
 
 IndexStore provides compiler USRs, display names, kinds, declarations/references, and containment evidence. Locals and parameters are included. Overloads retain distinct USRs. The initial signature field is the compiler's IndexStore display name, such as `choose(_:)`, rather than a full typed signature; `analysis_options.signatures` states `compiler_index_names_only`. Language-specific display names need not equal the source token at a compiler anchor.
+
+## 0.0.3 relationship checkpoint
+
+The reader now preserves compiler relation roles and related symbol identities,
+kinds and subkinds. The adapter emits calls only for IndexStore `CALL` records
+with an actual callable `CALLEDBY` owner. A function reference without `CALL`
+stays a dependency, not an invocation. Accessor/operator/conversion calls retain
+an implicit label; dynamic compiler bindings remain virtual declarations, not
+proven concrete runtime targets. Source-backed containment, value/type
+dependencies and compiler ancestry feed the same bounded Rust operators as
+the other languages. Per-record deduplication and 128-record batches avoid a
+second in-memory edge graph.
+
+Call, dependency and dispatch capabilities are explicitly partial, separately
+from a healthy compiler report. Unsupported Xcode/SwiftPM planning reports make
+those capabilities unavailable. Cross-project bodies and receiver-specialized
+dispatch proofs are not synthesized from names or USRs.
+
+The [owned raw compiler probe](../.artifacts/implementation-0.0.3/swift-relations-01/result.json)
+exposes an important limit: stored-property initialization, immediate global
+initialization and a deferred stored closure all supply `CALL` with variable/
+property `CONTAINEDBY`, without `CALLEDBY`. Containment alone cannot establish
+when those calls execute. This slice retains their compiler-backed static
+dependencies and reports unavailable execution ownership; it creates no fake
+file initializer or call attributed to later variable use. Filling those
+forms needs reliable additional scope evidence. Implicit calls without usable
+source anchors, complete import coverage and broader dispatch also remain gaps.
+
+That probe built the reader and indexed one frozen owned Swift fixture; it did
+not certify the new graph adapter, common-core integration or installed SDKs.
+The focused Swift tests now request those relationship distinctions; their
+matching build/run evidence must be supplied by the integration owner.
 
 ## SwiftPM planning and preparation
 
@@ -56,7 +88,7 @@ A controlled CLT 6.4.2 probe found inconsistent SwiftPM compiler options for Swi
 
 Central state lives under `KNOW_CODE_DATA_DIR/workers/swift/`, or `~/Library/Application Support/Know Code/workers/swift/`. Per-job IndexStores/spools are removed after ordinary completion/failure; module and package caches are reused. Cache rotation and reclaiming job scratch abandoned by process termination remain unfinished. Commands have a 120-second timeout; worker frames and individual helper records are bounded at 8 MiB. The source payload still occupies one frame. No numeric total-memory cap or estate-scale throughput claim is made.
 
-Xcode `.pbxproj`/workspace planning, full typed signatures/docs, complete macro-expanded document mapping, external generated outputs, custom macro-tool preparation, and call/impact relationships remain gaps. Removing the last compilation in a Swift-only workspace also hits the shared writer's existing empty-publication limitation: prior data stays stale instead of becoming a current empty graph. Mixed-workspace group deletion is covered.
+Xcode `.pbxproj`/workspace planning, full typed signatures/docs, complete macro-expanded document mapping, external generated outputs and custom macro-tool preparation remain gaps. Call/impact extraction has the partial source checkpoint above, not complete language coverage. Removing the last compilation in a Swift-only workspace also hits the shared writer's existing empty-publication limitation: prior data stays stale instead of becoming a current empty graph. Mixed-workspace group deletion is covered.
 
 ## Verification and real repositories
 

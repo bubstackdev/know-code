@@ -86,6 +86,8 @@ reports = [message['report'] for message in initial if 'report' in message]
 assert len(compilations) == 3 and all(c['projectPath'] == 'Package.swift' for c in compilations), compilations
 assert {c['target'] for c in compilations} == {'First', 'Second', 'SecondTests-product'}
 assert all(report['status'] == 'complete' for report in reports), reports
+assert all(report['capabilities']['calls'] == 'partial' and report['capabilities']['dependencies'] == 'partial'
+           and report['capabilities']['project_links'] == 'unavailable' for report in reports)
 assert all(not c['inferred'] and json.loads(c['optionsJson'])['origin'] == 'swiftpm_build_server' for c in compilations)
 assert all(json.loads(c['optionsJson'])['jobs'] == 1 for c in compilations)
 assert any('Package@swift-6.0.swift' in input_path for c in compilations for input_path in c['inputPaths'])
