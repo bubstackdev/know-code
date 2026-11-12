@@ -54,7 +54,7 @@ function analyzeGroup(request, root, projectPath, files, toolchain, scratch) {
 try {
   const request = readRequest();
   const root = path.resolve(request.workspaceRoot);
-  const resolveToolchain = createToolchainResolver();
+  const resolveToolchain = createToolchainResolver({workspaceRoot:root});
   send('provider', {language: 'swift', compilerVersion: 'selected per compilation', runtimeVersion: process.version});
   const canonicalProject = file => canonicalXcodeProject(canonicalManifest(path.resolve(root, file)));
   const projects = [...new Set(request.projects.filter(file => !file.startsWith('$swift-inferred:')).map(canonicalProject))];
