@@ -78,3 +78,16 @@ The extended installed harness must still prove the preload works from the reloc
 Destination: [bubstackdev/know-code](https://github.com/bubstackdev/know-code). The user explicitly authorized taking over the superseded repository and does not want its old history backed up. No old-history fetch, clone, mirror or backup ref is required. Read-only repository/branch-tip inspection confirmed the destination and administrator access; the local `origin` now points there.
 
 Leave the remote unchanged until the candidate is ready. At cutover, recheck remote tips, use an explicit lease for replacement, and retire superseded code refs/releases as appropriate to the authorized takeover. Do not delete unrelated account/repository resources or create backup branches/tags. Preserve the new implementation's source and bind the final tag/release assets to the validated revision. No remote source replacement, release publication or live activation has happened yet.
+
+## Settled-candidate integration checks
+
+The first frozen Debug build at `a350966` passed. Its full integration run stopped on an obsolete C# setup-error assertion. Segmented diagnostic continuations retain every failure and passing prefix under `.artifacts/pretag-wave/final/attempt-01/`; they are not an uninterrupted final-suite pass. Changes since that build have corrected test contracts only:
+
+- Expected solution/configuration/SDK setup failures return unavailable compilation evidence, while healthy sibling projects publish fresh partial results. Tests still require unexpected extraction failures to retain the prior graph as stale.
+- Node request serialization consumes the overall deadline. The old fixture depended on libuv contention, which the bounded native-thread implementation intentionally avoids.
+- Discovery retains a selected physical database behind a logical handle. The fixture now checks that physical file's identity across unwatch/restart, both overlapping parents' suppression, and that a trust grant alone does not enroll a repository.
+- Raw maintenance control in the resource fixture must declare lifecycle capability 4, just like the normal shared control client. Omitting it correctly produces an incompatible-lifecycle error.
+
+Passing diagnostic continuations already include the corrected C# context, partial publication and deadline checks, admission/WAL, recovery/upgrades, MCP/cursors, both workspace APIs, cancellation, response budgets, saved-file updates and coordinator behavior. Resource and later compiler/graph checks continue serially; their per-command summaries remain the authority. A final unchanged source/build/package checkpoint is still required after these corrections settle.
+
+The macOS 15 VM image download uses the pinned Tart/image and dedicated durable store from [VM_VALIDATION.md](VM_VALIDATION.md). Exact Node 24.22.2 and .NET SDK 10.0.403 prerequisite archives have been staged and checked against official digests. No guest has booted and no minimum-OS or normal-security result follows from downloading prerequisites. The user will run their normal video encoders after the final optimized candidate and owned indexes are ready; that signal has not yet been sent.
