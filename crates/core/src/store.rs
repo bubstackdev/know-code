@@ -285,12 +285,13 @@ fn migrate_project_links(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// These child/probe keys are shared by publication and cursor reclamation.
+/// These child/probe keys serve publication, retention and project replacement.
 /// Compatible retained stores need the same repair as newly created stores.
 pub(crate) fn ensure_cleanup_indexes(connection: &Connection) -> Result<()> {
     connection.execute_batch("CREATE INDEX IF NOT EXISTS unit_artifact_owner ON unit_artifacts(owner_generation,artifact_id);
         CREATE INDEX IF NOT EXISTS artifact_content ON artifacts(content_hash);
-        CREATE INDEX IF NOT EXISTS generation_unit_owner ON generation_units(owner_generation,compilation_id);")?;
+        CREATE INDEX IF NOT EXISTS generation_unit_owner ON generation_units(owner_generation,compilation_id);
+        CREATE INDEX IF NOT EXISTS compilation_project ON compilations(project_path,id);")?;
     Ok(())
 }
 
@@ -1539,6 +1540,10 @@ mod cleanup_index_tests {
         ensure_cleanup_indexes(&connection).unwrap();
         ensure_cleanup_indexes(&connection).unwrap();
         for (query, index) in [
+            (
+                "SELECT id FROM compilations WHERE project_path='project.csproj'",
+                "compilation_project",
+            ),
             (
                 "SELECT 1 FROM unit_artifacts WHERE owner_generation=1 AND artifact_id='live'",
                 "unit_artifact_owner",
