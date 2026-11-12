@@ -15,6 +15,8 @@ pub const SCHEMA_VERSION: i32 = 8;
 pub const READABLE_FORMATS: &[i32] = &[2, 3, 4, 5, 6, 7, 8];
 pub const MIGRATION_FORMATS: &[i32] = &[3, 4, 5, 6, 7];
 pub const REBUILD_FORMATS: &[i32] = &[1, 2];
+// Bound maintenance cadence, not bytes: payloads and pinned-reader WAL vary.
+const STAGING_CHECKPOINT_PAYLOADS: u8 = 64;
 
 struct WriterFence(File);
 impl Drop for WriterFence {
@@ -43,7 +45,11 @@ pub struct CheckpointProgress {
 
 fn checkpoint(connection: &Connection) -> Result<CheckpointProgress> {
     connection.busy_timeout(Duration::ZERO)?;
-    match connection.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+    checkpoint_query(connection, "PRAGMA wal_checkpoint(TRUNCATE)")
+}
+
+fn checkpoint_query(connection: &Connection, statement: &str) -> Result<CheckpointProgress> {
+    match connection.query_row(statement, [], |row| {
         Ok(CheckpointProgress {
             busy: row.get(0)?,
             log_frames: row.get(1)?,
@@ -317,6 +323,8 @@ pub struct Writer {
     pub generation: u64,
     published: bool,
     health: Option<crate::recovery::IndexReadGuard>,
+    control: crate::resource::Control,
+    staged_payloads: u8,
 }
 
 impl Writer {
@@ -479,6 +487,8 @@ impl Writer {
             generation,
             published: false,
             health: health.clone(),
+            control: control.clone(),
+            staged_payloads: 0,
         })
         })
         })();
@@ -493,12 +503,33 @@ impl Writer {
         if let Some(health) = &self.health {
             health.check()?;
         }
-        let result = self.stage_inner(payload);
+        let result = self
+            .stage_inner(payload)
+            .and_then(|()| self.maintain_staging());
         if let Some(health) = &self.health {
             crate::index_result(health, result)
         } else {
             result
         }
+    }
+
+    fn maintain_staging(&mut self) -> Result<()> {
+        self.staged_payloads += 1;
+        if self.staged_payloads < STAGING_CHECKPOINT_PAYLOADS {
+            return Ok(());
+        }
+        self.staged_payloads = 0;
+        // The payload transaction has committed, and no publication/cursor
+        // fence is held here. PASSIVE never waits for a reader or invokes its
+        // busy handler; keep the writer's existing busy policy unchanged.
+        self.control
+            .interruptible(self.connection.get_interrupt_handle(), || {
+                if let Some(health) = &self.health {
+                    health.check()?;
+                }
+                checkpoint_query(&self.connection, "PRAGMA wal_checkpoint(PASSIVE)")?;
+                Ok(())
+            })
     }
 
     fn stage_inner(&mut self, payload: envelope::Payload) -> Result<()> {
@@ -1000,9 +1031,7 @@ mod checkpoint_tests {
             .unwrap();
         let mut peak = 0;
         for number in 0..256 {
-            writer
-                .stage(staged_document(number, 256 * 1024))
-                .unwrap();
+            writer.stage(staged_document(number, 256 * 1024)).unwrap();
             peak = peak.max(wal_bytes(&path));
         }
         // This finite fixture stages over 64 MiB, without a pinned reader.
@@ -1015,7 +1044,10 @@ mod checkpoint_tests {
                 .unwrap(),
             1777
         );
-        assert!(Writer::open(&path).is_err(), "checkpoint retired active writer");
+        assert!(
+            Writer::open(&path).is_err(),
+            "checkpoint retired active writer"
+        );
         let old = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
         assert_eq!(old.generation, generation);
         assert_eq!(source(&old), "old");
@@ -1025,6 +1057,84 @@ mod checkpoint_tests {
         let current = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
         assert_eq!(current.generation, published);
         assert_eq!(source(&current), "next");
+    }
+    #[test]
+    fn staging_checkpoint_keeps_pinned_reader_then_reuses_wal_after_release() {
+        let path = managed();
+        let scope =
+            crate::admission::AdmissionScope::at(path.parent().unwrap().join("scope")).unwrap();
+        let held = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        let generation = held.generation;
+        assert_eq!(source(&held), "old");
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, "next", true);
+        for number in 0..128 {
+            writer.stage(staged_document(number, 64 * 1024)).unwrap();
+        }
+        let pinned = wal_bytes(&path);
+        assert!(
+            pinned > 4 * 1024 * 1024,
+            "reader did not retain staging WAL"
+        );
+        assert_eq!(held.generation, generation);
+        assert_eq!(source(&held), "old");
+        drop(held);
+        let mut peak = pinned;
+        for number in 128..512 {
+            writer.stage(staged_document(number, 64 * 1024)).unwrap();
+            peak = peak.max(wal_bytes(&path));
+        }
+        assert!(
+            peak <= pinned + 8 * 1024 * 1024,
+            "released reader did not allow staging WAL reuse: {pinned} -> {peak}"
+        );
+        let published = writer.publish().unwrap();
+        let current = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        assert_eq!(current.generation, published);
+        assert_eq!(source(&current), "next");
+    }
+    #[test]
+    fn staging_checkpoint_preserves_typed_stop_and_storage_errors_without_publication() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        for cancelled in [false, true] {
+            let path = managed();
+            let control = crate::resource::Control::test_managed();
+            let mut writer = Writer::open_controlled(&path, None, &control).unwrap();
+            populate(&mut writer, "next", true);
+            let fired = Arc::new(AtomicBool::new(false));
+            let called = fired.clone();
+            let stop = control.clone();
+            writer
+                .connection
+                .authorizer(Some(move |action: AuthContext<'_>| {
+                    if matches!(action.action, AuthAction::Pragma { pragma_name: "wal_checkpoint", pragma_value: Some(value) } if value.eq_ignore_ascii_case("passive")) {
+                        called.store(true, Ordering::Release);
+                        if cancelled {
+                            assert!(stop.cancel());
+                        } else {
+                            return Authorization::Deny;
+                        }
+                    }
+                    Authorization::Allow
+                }))
+                .unwrap();
+            let error = (0..128)
+                .find_map(|number| writer.stage(staged_document(number, 64)).err())
+                .expect("checkpoint did not observe the controlled failure");
+            assert!(fired.load(Ordering::Acquire));
+            if cancelled {
+                assert!(matches!(error, Error::Cancelled), "{error}");
+            } else {
+                assert!(matches!(error, Error::Sqlite(_)), "{error}");
+            }
+            drop(writer);
+            assert!(!crate::recovery::is_bad(&path).unwrap());
+            let scope =
+                crate::admission::AdmissionScope::at(path.parent().unwrap().join("scope")).unwrap();
+            let current = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+            assert_eq!(current.generation, 1);
+            assert_eq!(source(&current), "old");
+        }
     }
     #[test]
     fn writer_retirement_unlocks_duplicated_fence_after_publish_and_abort() {
