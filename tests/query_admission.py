@@ -150,6 +150,9 @@ try:
  ffi.kc_workspace_json.argtypes=[ctypes.c_char_p];ffi.kc_workspace_json.restype=ctypes.c_void_p
  ffi.kc_string_free.argtypes=[ctypes.c_void_p];ffi.kc_string_free.restype=None
  assert ffi.kc_query_contract_version()==9 and ffi.kc_query_max_request_bytes()==262144
+ raw=dotnet('--raw-request-validation',RUN/'raw-missing.db',RUN/'raw-scope',FFI)
+ assert raw['passed'],raw
+ CHECKS.append('managed_raw_request_encoding_precedes_native_admission_and_preserves_valid_JSON')
  policy=value('queries')['result'];assert policy=={'version':1,'max_active_queries':4},policy
  assert value('queries','--scope',SCOPE)['result']==policy
  guard_and_slots=[SCOPE/'policy.lock',*[SCOPE/f'slot-{i:02}.lock' for i in range(4)]]

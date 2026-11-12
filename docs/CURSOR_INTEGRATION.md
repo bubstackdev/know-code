@@ -1,5 +1,8 @@
 # Portable cursor integration contract
 
+Current stabilization update (2026-11-12): compact coordination and calculated worst-status page headroom supersede the earlier zero-headroom packing behavior. See [the current query contract](QUERY_LIFECYCLE.md#current-stabilization-contract--2026-11-12). Native/cursor capability checks reject incompatible producers; stored page-format changes require restarting old cursors, never silently repacking a served cursor or dropping evidence. The original integration checkpoints below remain historical evidence.
+
+
 Status: assembled integration passed focused current-host Debug validation at `a24d1ce`; see the checkpoint below. The accepted lifecycle, quotas, replay and compute-once decisions are in QUERY_LIFECYCLE.md. The user accepted a separate `page_size`; `limit` stays the total result cap. This wave must make the existing primitives usable through the common core, not claim success from helper-only tests.
 
 ## Request and result shape

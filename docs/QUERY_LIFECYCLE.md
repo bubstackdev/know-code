@@ -1,5 +1,14 @@
 # Query deadlines, cancellation and pagination
 
+## Current stabilization contract — 2026-11-12
+
+Published v0.0.1 is the baseline; older checkpoint/version statements below retain their original dates and evidence. For 0.0.2 the user accepted compact query coordination metadata. `result.coordination` contains workspace/database identities, observed/published epochs and generation, availability, bounded phase/outcome tokens, `has_error` and `status_limited`. Full workspace settings, progress and error text remain available through workspace status. Compiler coverage, diagnostics, graph paths/proofs, target provenance and indexed source are not removed by this projection.
+
+Phase/outcome tokens are limited to 32 ASCII lowercase/digit/underscore bytes; unknown or unrepresentable values are labeled `unknown` with `status_limited`, rather than allowing growing control payloads into every query. Normal query identities reflect the served workspace. Cursor replies preserve the identities captured with their indexed locations while exposing live numeric/status fields.
+
+Page planning reserves the calculated worst live metadata size, including maximum integer widths and freshness spelling. An otherwise valid page remains readable at its admitted byte budget when status grows; lowering a later request's cap can still produce `response_limit_exceeded`. Atomic findings, paths, coverage and source are never split or silently dropped to force a fit. The native query and cursor-control contracts advance with the private page format; [source constants](../crates/core/src/execution.rs) and [cursor service](../crates/core/src/cursor/service.rs) define the current values. Incompatible producers/readers return update-required/invalidation before reinterpreting old zero-headroom pages. Worker framing and fact-store format are unchanged.
+
+
 Status: overall deadline and complete core response-cap slices have passed focused Debug validation. Coordinator-owned portable cursors, streamed saved results, pinned page/source/context reads and shared retention are now assembled and under focused validation; see CURSOR_INTEGRATION.md. This is not final candidate certification. Accepted decisions are requirements, not real-time guarantees. See [release criteria Q11/Q12 and S04](RELEASE_ACCEPTANCE.md).
 
 ## Accepted outcome at the overall deadline

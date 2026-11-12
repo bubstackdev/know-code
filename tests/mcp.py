@@ -208,7 +208,9 @@ try:
                       ('symbol_context','symbol_context',{'symbol_id':target['id']}),('read_source','source',{'artifact_id':location['artifact_id']}),
                       ('coverage_details','coverage',guard)]:
   options=dict(args,source_max_bytes=1);tool,rejected=c.tool(name,options)
-  assert tool['isError'] and rejected['error']['code']=='invalid_request' and rejected==equivalent(dict(options,op=op)),rejected
+  native=equivalent(dict(options,op=op))
+  assert tool['isError'] and rejected['error']['code']==native['error']['code']=='invalid_request',rejected
+  assert name in rejected['error']['message'] and 'source_max_bytes' in rejected['error']['message'],rejected
  checks+=['graph_source_focused_structured_native_parity_default_off_and_contexts_on_findings_only',
           'tiny_graph_source_cap_preserves_findings_and_saved_UTF8_source_identity',
           'graph_only_source_budget_validation_is_shared']

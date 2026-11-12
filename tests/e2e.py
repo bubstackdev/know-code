@@ -7,6 +7,7 @@ import atexit
 import concurrent.futures
 import json
 import os
+from cli_assertions import check_exit
 from pathlib import Path
 import shutil
 import sqlite3
@@ -44,8 +45,8 @@ linked_ts.write_text('export const linkedOwned = 7;\n')
 def run(arguments, success=True):
     process = subprocess.run([str(a) for a in arguments], cwd=ROOT, env=ENV,
                              capture_output=True, text=True, timeout=120)
-    if success and process.returncode:
-        raise AssertionError(f'{arguments}\n{process.stdout}\n{process.stderr}')
+    if success:
+        check_exit(process, arguments)
     if not success:
         assert process.returncode, 'invalid worker input unexpectedly published'
     return process

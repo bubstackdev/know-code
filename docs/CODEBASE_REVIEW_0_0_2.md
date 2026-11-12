@@ -43,3 +43,9 @@ The root's initial focused MCP transport run passed all12 existing bounded owner
 ## Compact query status decision
 
 On 2026-11-12 the user accepted compact query freshness/status metadata, with full workspace configuration available through workspace_status. Compiler coverage and graph evidence remain in query results. This is being implemented through the common Rust result/page path, including bounded live metadata and page headroom, so a valid maximum-size page cannot become unreadable merely because live status grows. Native/cursor compatibility must explicitly reject incompatible page contracts; this does not change worker framing or stored facts.
+
+## First assembled checkpoint
+
+Source `9b23c25691fccd89edb37a590514754c4e4e3429` passes all266 Rust workspace tests (two explicit manual/coordinator-supplied probes remain ignored) and matching Debug build. Focused compiler/native source parity, primary-constructor call evidence, all-four-API compact response/cursor checks, cursor lifecycle, MCP37, query admission/cancellation, dependency preparation, experimental Rust navigation, coordinator and resources pass. Node/header/source/navigation/Swift-toolchain and one pinned npm cache-tamper/offline cell also pass. Exact command/source receipts are under `.artifacts/snow-leopard/wave-01/`; this is not final Debug/optimized/package certification for later edits.
+
+Preserved failed attempts include the first C# local-pattern name collision (corrected), an operator test run before resolving a cherry-pick conflict, two Rust fixture assertions (corrected without weakening artifact validation), and outdated end-to-end/MCP assertions for intentionally changed CLI/tool errors. Passing focused reruns do not relabel those original attempts as green. The later registry/version, optional mask-index retirement, raw managed request guard and actual previous-native matrix require a refreshed matching build and their own checks before a broad checkpoint.
