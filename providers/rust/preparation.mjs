@@ -9,7 +9,7 @@ const exists = filename => { try { return fs.statSync(filename).isFile(); } catc
 // opened file's size and one extra byte so growth cannot allocate without bound.
 const SETUP_FILE_BYTES = 8 * 1024 * 1024;
 const PLAN_BYTES = 8 * 1024 * 1024;
-function boundedRead(filename, limit) {
+export function boundedRead(filename, limit) {
   const descriptor = fs.openSync(filename, 'r');
   try {
     const stat = fs.fstatSync(descriptor);

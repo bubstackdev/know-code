@@ -33,6 +33,34 @@ owns change reconciliation and scheduling. These are not complete Cargo input
 or environment fingerprints: external path dependencies, configuration changes
 outside these paths and generated inputs need further work.
 
+## Compiler-context planning checkpoint
+
+The user accepted Cargo-check capture followed by separate rust-analyzer
+selected-root graphs as the production direction. The finite probe receipts
+in the current integration documentation establish only their declared fixture
+cases; they do not certify general cfg/input replay or production publication.
+
+`contexts.mjs` and the managed-planner-only `capture.mjs` begin that boundary.
+They are not yet routed from the worker. Captured units require successful
+compiler status, exact Cargo/rustc artifact joins, emitted dep-info membership,
+matching pre-compilation input hashes and content-bound outputs. Unknown
+argument/dep-info forms are explicit gaps. Actual compiler queries determine
+effective cfg and the corresponding target baseline; a graph is refused when
+reachable crates need different global cfg removals or consume the same Rust
+source under different contexts. The compiler must match its analyzer sysroot
+compiler. A Cargo package ID remains opaque; extern artifact paths supply
+dependency joins, and only Cargo workspace members may own source facts.
+
+The initial capture helper refuses unexpected application/test linking before
+execution, while metadata-selected build-script/proc-macro tooling roots may
+produce required tools. Its input inventory is supplied by the eventual managed
+planner. General inventory/wrapper/configuration guards, generated inputs,
+procedural-macro replay, cache orchestration and worker routing remain unfinished.
+The focused `tests/rust_contexts.mjs` fixture exercises actual profile/feature cfg
+replay, module/include inputs, cache content checks, shared-source ambiguity and
+failed-unit exclusion when the shared build owner runs it. Source checks alone
+do not establish that those runtime assertions pass.
+
 ## Semantic evidence
 
 The adapter initializes a local rust-analyzer process for each selected Cargo
