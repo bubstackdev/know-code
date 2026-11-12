@@ -158,6 +158,51 @@ planner or preparation request was sent through it to a user project.
 Recommendation for the next experiment: make a pinned BSP bridge an optional
 separate prerequisite, detect its executable/service pair and compatibility,
 and prove explicit configured-target selection before considering distribution.
+
+## v0.0.3 guarded preparation checkpoint (2026-11-12)
+
+The integrator built a separately owned copy of the same pinned bridge with a
+small mandatory request patch, leaving reference source and the earlier runtime
+unchanged. Before description/preparation, both global and every configured
+target carry `action=indexbuild`, `INDEX_DISABLE_SCRIPT_EXECUTION=YES` and
+`INDEX_FORCE_SCRIPT_EXECUTION=NO`; the request uses indexing-only preparation.
+The hostile fixture deliberately requests opposite script settings at project
+and target levels and declares a generated Swift output. This is a qualification
+experiment, not adoption, installation or supported production Xcode analysis.
+
+The [guard receipt](../.artifacts/implementation-0.0.3/xcode-guard-qualification-01/result.json)
+passed sequential device and simulator sessions. Independent exact bridge and
+actual retained SwiftBuild requests preserve all script guards; compiler options
+carry `arm64-apple-ios27.0` and `arm64-apple-ios27.0-simulator`, respectively.
+The phase/scheme markers, generated Swift output, object files and app/test
+product files stayed absent. Notifications were retained without truncation.
+
+The [dependency receipt](../.artifacts/implementation-0.0.3/xcode-dependency-qualification-01/result.json)
+also passed both contexts. The planner reports the actual app-to-framework
+target dependency and preparation produces the dependency's real platform
+Swift module without a framework binary or app/test product. Retained logs
+include successful preparation and build terminal events. These tiny owned
+fixtures establish a useful safety/module-preparation boundary; they do not
+establish selected-scheme correspondence, real-corpus graph extraction,
+installed distribution, or a public resource/performance guarantee.
+
+The selected shared scheme's **Test action configuration** is the accepted
+configuration for app, dependencies and tests. Do not expand its Run
+configuration or silently substitute an unrelated configuration when Test
+action/configuration is missing. A separate prepared selector verifies native
+`ReferencedContainer`/`BlueprintIdentifier` against the saved PBX target and
+an exact compiler-exported PIF project's path/target-signature membership,
+requiring unique target names inside that project. It copies planner GUIDs
+opaquely; it does not reconstruct IDs or match targets across projects. That
+selector still requires actual compilation and exported-PIF qualification.
+
+Preparation failure remains a production integration concern: the pinned
+`SWBBuildServer.prepare` returns an empty RPC result after completion even when
+the underlying build event reports failure. Its event logger emits `Build
+Failed` as an ordinary type-4 message. Both retained checkpoints above have
+successful terminal events, but RPC success alone must never certify warm
+module preparation or hide failed generated/dependency inputs. Preserve those
+failures as explicit coverage evidence before publishing any partial graph.
 Keep the existing SwiftPM/standalone path independent. Do not adopt this bridge
 as a dependency merely because its architecture fits: the checked revision has
 not passed the fixture, module-only preparation or real-corpus gates. Bundled
