@@ -81,6 +81,59 @@ fn populate(writer: &mut Writer, text: &str) {
 }
 
 #[test]
+fn rust_context_policy_backfills_legacy_views_without_retrying_current_gaps() {
+    let path = database();
+    let stage = |writer: &mut Writer, id: &str, language: &str, options: &str| {
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: id.into(),
+                language: language.into(),
+                project_path: "Cargo.toml".into(),
+                options_json: options.into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: id.into(),
+                status: "partial".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+    };
+    let mut writer = Writer::open(&path).unwrap();
+    stage(
+        &mut writer,
+        "legacy",
+        "rust",
+        r#"{"provider":"rust-analyzer-lsp"}"#,
+    );
+    let legacy = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (legacy, true));
+
+    let mut writer = Writer::open(&path).unwrap();
+    stage(
+        &mut writer,
+        "unit",
+        "rust",
+        r#"{"rustContextPolicy":1,"context":{}}"#,
+    );
+    stage(
+        &mut writer,
+        "unavailable",
+        "rust",
+        r#"{"rustContextPolicy":1,"context":"unavailable"}"#,
+    );
+    let current = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (current, false));
+
+    let mut writer = Writer::open(&path).unwrap();
+    stage(&mut writer, "other-provider", "swift", "{}");
+    let other = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (other, false));
+}
+
+#[test]
 fn published_readers_keep_matching_source_across_replacement() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();

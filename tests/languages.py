@@ -118,7 +118,11 @@ coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full', 'detai
 assert {item['language'] for item in coverage} == {'typescript', 'csharp', 'rust', 'swift'}, coverage
 assert all(item['status'] == 'partial' for item in coverage if item['language'] == 'rust'), coverage
 assert all(item['status'] == 'complete' for item in coverage if item['language'] != 'rust'), coverage
-rust_contexts = [item for item in coverage if item['language'] == 'rust']
+rust_coverage = [item for item in coverage if item['language'] == 'rust']
+assert all(item['analysis_options']['rustContextPolicy'] == 1 for item in rust_coverage), rust_coverage
+rust_contexts = [item for item in rust_coverage if isinstance(item['analysis_options']['context'], dict)]
+rust_summaries = [item for item in rust_coverage if item not in rust_contexts]
+assert all(item['analysis_options']['context'] == 'workspace-summary' for item in rust_summaries), rust_summaries
 # This fixture declares a single library with its ordinary and test compiler
 # units. Tooling/build-script units supply preparation, not duplicate bodies.
 assert len(rust_contexts) == 2, rust_contexts
@@ -206,7 +210,8 @@ rust.write_text(rust.read_text() + '\n// saved Rust change\n')
 generation = wait(generation)
 after = owners()
 rust_units = {key for key in before if key.startswith('rust:')}
-assert len(rust_units) == 2 and {key for key in after if key.startswith('rust:')} == rust_units
+assert rust_units == {item['compilation_id'] for item in rust_coverage}
+assert {key for key in after if key.startswith('rust:')} == rust_units
 assert all(after[key] != before[key] for key in rust_units)
 assert all(after[key] == value for key, value in before.items() if not key.startswith('rust:'))
 

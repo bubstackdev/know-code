@@ -160,3 +160,64 @@ existing Swift provider check; unknown failure text still remains an error.
 The original receipts retain the conservative false-error reports.
 Sampled aggregate compiler/probe RSS stayed around 638–645 MiB; these samples
 are neither hard limits nor true peaks.
+
+The combined `rust-contexts` catalog passes at `ab992a6`
+(`wave-01/rust-contexts-catalog-03/`, approximately 11 seconds). It includes
+nonblocking FIFO rejection, atomic derived-cache replacement, partial-write
+cleanup, unsupported jobserver refusal, compiler cfg/input/artifact planning
+and collection reuse/failure cases. Independent review also bound reuse to PATH
+and this Cargo invocation's selected compiler. Cargo's public compiler-info
+cache control supplies a current tool query while retaining compilation reuse.
+`--keep-going` lets healthy units finish after a failing sibling context. The
+two intermediate failed catalog receipts remain: the first exposed cached tool
+queries causing recapture; the second exposed Cargo's early-stop ordering.
+Cargo-injected nonstandard environment inputs still conservatively prevent
+reuse when their effective origin cannot be proven. Selected-root worker
+routing and procedural-macro graph replay remain subsequent gates.
+
+The private Xcode manifest-cache bypass experiment failed option parsing
+(`xcode-package-cache-04/`); it is not a supported mechanism. The next experiment
+allows the normal compiler manifest-cache subtree while continuing to deny
+global dependency repositories/checkouts/artifacts, original source, network
+and seed fallback in the missing-cache phase. Missing owned clones must fail;
+restored owned clones must succeed. This revised scope checks dependency-source
+independence explicitly and does not claim complete compiler-cache isolation.
+
+The separate library-evolution fixture verified active compiler shortcuts and
+then exposed missing local-to-private body calls in the preserved-options run
+(`xcode-evolution-graph-preserve-01/`). Removing only the three observed paired
+indexing shortcuts restored the required calls/value references on both
+platforms; independent body-error extraction also retained the real diagnostic,
+partial coverage and no invented symbol. Evidence:
+`xcode-evolution-plan-01/`, `xcode-evolution-graph-full-body-01/`,
+`xcode-evolution-body-error-plan-01/` and
+`xcode-evolution-body-error-full-01/`. Body extraction will use the shared
+argument helper to remove these action shortcuts while retaining selected SDK,
+target, language, conditions and imports. Fast module preparation is unchanged.
+Different cache warmth makes these runs unsuitable as a performance comparison.
+The bridge remains an unadopted research runtime.
+
+The selected-root Rust worker gate passes at `4ea97fa`
+(`wave-01/rust-context-worker-01/`, approximately 25 seconds): five actual
+normal/test library, binary and integration contexts, exact cfg-selected call
+and declaration bytes, root-only facts, lookup-only dependencies, safe
+builtin-derive/macro omissions, stable unit identities on save and reused
+dependency setup. Proc-macro replay is still a separate gate.
+
+Independent review found that unchanged old combined Rust views could bypass
+analysis after startup. The existing common readiness/backfill path now checks
+`optionsJson.rustContextPolicy=1`; selected units and unavailable/summary rows
+stamp that marker. Old evidence triggers ordinary bounded reanalysis, while a
+current unavailable row does not trigger an expensive retry loop. All 20
+publication tests and strict workspace Clippy pass with the core change
+(`wave-01/{publication-policy-backfill-02,provider-policy-clippy-01}/`). Cargo
+workspace diagnostics are preserved on explicitly scoped coverage rows rather
+than attributed as compiler failures to every healthy unit. The native language
+fixture now selects a normal Rust context for graph assertions and separately
+checks both contexts, shared source storage and saved invalidation.
+
+The integrated shared Swift normalizer itself passes healthy and body-error
+library-evolution checks on both platforms, without a second research-layer
+flag removal (`xcode-evolution-normalizer-01/` and
+`xcode-evolution-normalizer-body-error-01/`). Matching assembled artifacts and
+SwiftPM/native regression checks remain the next integration checkpoint.

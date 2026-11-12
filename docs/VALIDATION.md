@@ -104,6 +104,7 @@ The `rust-contexts` extended check runs owned compiler-context planning and
 collection/cache fixtures after changes to Rust capture, cfg/input/artifact
 proof or analyzer-project construction. It uses installed Cargo/rustc and
 durable local fixtures, without a native product build or hosted downloads.
-It covers warm reuse, include edits, replaced artifacts and failed-unit
-isolation; selected-root worker and native graph parity remain separate gates.
+It covers warm reuse, include edits, replaced artifacts, failed-unit isolation
+and actual selected-root worker graphs/save behavior. Native graph parity
+remains a separate gate.
 It is intentionally excluded from routine quick and core checks.

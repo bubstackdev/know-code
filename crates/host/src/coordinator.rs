@@ -1541,13 +1541,13 @@ fn execute(
             });
         }
         let changes = workspace::differences(&job.inputs, &before);
-        let (recovered, classification_backfill) = if candidate.is_some() {
+        let (recovered, policy_backfill) = if candidate.is_some() {
             (0, false)
         } else {
             selected_readiness(database)?
         };
         if !job.force
-            && !classification_backfill
+            && !policy_backfill
             && changes.is_empty()
             && recovered != 0
             && recovered == job.previous_generation
@@ -1571,7 +1571,7 @@ fn execute(
             // actual analysis, while an unchanged failed snapshot must stay failed.
         }
         let scopes = if job.force
-            || classification_backfill
+            || policy_backfill
             || !job.previous_error.is_empty()
             || recovered == 0
             || recovered != job.previous_generation
