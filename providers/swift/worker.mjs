@@ -7,6 +7,7 @@ import {relative, hash, run, sourceFile, compilerDiagnostics, ingestStore} from 
 import {canonicalManifest, analyzePackage} from './swiftpm.mjs';
 import {createToolchainResolver} from './toolchain.mjs';
 import {canonicalXcodeProject, analyzeXcode} from './xcode.mjs';
+import {swiftAnalysisPolicy} from './policy.mjs';
 function within(file, directory) {
   const rel = path.relative(directory, file);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
@@ -53,9 +54,11 @@ function analyzeGroup(request, root, projectPath, files, toolchain, scratch) {
 }
 try {
   const request = readRequest();
+  const policy = swiftAnalysisPolicy(request);
   const root = path.resolve(request.workspaceRoot);
   const resolveToolchain = createToolchainResolver({workspaceRoot:root});
-  send('provider', {language: 'swift', compilerVersion: 'selected per compilation', runtimeVersion: process.version});
+  send('provider', {language: 'swift', compilerVersion: 'selected per compilation', runtimeVersion: process.version,
+    analysisPolicyVersion: 1});
   const canonicalProject = file => canonicalXcodeProject(canonicalManifest(path.resolve(root, file)));
   const projects = [...new Set(request.projects.filter(file => !file.startsWith('$swift-inferred:')).map(canonicalProject))];
   const configured = [...new Set(request.configuredProjects.filter(file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file)) || ['project.pbxproj', 'contents.xcworkspacedata'].includes(path.basename(file))).map(canonicalProject))];
@@ -79,7 +82,7 @@ try {
         await analyzePackage({request, root, project, toolchain, work, scratch});
         continue;
       }
-      await analyzeXcode({request, root, project, toolchain, work, scratch});
+      await analyzeXcode({request, root, project, toolchain, work, scratch, policy});
     }
     for (const [group, files] of [...groups].sort(([a], [b]) => a.localeCompare(b)))
       analyzeGroup(request, root, group, files.sort(), resolveToolchain(path.dirname(files[0])), scratch);

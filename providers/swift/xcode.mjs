@@ -12,9 +12,10 @@ export function canonicalXcodeProject(file) {
   return file;
 }
 
-export async function analyzeXcode({request, root, project, toolchain}) {
+export async function analyzeXcode({request, root, project, toolchain, policy}) {
   const projectPath = relative(root, project), id = `swift:${projectPath}`;
   const inputs = [project, ...toolchain.inputPaths];
+  if (policy?.schemePath) inputs.push(policy.schemePath);
   if (path.basename(project) === 'project.pbxproj') {
     const schemes = path.join(path.dirname(project), 'xcshareddata', 'xcschemes');
     if (fs.existsSync(schemes))
@@ -23,6 +24,7 @@ export async function analyzeXcode({request, root, project, toolchain}) {
   send('compilation', {id, language: 'swift', projectPath, compilerVersion: toolchain.version,
     configuration: request.configuration, inputPaths: [...new Set(inputs)], optionsJson: JSON.stringify({
       origin: 'xcode', supported: false, compilerPath: toolchain.compiler,
+      selectedSchemePath: policy?.schemePath ? relative(root, policy.schemePath) : null,
       toolchainSelection: toolchain.selection, requiredPlatforms: ['iphoneos', 'iphonesimulator'],
       planner: 'reliable_configured_target_planner_required', preparation: 'not_run'
     })});

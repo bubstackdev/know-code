@@ -74,6 +74,16 @@ Ordinary compiler errors publish valid partial facts with diagnostics. Missing p
 
 ## Toolchains, state, and limits
 
+The v0.0.3 worker consumes the coordinator's typed Swift analysis-policy branch
+at version 1. An optional `scheme_path` must identify an existing, absolute,
+normalized `.xcscheme` file; wrong branches/versions and invalid paths fail before
+provider acknowledgment or tooling. Legacy requests without policy retain their
+low-level behavior. The explicit saved path participates in Xcode input evidence
+and reported selection. Actual shared-scheme membership, automatic sole-scheme
+selection and planner target/configuration mapping remain required Xcode work;
+accepting a policy path does not establish a supported Xcode graph. The shared
+schema/settings integration is owned by the integrator.
+
 The worker requires separately installed Swift 6.x, its matching `libIndexStore.dylib`, an Apple SDK, and the existing Node runtime. The tested compiler is Apple Swift 6.4.2; other Swift 6 versions are not validated and Swift 5/7 are rejected. No compiler or version manager is installed or invoked to download a compiler.
 
 [Toolchain selection](../providers/swift/toolchain.mjs) is scoped to each package or standalone directory. Explicit `DEVELOPER_DIR`/`TOOLCHAINS` overrides win over automatic discovery and must satisfy any repository pin; conflicts and missing overrides fail with an actionable error. An explicit `SDKROOT` also retains the active developer context unless another override selects it; automatic Xcode preference does not replace an existing SDK choice. `SWIFT_EXEC`/`SWIFT_EXEC_MANIFEST` may confirm the selected compiler; a different executable requires selecting its matching installed toolchain with those standard overrides, rather than silently mixing compiler sets. Environment overrides apply to the worker/coordinator process; setting one only in a query consumer does not reconfigure an already running coordinator.

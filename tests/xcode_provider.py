@@ -29,12 +29,14 @@ def inventory():
                        'ctimeNs': file.stat().st_ctime_ns} for file in files}
 
 
-def invoke(name):
+def invoke(name, policy=None):
     configs = ['Probe.xcodeproj/project.pbxproj',
                'Probe.xcodeproj/project.xcworkspace/contents.xcworkspacedata']
     request = {'workspaceRoot': str(WORKSPACE), 'projects': configs,
                'configuredProjects': configs, 'looseSources': ['App.swift', 'UITests.swift'],
                'configuration': 'Debug', 'preparationFingerprint': name, 'preparations': []}
+    if policy is not None:
+        request['analysisPolicy'] = policy
     process = subprocess.run(['node', ROOT / 'tests/worker_harness.mjs', ROOT / 'providers/swift/worker.mjs'],
                              cwd=ROOT, env=ENV, input=json.dumps(request), capture_output=True, text=True, timeout=120)
     assert process.returncode == 0, process.stderr
@@ -43,6 +45,7 @@ def invoke(name):
     assert result['code'] == 0, result['stderr']
     messages = result['messages']
     assert messages[-1]['complete']['success']
+    assert messages[0]['provider']['analysisPolicyVersion'] == 1
     compilations = [message['compilation'] for message in messages if 'compilation' in message]
     reports = [message['report'] for message in messages if 'report' in message]
     assert len(compilations) == len(reports) == 1, messages
@@ -53,6 +56,8 @@ def invoke(name):
     options = json.loads(compilation['optionsJson'])
     assert not options['supported'] and options['requiredPlatforms'] == ['iphoneos', 'iphonesimulator']
     assert options['preparation'] == 'not_run'
+    assert options['selectedSchemePath'] == ('Probe.xcodeproj/xcshareddata/xcschemes/Probe.xcscheme'
+                                            if policy and policy.get('swift', {}).get('schemePath') else None)
     assert str(PROJECT / 'xcshareddata/xcschemes/Probe.xcscheme') in compilation['inputPaths']
     assert reports[0]['compilationId'] == compilation['id'] and reports[0]['status'] == 'partial'
     assert reports[0]['capabilities']['calls'] == reports[0]['capabilities']['dependencies'] == 'unavailable'
@@ -67,6 +72,27 @@ before = inventory()
 initial_id = invoke('initial-gap')
 assert inventory() == before
 scheme = PROJECT / 'xcshareddata/xcschemes/Probe.xcscheme'
+assert invoke('selected-scheme-gap', {'version': 1, 'swift': {'schemePath': str(scheme)}}) == initial_id
+assert invoke('automatic-scheme-policy-gap', {'version': 1, 'swift': {}}) == initial_id
+assert inventory() == before
+# Unsupported policy/path inputs must fail before provider acknowledgment or
+# compiler/planner work; opening a workspace must not silently ignore selection.
+for label, policy in [
+    ('wrong-version', {'version': 2, 'swift': {}}),
+    ('wrong-branch', {'version': 1, 'node': {'cacheDirectory': str(RUN)}}),
+    ('relative-scheme', {'version': 1, 'swift': {'schemePath': 'Probe.xcscheme'}}),
+    ('missing-scheme', {'version': 1, 'swift': {'schemePath': str(WORKSPACE / 'Missing.xcscheme')}}),
+]:
+    request = {'workspaceRoot': str(WORKSPACE), 'analysisPolicy': policy}
+    process = subprocess.run(['node', ROOT / 'tests/worker_harness.mjs', ROOT / 'providers/swift/worker.mjs'],
+                             cwd=ROOT, env=ENV, input=json.dumps(request), capture_output=True, text=True, timeout=15)
+    assert process.returncode == 0, process.stderr
+    result = json.loads(process.stdout)
+    (RUN / ('policy-' + label + '.json')).write_text(json.dumps(result, indent=2))
+    assert result['code'] != 0 and not result['messages'][-1]['complete']['success'], result
+    assert not any(any(k in message for k in ('provider', 'compilation', 'progress', 'facts'))
+                   for message in result['messages']), result
+    assert not (WORKSPACE / 'PHASE_EXECUTED').exists() and not (WORKSPACE / 'SCHEME_EXECUTED').exists()
 scheme.write_text(scheme.read_text().replace('parallelizeBuildables="NO"', 'parallelizeBuildables="YES"'))
 changed = inventory()
 assert invoke('saved-scheme-gap') == initial_id
