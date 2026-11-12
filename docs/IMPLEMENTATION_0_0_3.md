@@ -98,3 +98,30 @@ A true unavailable module/input failure and independent source graph/error
 checks remain required. The failed Swift concurrency/overload builds and their
 focused corrections are retained. No bridge adoption or installed support is
 claimed.
+
+The unavailable-input check subsequently passed for both device and simulator
+using the unchanged wired06 runtime. A declared but missing dependency source
+produced a typed failed terminal result, failed operation state and RPC error,
+despite a misleading success-like source warning. The successful preparation
+notification alone was insufficient. Evidence:
+`.artifacts/implementation-0.0.3/xcode-typed-unavailable-01/` (approximately
+396 MiB sampled aggregate RSS, not a hard or true peak). The earlier body-error
+fixture remains a separate demonstration of tolerated indexing preparation;
+neither result certifies semantic graph completeness.
+
+Rust context collection is integrated but not yet routed into the worker.
+Its first focused fixture failed the warm-cache assertion: two compiler
+captures occurred where zero were expected. Evidence:
+`wave-01/rust-context-collection-01/`. Cache reuse remains unverified until the
+cause is fixed and the focused fixture passes. Swift compiler argument
+normalization was extracted unchanged into one helper for both planners.
+
+The package-cache experiment has not qualified. The first attempt selected
+Command Line Tools and stopped before compiler execution. With explicit Xcode
+selection, the restore still tried the global SwiftPM manifest cache despite
+an owned `-packageCachePath`; its access-denial guard correctly stopped that
+attempt. Evidence: `wave-01/xcode-package-cache-02/` and `-03/`, with detailed
+commands in the adjacent run directories. Keep the global cache blocked while
+finding supported manifest-cache isolation; do not treat package repository
+cache flags as complete offline/cache control. Neither attempt reached the
+missing/restored-cache analysis comparison.
