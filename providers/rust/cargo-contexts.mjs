@@ -16,6 +16,20 @@ const excluded = new Set(['target', '.git', 'node_modules', '.artifacts', '.rese
 const within = (directory, filename) => { const value = path.relative(directory, filename); return value !== '..' && !value.startsWith(`..${path.sep}`) && !path.isAbsolute(value); };
 const unavailable = message => { throw new Error(`Rust context unavailable: ${message}`); };
 const warning = (code, message) => ({code, message: message.slice(-4096), severity: 'warning'});
+export function removeCapturedOutput(state, filename) {
+  if (typeof filename !== 'string' || !path.isAbsolute(filename)) unavailable('refusing malformed compiler cleanup path');
+  const canonicalState = fs.realpathSync(state);
+  const roots = ['target', 'build'].map(name => path.join(state, name)).filter(root => {
+    try { return fs.lstatSync(root).isDirectory(); } catch { return false; }
+  });
+  const root = roots.find(candidate => within(candidate, filename));
+  if (!root) unavailable('refusing cleanup outside job-owned target/build directories');
+  const canonicalRoot = fs.realpathSync(root), parent = fs.realpathSync(path.dirname(filename));
+  if (!within(canonicalState, canonicalRoot) || !within(canonicalRoot, parent) ||
+      !within(canonicalRoot, fs.realpathSync(filename)) || !fs.lstatSync(filename).isFile())
+    unavailable('refusing compiler cleanup through a symlink/foreign parent');
+  fs.unlinkSync(filename);
+}
 function jsonFile(filename, value, limit = LIMIT) {
   const encoded = JSON.stringify(value);
   if (Buffer.byteLength(encoded) > limit) unavailable(`derived state exceeds ${limit} bytes`);
@@ -225,8 +239,8 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
         break;
       }
       for (const filename of recapture) {
-        if (!within(state, filename) || !within(fs.realpathSync(state), fs.realpathSync(filename)) || !fs.lstatSync(filename).isFile()) unavailable('refusing cleanup outside owned compiler cache');
-        fs.unlinkSync(filename);
+        try { removeCapturedOutput(state, filename); }
+        catch (error) { warn('rust_context_cleanup_refused', error.message); }
       }
       previous = current;
     }
