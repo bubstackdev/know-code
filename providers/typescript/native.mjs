@@ -122,7 +122,7 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
     let current,artifactId,offsets,missing=0,transientViews=0;
     const declarations=symbol=>{
       if(!symbol)return [];
-      if(!declarationCache.has(symbol))declarationCache.set(symbol,(symbol.declarations??[]).map(handle=>handle.resolve()).filter(Boolean));
+      if(!declarationCache.has(symbol))declarationCache.set(symbol,(symbol.declarations??[]).map(handle=>handle.resolve(project)).filter(Boolean));
       return declarationCache.get(symbol);
     };
     const same=(a,b)=>a===b||!!a&&!!b&&a.pos===b.pos&&a.end===b.end&&a.kind===b.kind&&a.getSourceFile().fileName===b.getSourceFile().fileName;
@@ -167,7 +167,7 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
       const facade={declarations:nodes,flags:symbol.flags,getName:()=>symbol.name};
       const key=symbolIdentity(root,id,facade);
       if(!emitted.has(key)) {
-        const declaration=symbol.valueDeclaration?.resolve()??nodes[0];
+        const declaration=symbol.valueDeclaration?.resolve(project)??nodes[0];
         const type=checker.getTypeOfSymbolAtLocation(symbol,declaration);
         emitted.add(key);batch.symbols.push({id:key,name:symbol.name,kind:api.SymbolFlags[symbol.flags]??String(symbol.flags),
           signature:type?checker.typeToString(type):symbol.name,external:!nodes.some(d=>indexed.has(path.resolve(d.getSourceFile().fileName)))});
@@ -176,7 +176,7 @@ function analyzeNative({root,config,looseFiles,setupDiagnostics,inferredDirector
       return key;
     }
     const graph=graphFacts(ts,checker,{emit,synthetic,occurrence:(symbol,node,role)=>{occurrence(symbol,node,role);if(role==='declaration')occurrence(symbol,node,'definition');},dispatchKey:()=>'',implementationProofs:false,
-      symbolName:symbol=>symbol.name,declarations,signatureDeclaration:signature=>signature?.declaration?.resolve(),
+      symbolName:symbol=>symbol.name,declarations,signatureDeclaration:signature=>signature?.declaration?.resolve(project),
       relationship:edge=>{if(!edge.sourceId)return;batch.relationships.push(edge);if(batch.relationships.length>=128)flush();}});
     for(const file of files) {
       current=file;offsets=byteOffsets(file.text);
