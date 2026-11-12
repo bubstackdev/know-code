@@ -281,6 +281,16 @@ pub struct Worker {
     control: Control,
     reaped: bool,
 }
+// Darwin can report a stopped child even when waitid requests only WEXITED.
+// A nonzero PID alone is not evidence that its output is final or it is safe
+// to begin owned group cleanup. WNOWAIT must keep reserving the leader PID.
+pub(crate) fn terminal_child_event(info: &libc::siginfo_t) -> bool {
+    info.si_pid != 0
+        && matches!(
+            info.si_code,
+            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+        )
+}
 impl Worker {
     pub fn wait(&mut self) -> Result<std::process::ExitStatus> {
         // Observe exit without reaping; keep the group leader PID reserved until
@@ -298,7 +308,7 @@ impl Worker {
             if result != 0 {
                 return Err(std::io::Error::last_os_error().into());
             }
-            if unsafe { info.assume_init() }.si_pid != 0 {
+            if terminal_child_event(&unsafe { info.assume_init() }) {
                 break;
             }
             if self.control.check().is_err() {

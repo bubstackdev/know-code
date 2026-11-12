@@ -1,7 +1,7 @@
 use crate::{
     Error, Result,
     protocol::{self, envelope::Payload, *},
-    resource::Control,
+    resource::{Control, terminal_child_event},
     store::Writer,
 };
 use std::{
@@ -116,7 +116,7 @@ impl<P: AsRawFd> WorkerPipe<P> {
             )
         };
         if result == 0 {
-            return Ok(unsafe { info.assume_init() }.si_pid != 0);
+            return Ok(terminal_child_event(&unsafe { info.assume_init() }));
         }
         let error = std::io::Error::last_os_error();
         if error.raw_os_error() == Some(libc::ECHILD) {
