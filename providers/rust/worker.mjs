@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 import {readRequest, send} from '../shared/protocol.mjs';
 import {Analyzer, compilerEnvironment} from './lsp.mjs';
 import {relative,byteOffsets} from '../shared/source.mjs';
+import {orderedDefinitions,ExternalSources} from './navigation.mjs';
 
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
 const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
@@ -84,7 +85,7 @@ async function analyze(root, manifest, metadata, configuration) {
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
   const analyzer = new Analyzer(directory);
   const emitted = new Set();
-  const externalSources = new Map();
+  const externalSources = new ExternalSources();
   let batch = {compilationId, symbols: [], occurrences: [], relationships: []};
   const flush = () => {
     if (batch.symbols.length || batch.occurrences.length) send('facts', batch);
@@ -123,8 +124,9 @@ async function analyze(root, manifest, metadata, configuration) {
         collect(outline);
       }
       const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
-      let line = 0, character = 0;
-      for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {
+      function* positions() {
+       let line = 0, character = 0;
+       for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {
         const [deltaLine, deltaCharacter, length, tokenType, modifiers] = tokens.data.slice(i, i + 5);
         line += deltaLine;
         character = deltaLine ? deltaCharacter : character + deltaCharacter;
@@ -139,7 +141,11 @@ async function analyze(root, manifest, metadata, configuration) {
           if (spelling === '!') continue;
           if (spelling.endsWith('!')) endPosition.character--;
         }
-        const definitions = await analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position});
+        yield {kind,position,endPosition};
+       }
+      }
+      for await (const {item:{kind,position,endPosition},definitions} of orderedDefinitions(positions(),
+        ({position})=>analyzer.request('textDocument/definition',{textDocument:{uri:current.uri},position}))) {
         const locations = definitions ? (Array.isArray(definitions) ? definitions : [definitions]) : [];
         const unique = new Map(locations.map(d => {
           const uri = d.targetUri ?? d.uri;
