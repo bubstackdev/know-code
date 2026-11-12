@@ -22,8 +22,8 @@ public sealed class Index
 
     public Index(string database, QueryLimitScope? queryLimitScope = null)
     {
-        this.database = Native.ValidatePath(database, nameof(database));
-        if (queryLimitScope is not null) Native.ValidatePath(queryLimitScope.Directory, nameof(queryLimitScope));
+        this.database = Native.ValidateInteropText(database, nameof(database));
+        if (queryLimitScope is not null) Native.ValidateInteropText(queryLimitScope.Directory, nameof(queryLimitScope));
         this.queryLimitScope = queryLimitScope;
     }
 
@@ -32,16 +32,20 @@ public sealed class Index
 
     // Coarse native calls run off the caller's synchronization context.
     public Task<JsonDocument> QueryJsonAsync(string request, CancellationToken cancellationToken = default) =>
-        QueryCoreAsync(() => request, Stopwatch.GetTimestamp(), cancellationToken);
+        QueryCoreAsync(() => request, Stopwatch.GetTimestamp(), cancellationToken, rawRequest: true);
     /// <summary>Reads a frozen cursor page with optional per-request deadline and response-byte budgets.</summary>
     public Task<JsonDocument> NextPageAsync(string cursor, uint? deadlineMs = null, uint? responseMaxBytes = null,
         CancellationToken cancellationToken = default) =>
         QueryCoreAsync(() => JsonSerializer.Serialize(new { Op = "next_page", Cursor = cursor,
             DeadlineMs = deadlineMs, ResponseMaxBytes = responseMaxBytes }, Native.JsonOptions), Stopwatch.GetTimestamp(), cancellationToken);
 
-    private async Task<JsonDocument> QueryCoreAsync(Func<string> serialize, long started, CancellationToken cancellationToken)
+    private async Task<JsonDocument> QueryCoreAsync(Func<string> serialize, long started, CancellationToken cancellationToken, bool rawRequest = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        // Raw text already exists: validate its C-string representation before
+        // admission can touch native state. Typed/user serialization still runs
+        // only after reservation. The original start also charges this work.
+        var raw = rawRequest ? Native.ValidateInteropText(serialize(), "request") : null;
         // This synchronous native call runs before user serialization and before
         // cancellation registrations or Task.Run can retain queued requests.
         var acquired = Native.Reserve(queryLimitScope);
@@ -52,7 +56,7 @@ public sealed class Index
             cancellationToken.ThrowIfCancellationRequested();
         }
         if (acquired.Error is not null) return acquired.Error;
-        var request = serialize();
+        var request = rawRequest ? raw! : serialize();
         var maximum = Native.QueryMaxRequestBytes();
         if (System.Text.Encoding.UTF8.GetByteCount(request) > maximum)
             return JsonSerializer.SerializeToDocument(new { Error = new { Code = "invalid_request",
@@ -127,15 +131,16 @@ public sealed record QueryRequest(string Op, string? Name = null, string? Query 
 
 internal static partial class Native
 {
-    // Interop strings are NUL-terminated UTF-8. Reject paths that would select
-    // a different native file after truncation or replacement encoding.
-    internal static string ValidatePath(string value, string parameter)
+    // Interop strings are NUL-terminated UTF-8. Reject text that would arrive
+    // truncated or replacement-encoded; this does not validate JSON syntax.
+    private static readonly System.Text.UTF8Encoding StrictUtf8 = new(false, true);
+    internal static string ValidateInteropText(string value, string parameter)
     {
         ArgumentNullException.ThrowIfNull(value, parameter);
-        if (value.Contains('\0')) throw new ArgumentException("Paths cannot contain NUL.", parameter);
-        try { _ = new System.Text.UTF8Encoding(false, true).GetByteCount(value); }
+        if (value.Contains('\0')) throw new ArgumentException("Native text inputs cannot contain NUL.", parameter);
+        try { _ = StrictUtf8.GetByteCount(value); }
         catch (System.Text.EncoderFallbackException error)
-        { throw new ArgumentException("Paths must contain valid Unicode.", parameter, error); }
+        { throw new ArgumentException("Native text inputs must contain valid Unicode.", parameter, error); }
         return value;
     }
 

@@ -1,5 +1,50 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--raw-request-validation")
+{
+    if (args.Length != 4) throw new ArgumentException("Expected --raw-request-validation DATABASE SCOPE FFI_PATH");
+    var database = Path.GetFullPath(args[1]); var scope = Path.GetFullPath(args[2]);
+    if (File.Exists(database) || Directory.Exists(scope)) throw new Exception("Use a fresh owned database/scope prefix");
+    var native = nint.Zero; var nativeLookups = 0; var allowNative = false;
+    System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(typeof(KnowCode.Index).Assembly,
+        (name, _, _) => {
+            if (name != "know_code_ffi") return nint.Zero;
+            nativeLookups++;
+            if (!allowNative) throw new Exception("Unrepresentable raw request reached native admission");
+            if (native == nint.Zero) native = System.Runtime.InteropServices.NativeLibrary.Load(Path.GetFullPath(args[3]));
+            return native;
+        });
+    try
+    {
+        var rawIndex = new KnowCode.Index(database, new KnowCode.QueryLimitScope(scope));
+        const string valid = "{\"op\":\"symbols\",\"name\":\"π🦀\"}";
+        foreach (var request in new[] { valid + "\0trailing", "{\"op\":\"symbols\",\"name\":\"\uD800\"}", "{\"op\":\"symbols\",\"name\":\"\uDC00\"}" })
+        {
+            try { using var unexpected = await rawIndex.QueryJsonAsync(request); throw new Exception("Unrepresentable raw request accepted"); }
+            catch (ArgumentException error) when (error.ParamName == "request") { }
+        }
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        try { using var unexpected = await rawIndex.QueryJsonAsync(valid + "\0", cancellation.Token); throw new Exception("Pre-cancellation was ignored"); }
+        catch (OperationCanceledException error) when (error.CancellationToken == cancellation.Token) { }
+        if (nativeLookups != 0 || Directory.Exists(scope) || File.Exists(database))
+            throw new Exception("Rejected raw requests touched native admission or a database");
+        allowNative = true;
+        // More than the default four slots proves malformed requests release
+        // their reservations. Empty/malformed JSON remains a core JSON error.
+        foreach (var request in new[] { "", "{", "", "{", "", "{" })
+        {
+            using var malformed = await rawIndex.QueryJsonAsync(request);
+            if (malformed.RootElement.GetProperty("error").GetProperty("code").GetString() != "invalid_request")
+                throw new Exception(malformed.RootElement.GetRawText());
+        }
+        using var result = await rawIndex.QueryJsonAsync(valid);
+        if (result.RootElement.GetProperty("error").GetProperty("code").GetString() != "not_ready" || File.Exists(database))
+            throw new Exception(result.RootElement.GetRawText());
+        Console.WriteLine("{\"passed\":true,\"check\":\"DotNet_raw_request_encoding_before_native_admission\"}");
+    }
+    finally { if (native != nint.Zero) System.Runtime.InteropServices.NativeLibrary.Free(native); }
+    return;
+}
 if (args[0] == "--contract-query")
 {
     // Operator-only cross-version fixture: force one exact native image rather
