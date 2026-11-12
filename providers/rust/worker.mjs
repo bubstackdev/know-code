@@ -49,8 +49,48 @@ function source(filename, root, compilationId) {
     }};
 }
 
+function localDependencyInputs(metadata, result) {
+  const members = new Set(metadata.workspace_members);
+  const pending = metadata.packages.filter(item => item.source == null && !members.has(item.id))
+    .map(item => path.dirname(item.manifest_path));
+  const visited = new Set();
+  // Reuse the adapter/core artifact exclusions; bin is intentionally retained
+  // because Rust's src/bin contains source. These paths are watch-only inputs.
+  const excluded = new Set(['target', '.git', 'node_modules', '.artifacts', '.research', '.build', '.worktrees', 'DerivedData']);
+  let entries = 0, retainedBytes = pending.reduce((bytes, filename) => bytes + Buffer.byteLength(filename), 0);
+  if (retainedBytes > 4 * 1024 * 1024) throw new Error('resource-limited: Rust local dependency input paths exceed 4 MiB');
+  while (pending.length) {
+    const directory = pending.pop();
+    if (visited.has(directory)) continue;
+    visited.add(directory);
+    const handle = fs.opendirSync(directory);
+    try {
+      for (let entry; (entry = handle.readSync());) {
+        if (++entries > 50000) throw new Error('resource-limited: Rust local dependency input discovery exceeds 50000 entries');
+        const filename = path.join(directory, entry.name);
+        if (entry.isDirectory() && !excluded.has(entry.name) && !entry.name.startsWith('.build-')) {
+          retainedBytes += Buffer.byteLength(filename);
+          if (retainedBytes > 4 * 1024 * 1024) throw new Error('resource-limited: Rust local dependency input paths exceed 4 MiB');
+          pending.push(filename);
+        }
+        else if (entry.isFile() && entry.name.endsWith('.rs')) {
+          result.add(filename);
+          retainedBytes += Buffer.byteLength(filename);
+          if (retainedBytes > 4 * 1024 * 1024) throw new Error('resource-limited: Rust local dependency input paths exceed 4 MiB');
+        }
+      }
+    } finally { handle.closeSync(); }
+  }
+}
+
 function inputPaths(metadata, manifest, policy) {
-  const result = new Set(metadata.packages.filter(p => metadata.workspace_members.includes(p.id)).map(p => p.manifest_path));
+  const result = new Set(metadata.packages.map(p => p.manifest_path));
+  // Cargo-selected local crate roots include build scripts and proc macros.
+  // Track saved changes without publishing third-party dependency source facts.
+  // This is not exhaustive ownership of their module/rerun/include inputs.
+  for (const item of metadata.packages) if (item.source == null)
+    for (const target of item.targets ?? []) if (typeof target.src_path === 'string') result.add(target.src_path);
+  localDependencyInputs(metadata, result);
   result.add(manifest);
   for (const target of policy?.targets ?? []) if (target.endsWith('.json')) result.add(path.resolve(path.dirname(manifest), target));
   result.add(path.join(metadata.workspace_root, 'Cargo.lock'));
@@ -89,9 +129,10 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     if (typeof target.src_path === 'string' && fs.existsSync(target.src_path)) files.add(target.src_path);
   const sources = new Map([...files].sort().map(filename => [pathToFileURL(filename).href, source(filename, root, compilationId)]));
   const options = {provider: 'rust-analyzer-lsp', analyzerVersion, positionEncoding: 'utf-16', configuration,
-    cargo: {...cargo, features: policy?.features ?? 'default'}, procMacros: trustedPreparation,
+    cargo: {...cargo, features: policy?.features ?? 'default', buildJobs: 1}, procMacros: trustedPreparation,
     requestedPolicy: policy ? {targets: policy.targets, defaultFeatures: policy.defaultFeatures, executionAllowed: policy.executionAllowed} : null,
     sourceOwnership: 'Cargo target roots and unique analyzer-selected module files',
+    dependencyInputTracking: 'Cargo-selected local dependency package roots: bounded watch-only .rs superset, excluding artifact directories and symlink traversal',
     coverage: 'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
   send('compilation', {id: compilationId, language: 'rust', projectPath, target: selectedTarget ? `${selectedTarget}/rust-analyzer-workspace-view` : 'rust-analyzer-workspace-view', configuration,
     inferred: false, compilerVersion, optionsJson: JSON.stringify(options), inputPaths: inputPaths(metadata, manifest, policy), dependencies: []});
@@ -99,7 +140,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     'Loading repository-selected Rust analyzer with trusted compiler-integrated build-script and procedural-macro preparation; product checks on save are disabled.' :
     'Loading repository-selected Rust analyzer; build scripts and procedural macro execution are disabled.'});
   const diagnostics = [{code: 'rust_coverage_limits', severity: 'warning', path: projectPath,
-    message: `Experimental compiler-backed Rust navigation: build scripts/procedural macros are ${trustedPreparation ? 'personally authorized for compiler preparation' : 'disabled'}; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not fully covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Only unique analyzer-resolved references are published. This is a partial graph.`}];
+    message: `Experimental compiler-backed Rust navigation: build scripts/procedural macros are ${trustedPreparation ? 'personally authorized for compiler preparation' : 'disabled'}; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not fully covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Watch-only inputs include evaluated dependency manifests and a bounded Rust-source superset below local dependency package roots, without following symlink directories. Arbitrary build-script rerun files, generated inputs and environment changes are not exhaustively tracked. Only unique analyzer-resolved references are published. This is a partial graph.`}];
   if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
   const analyzer = new Analyzer(directory);

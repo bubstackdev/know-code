@@ -32,7 +32,9 @@ export function cargoSelection(policy, target) {
 }
 
 export function analyzerCargo(policy, manifest, target) {
-  const cargo = {offline: true, allTargets: true, buildScripts: {enable: false}};
+  // RA's default wrapper replaces repository wrappers. Disable that wrapper
+  // even for the legacy scripts-off path; Cargo keeps its actual selections.
+  const cargo = {offline: true, allTargets: true, buildScripts: {enable: false, useRustcWrapper: false}};
   if (!policy) return cargo; // Preserve the legacy direct-worker defaults.
   cargo.buildScripts.enable = policy.executionAllowed;
   cargo.features = policy.features;

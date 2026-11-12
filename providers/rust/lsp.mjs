@@ -5,7 +5,7 @@ import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 export const compilerEnvironment = ({restore = false} = {}) => ({...process.env,
   // Only deliberate dependency fetching drops our forced offline setting;
   // user-selected Cargo offline settings remain authoritative during fetch.
-  ...(!restore ? {CARGO_NET_OFFLINE: 'true'} : {}), RUSTUP_AUTO_INSTALL: '0'});
+  ...(!restore ? {CARGO_NET_OFFLINE: 'true'} : {}), RUSTUP_AUTO_INSTALL: '0', CARGO_BUILD_JOBS: '1'});
 
 // Only Rust readiness/diagnostic policy lives here; SwiftPM shares transport.
 export class Analyzer extends JsonRpcProcess {
