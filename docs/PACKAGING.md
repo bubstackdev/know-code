@@ -2,7 +2,7 @@
 
 Distribution uses a separate shared coordinator/worker runtime and thin npm/NuGet SDKs for macOS 15+ on Apple Silicon, Node 24 and a separately installed .NET 10 SDK. Published v0.0.1 passed exact-artifact signing/notarization and macOS 15 installed/offline checks; each new release needs matching artifact evidence. Node/.NET are not installed or bundled by Know Code. v0.0.2 is stabilization only; see the [changelog](../CHANGELOG.md) and [release plan](RELEASE_PLAN.md).
 
-The supported-platform rationale is the [Node 24 build matrix](https://raw.githubusercontent.com/nodejs/node/v24.22.2/BUILDING.md) and [.NET 10 OS matrix](https://raw.githubusercontent.com/dotnet/core/main/release-notes/10.0/supported-os.md), checked 2026-11-09. This SDK is built for .NET 10; compiler selection still honors repository pins and existing Roslyn compatibility checks. Swift/Rust adapters remain experimental outside the supported TS/C# contract, even when their small adapter resources are retained. New-feature timing is undecided during stabilization.
+The supported-platform rationale is the [Node 24 build matrix](https://raw.githubusercontent.com/nodejs/node/v24.22.2/BUILDING.md) and [.NET 10 OS matrix](https://raw.githubusercontent.com/dotnet/core/main/release-notes/10.0/supported-os.md), checked 2026-11-09. This SDK is built for .NET 10; compiler selection still honors repository pins and existing Roslyn compatibility checks. Swift/Rust adapters remain experimental outside the supported TS/C# contract, even when their small adapter resources are retained; accepted language goals remain in [PRODUCT_CONSTRAINTS.md](PRODUCT_CONSTRAINTS.md).
 
 ## Layout and discovery
 

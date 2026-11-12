@@ -4,7 +4,7 @@ Know Code gives agents and applications a local, compiler-backed index of TypeSc
 
 TypeScript's compiler and Roslyn resolve symbols and references. Results retain source locations, compilation/target provenance, diagnostics and coverage. Call/dependency/dispatch coverage is explicitly partial; see the [supported graph forms and limits](docs/CALL_GRAPH.md).
 
-v0.0.2, **Snow Leopard**, is a stabilization release in preparation: correctness, performance, reliability and simplification. See the [changelog](CHANGELOG.md) and [review ledger](docs/CODEBASE_REVIEW_0_0_2.md). Release artifacts must pass matching validation, signing/notarization and normal-security installation checks; a source build alone does not establish certification. The [release plan](docs/RELEASE_PLAN.md) preserves the published v0.0.1 baseline and its evidence.
+v0.0.2, **Snow Leopard**, focuses on correctness, performance, reliability and simplification. See the [changelog](CHANGELOG.md) and [review ledger](docs/CODEBASE_REVIEW_0_0_2.md). Release artifacts must pass matching validation, signing/notarization and normal-security installation checks; a source build alone does not establish certification. The [release plan](docs/RELEASE_PLAN.md) records the artifact-bound evidence.
 
 ## Get started
 
@@ -58,7 +58,7 @@ bash scripts/test.sh
 
 Pass `release` for optimized artifacts. The test script defaults to quick checks; [validation tiers](docs/VALIDATION.md) define the required release baseline and extended matrices. The product build profile is separate from an indexed workspace's C# configuration. [Packaging](docs/PACKAGING.md) describes the runtime/SDK layout and artifact provenance.
 
-Experimental [Swift/SwiftPM](docs/SWIFT_PROVIDER.md) and [Rust](docs/RUST_PROVIDER.md) adapters use the same core; supported languages remain TypeScript and C#. v0.0.2 adds no new features. Cross-repository queries, Angular template references and refactoring continuity move to later releases with timing undecided. Xcode remains a Swift follow-on. Embedding-based semantic search and searchable source history remain outside the current release scope.
+Experimental [Swift/SwiftPM](docs/SWIFT_PROVIDER.md) and [Rust](docs/RUST_PROVIDER.md) adapters use the same core; supported languages remain TypeScript and C#. v0.0.2 adds no new features. Cross-repository queries, Angular template references and refactoring continuity move to later releases with timing undecided. Swift/Rust language support remains planned for v0.0.3; Xcode remains a Swift follow-on. Embedding-based semantic search and searchable source history remain outside the current release scope.
 
 See [design requirements](docs/DESIGN.md), [architecture](docs/ARCHITECTURE.md), [release plan](docs/RELEASE_PLAN.md) and [performance evaluation](docs/PERFORMANCE.md) for the durable requirements, roadmap and evidence boundaries.
 

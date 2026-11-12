@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.2 — Snow Leopard (in preparation)
+## 0.0.2 — Snow Leopard
 
 Stabilization only: correctness, performance, reliability and simplification, with no new language or query features.
 
@@ -15,7 +15,7 @@ Update the runtime and managed/JavaScript/native SDK components together. The co
 
 Supported distribution remains macOS 15+ Apple Silicon, with separately installed Node24 and .NET10 SDK. TypeScript/C# are supported; Swift/Rust remain experimental. Published builds retain zero usage telemetry. Cross-repository queries, Angular template references and refactoring continuity move to later releases with timing undecided.
 
-The [review ledger](docs/CODEBASE_REVIEW_0_0_2.md) records exact stabilization evidence and residual limits. Final 0.0.2 archive, platform and signed/notarized installation results must be bound to the new release artifacts before publication. Real video-encoding responsiveness remains unmeasured; no contention-performance certification is claimed.
+The [review ledger](docs/CODEBASE_REVIEW_0_0_2.md) and [release plan](docs/RELEASE_PLAN.md) record stabilization evidence, residual limits and artifact-bound distribution checks. Real video-encoding responsiveness remains unmeasured; no contention-performance certification is claimed.
 
 ## 0.0.1
 
