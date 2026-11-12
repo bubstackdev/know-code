@@ -1,6 +1,6 @@
 # User-scoped runtime lifecycle
 
-The accepted layout keeps one shared runtime separate from the npm/NuGet SDKs on macOS 15+ Apple Silicon. Use the notarized, stapled DMG from the selected GitHub release and its verification instructions; the extracted runtime archive supports the same lifecycle commands. Each new candidate requires its own signing, notarization and platform evidence. Install Node 24 and the .NET 10 SDK separately and put them on PATH. Know Code checks them and never installs toolchains.
+The layout keeps one shared runtime separate from the npm/NuGet SDKs on macOS 15+ Apple Silicon. Use the notarized, stapled DMG from the selected GitHub release and its verification instructions; the extracted runtime supports the same lifecycle commands. Every release's exact artifacts need their own signing/notarization and installed/platform evidence. Install Node 24 and the .NET 10 SDK separately and put them on PATH. Know Code checks them and never installs toolchains.
 
 ## Commands
 
@@ -49,6 +49,18 @@ A transient, owned maintenance lease pauses new analysis starts. Existing querie
 After quiescence, the managed job is unloaded or the on-demand coordinator is asked to stop. The installer waits for the writer fence, changes `current` atomically and restarts according to the existing policy. Startup failure attempts to restore the old selection and prior running/login state only while the old runtime can still read actual durable workspace state. If a newer lifecycle receipt prevents safe restoration, retain the new selection and report that a compatible runtime is required; never reset an index selector to make rollback appear safe. The installer alone can quiesce the known lifecycle-1 peer using bounded status/maintenance/resume/shutdown messages before activating the current runtime. Ordinary clients require lifecycle 4 and receive an actionable update-required error from older peers. No forced analysis termination is used to meet the busy timeout. Identical-content updates preserve the rollback target. Rollback performs the same compatibility/quiescence path and exchanges current/previous selections.
 
 Runtime versions are retained until uninstall; automatic version garbage collection is not implemented. A failed/busy update can leave a fully staged unselected version. Interrupted `.staging-*` directories require inspection and explicit removal. Runtime selection is atomic, but crash recovery of an interrupted whole install/service-policy operation is not yet automated. Inspect `install-info` and `service status`, then retry; do not infer a full crash-safe lifecycle guarantee from the atomic link.
+
+## Upgrading from 0.0.1 to 0.0.2
+
+Use `know-code update --from /path/to/new/extracted-runtime`, then update the npm/NuGet SDK packages and restart embedding Node/.NET hosts and MCP processes so they load the matching native libraries. Do not mix a new SDK wrapper with a copied old native add-on/dylib, or the reverse: query contract 9 replaces 8 and incompatible pairs return typed `update_required`. Portable pages also require the new runtime's cursor control 3; old cursor-control-2 peers require an update. Restart paginated queries after the runtime switch; cursor invalidation does not delete indexed facts or settings. This is not a promise that every ordinary API rejects every mixed runtime/library version.
+
+Ordinary query `coordination` is now compact: identities, epochs/generation, availability, bounded phase/outcome, `has_error` and `status_limited`. Full error text, progress and requested settings remain available through `Workspace.status()` / `.NET StatusAsync()` or MCP `workspace_status`. Compiler coverage, diagnostics and graph proof/path evidence remain in query results. CLI `query`/`queries` now return exit 1 for a JSON error envelope while preserving that envelope on stdout; scripts must handle the exit status.
+
+Worker protocol 7, store format 8 and lifecycle capability 4 stay unchanged. The new registry boundary marks the existing compatible registry schema as version 1 and preserves registrations/settings; it is not a new fact-store rebuild requirement. Use the installer's compatibility checks for rollback rather than changing version markers or deleting indexes.
+
+Existing dedicated, owned DATA directories are tightened to 0700 and their extended ACL is cleared. Foreign ownership, actual account homes/ancestors and repository/Git metadata misuse are refused. Keep DATA in the default per-user location or a dedicated owned directory; changing an environment variable does not relocate an existing managed installation.
+
+The npm/pnpm executable cache now verifies a format-2 whole-tree receipt. Older format-1 entries require reacquisition on their next needed use. Before offline work, ensure the selected package tools have been primed in the new format and project dependencies restored while networking is available. Node/.NET prerequisites are still installed separately.
 
 ## Uninstall and reinstall
 
