@@ -42,10 +42,23 @@ Node `Workspace.settings()` reads effective settings; `Workspace.configure(objec
 
 Both settings paths, including absent files, enter the saved-input snapshot before first analysis and are watched. Saves, restart reconciliation and explicit settings changes use the existing update path. Internal changes queue full analysis without depending on a file event and do not become explicit dependency-restore retries. Policy/tool/input fingerprints still invalidate preparation when needed; unchanged source saves must not repeatedly restore dependencies.
 
-Control capability `analysis_settings_version = 1` is required for registration, refresh and settings operations. Clients check before mutation and verify the response, including when an existing handle encounters a replaced coordinator. An incompatible running coordinator returns an actionable `update_required`; there is no fallback to legacy settings. Worker policy acknowledgment remains separately required before accepting any facts/checkpoints. The development login job is not automatically restarted by these code changes.
+Control capability `analysis_settings_version = 2` is required for registration, refresh and settings operations. Clients check before mutation and verify the response, including when an existing handle encounters a replaced coordinator. An incompatible running coordinator returns an actionable `update_required`; there is no fallback to legacy settings. Worker policy acknowledgment remains separately required before accepting any facts/checkpoints. The development login job is not automatically restarted by these code changes.
 
-Managed queries also require resource-control capability `2` in RPC responses and live publisher certificates, along with analysis-settings capability `1`, so an existing client cannot certify an older coordinator's different scope as fresh. Status and cancellation operations enforce resource-control capability `2`, including existing handles connected to a replaced coordinator. Runtime information reports both capabilities; the installer rejects a target lacking it while allowing an old compatible store/runtime to upgrade to a supporting target. A newly registered workspace without a published generation returns not-ready even if an index from a removed workspace remains at that disk path.
+Managed queries also require resource-control capability `2` in RPC responses and live publisher certificates, along with analysis-settings capability `2`, so an existing client cannot certify an older coordinator's different scope as fresh. Status and cancellation operations enforce resource-control capability `2`, including existing handles connected to a replaced coordinator. Runtime information reports both capabilities; the installer rejects a target lacking it while allowing an old compatible store/runtime to upgrade to a supporting target. A newly registered workspace without a published generation returns not-ready even if an index from a removed workspace remains at that disk path.
 
 ## Verification
 
 Resolver tests exercise precedence, persistent explicit clearing, script-grant isolation and invalid replacement preservation. The existing workspace API harness adds .NET/Node/CLI settings parity, no-source-save invalidation, clearing a newly chosen configuration, and malformed first-run/personal-file recovery with coherent stale fallback. Adapter direct-worker suites cover actual package tools and mapped compiler contexts; those remain distinct from coordinator integration evidence. Full Debug validation belongs at the settled integration checkpoint.
+
+
+## 0.0.3 language settings in development
+
+Checked-in and personal objects also accept `rust` and `swift` settings:
+
+```json
+{"rust":{"targets":["aarch64-apple-darwin"],"features":["extra"],"default_features":false},"swift":{"scheme":"App.xcodeproj/xcshareddata/xcschemes/App.xcscheme"}}
+```
+
+Each field uses the same precedence: omission inherits; personal `null` resets to the compiler/repository default. Rust's default target list preserves Cargo's configured targets, or host selection when unset. Features add to the repository defaults; `default_features: false` requests their exclusion. Swift scheme paths resolve against the workspace root; absent selection requests the sole shared scheme and does not select arbitrarily among several. These settings do not mean the corresponding adapter or Xcode bridge has passed production acceptance.
+
+Rust execution permission is derived from the existing personal, workspace-identity-bound project trust grant and checked again before worker execution. Neither checked-in nor personal language fields can forge it. Package-script permission remains separate. Compiler preparation outputs use a central worker directory. Each language policy participates in preparation fingerprints and requires its matching worker acknowledgment before publication. Control/settings capability 2 prevents an older coordinator from silently ignoring these new choices; worker policy remains version 1 with distinct typed branches. The existing development installation is not changed by this source work.

@@ -50,6 +50,30 @@ pub(crate) fn prepare_analysis_policy(
             }
             "csharp"
         }
+        Some(analysis_policy::Settings::Rust(context)) => {
+            if !Path::new(&context.cache_directory).is_absolute()
+                || context
+                    .targets
+                    .iter()
+                    .chain(&context.features)
+                    .any(|s| s.trim().is_empty() || s.contains('\0') || s.starts_with('-'))
+            {
+                return Err(Error::InvalidRequest("Rust policy requires an absolute cache_directory and valid target/feature values".into()));
+            }
+            "rust"
+        }
+        Some(analysis_policy::Settings::Swift(context)) => {
+            if context
+                .scheme_path
+                .as_ref()
+                .is_some_and(|s| !Path::new(s).is_absolute() || s.contains('\0'))
+            {
+                return Err(Error::InvalidRequest(
+                    "Swift scheme_path must be absolute".into(),
+                ));
+            }
+            "swift"
+        }
         None => {
             return Err(Error::InvalidRequest(
                 "analysis policy settings are required".into(),
@@ -185,6 +209,22 @@ mod tests {
                 cache_directory: "/user/package-tools".into(),
                 allow_install_scripts: true,
             })),
+            request(analysis_policy::Settings::Rust(RustAnalysisPolicy {
+                cache_directory: "/user/rust".into(),
+                ..Default::default()
+            })),
+            request(analysis_policy::Settings::Rust(RustAnalysisPolicy {
+                cache_directory: "/user/rust".into(),
+                execution_allowed: true,
+                default_features: Some(false),
+                ..Default::default()
+            })),
+            request(analysis_policy::Settings::Swift(
+                SwiftBuildContext::default(),
+            )),
+            request(analysis_policy::Settings::Swift(SwiftBuildContext {
+                scheme_path: Some("/repo/App.xcscheme".into()),
+            })),
         ] {
             prepare_analysis_policy(&mut request).unwrap();
             assert!(fingerprints.insert(request.preparation_fingerprint));
@@ -223,6 +263,15 @@ mod tests {
             ));
         }
         for settings in [
+            analysis_policy::Settings::Rust(RustAnalysisPolicy::default()),
+            analysis_policy::Settings::Rust(RustAnalysisPolicy {
+                cache_directory: "/user/rust".into(),
+                features: vec!["--config=bad".into()],
+                ..Default::default()
+            }),
+            analysis_policy::Settings::Swift(SwiftBuildContext {
+                scheme_path: Some("relative.xcscheme".into()),
+            }),
             analysis_policy::Settings::Node(NodePreparationPolicy::default()),
             analysis_policy::Settings::Csharp(CSharpBuildContext {
                 solution_path: Some("relative.sln".into()),

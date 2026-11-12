@@ -689,6 +689,14 @@ pub fn refresh_controlled(
             request: AnalyzeRequest {
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: rust,
+                analysis_policy: settings.rust.clone().map(|mut context| {
+                    // The identity-bound grant above is checked again when the worker starts.
+                    context.execution_allowed = true;
+                    crate::protocol::AnalysisPolicy {
+                        version: crate::protocol::ANALYSIS_POLICY_VERSION,
+                        settings: Some(crate::protocol::analysis_policy::Settings::Rust(context)),
+                    }
+                }),
                 configuration: configuration.into(),
                 preparation_fingerprint: preparation_fingerprint.into(),
                 retry_preparation,
@@ -709,6 +717,12 @@ pub fn refresh_controlled(
             request: AnalyzeRequest {
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: swift,
+                analysis_policy: settings.swift.clone().map(|context| {
+                    crate::protocol::AnalysisPolicy {
+                        version: crate::protocol::ANALYSIS_POLICY_VERSION,
+                        settings: Some(crate::protocol::analysis_policy::Settings::Swift(context)),
+                    }
+                }),
                 configured_projects: swift_projects,
                 configuration: configuration.into(),
                 preparation_fingerprint: preparation_fingerprint.into(),

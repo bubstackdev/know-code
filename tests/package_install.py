@@ -131,7 +131,7 @@ bundle=next((PREFIX/'first installation').glob('know-code-*'));HOST=BIN/'know-co
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0,('checkout deny policy ineffective',root)
 info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bundle' and info['sqlite']['fts5'] and str(PREFIX) in info['resource_directory']
 runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
-contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':1,'resource_control_version':3}
+contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':2,'resource_control_version':3}
 assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
 assert runtime_manifest['version']==VERSION
 assert command(HOST,'--version').stdout.strip()==f'know-code {VERSION}'
