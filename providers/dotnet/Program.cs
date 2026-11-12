@@ -239,6 +239,8 @@ static partial class Analysis
         var opened = catalog.Open(projectPath, target);
         var project = opened.Project;
         var compilerMetadata = catalog.Metadata(project.Id);
+        var generatedDirectories = JsonSerializer.Deserialize<string[]>(compilerMetadata["KnowCodeGeneratedDirectories"])!;
+        bool GeneratedFile(string? filename) => filename is not null && generatedDirectories.Any(directory => IsWithin(directory, filename));
         var configuration = compilerMetadata["Configuration"];
         var platform = compilerMetadata["Platform"];
         var classification = TestClasses.ForContext(catalog.Classification(project.Id), request.TestClassificationPolicy,
@@ -246,7 +248,7 @@ static partial class Analysis
         var id = ProjectLinks.ContextId(request.WorkspaceRoot, projectPath, target, configuration,
             catalog.BuildContexts.PolicyEnabled ? platform : null);
         var diagnostics = new List<Diagnostic>();
-        if (preparationError.Length > 0) diagnostics.Add(new Diagnostic { Code = "dependency_restore_failed", Severity = "error", Message = preparationError, Path = projectPath });
+        if (preparationError.Length > 0) diagnostics.Add(new Diagnostic { Code = "dependency_restore_failed", Severity = "error", Message = preparationError, Path = relative });
         diagnostics.AddRange(opened.Diagnostics.Select(d => new Diagnostic { Code = "project_loading", Severity = d.Kind == WorkspaceDiagnosticKind.Failure ? "error" : "warning", Message = d.Message }));
         var compilation = await project.GetCompilationAsync() ?? throw new ProjectSetupException(projectPath,"compilation_unavailable",$"compilation unavailable for {projectPath} ({target})");
         var projectLinks = await ProjectLinks.Create(project, compilation, catalog, request, sdkVersion);
@@ -271,11 +273,14 @@ static partial class Analysis
         documents.AddRange((await project.GetSourceGeneratedDocumentsAsync()).Select(d => ((Document)d, true)));
         var sources = new Dictionary<SyntaxTree, string>();
         var omittedSourceCount=0;
+        var sourceBoundaries=0;
         foreach (var (document, generated) in documents)
         {
             var tree = await document.GetSyntaxTreeAsync();
             if (tree is null || sources.ContainsKey(tree)) continue;
             var text = (await document.GetTextAsync()).ToString();
+            if (!generated && document.FilePath is { } filename && SourceBoundary(request.WorkspaceRoot, filename) is { } boundary
+                && ++sourceBoundaries <= 100) diagnostics.Add(boundary);
             var utf8 = Encoding.UTF8.GetBytes(text);
             var hash = Convert.ToHexStringLower(SHA256.HashData(utf8));
             var name = generated
@@ -294,7 +299,10 @@ static partial class Analysis
         }
         if(omittedSourceCount>100)diagnostics.Add(new Diagnostic {Code="artifacts_omitted",Severity="warning",
             Message=$"{omittedSourceCount} source artifacts exceed the worker frame; first 100 paths reported."});
+        if(sourceBoundaries>100)diagnostics.Add(new Diagnostic {Code="source_origins_truncated",Severity="info",
+            Message=$"{sourceBoundaries} source-origin boundaries; first 100 paths reported."});
         var emitter = new Emitter(id, sources, projectLinks, request.TargetEquivalencePolicy, compilation.Assembly);
+        var unresolvedNames=0;
         foreach (var (tree, artifactId) in sources)
         {
             var model = compilation.GetSemanticModel(tree);
@@ -326,16 +334,21 @@ static partial class Analysis
                         emitter.Occurrence(emitter.Symbol(Normalize(symbol)), source, name.Identifier.Span, "reference");
                         graph.Reference(name, symbol);
                     }
+                    else unresolvedNames++;
                 }
                 graph.Operations(node);
             }
             emitter.EndFile();
         }
         emitter.Flush();
+        if (unresolvedNames>0) diagnostics.Add(new Diagnostic {Code="unresolved_name_sites",Severity="info",
+            Message=$"{unresolvedNames} simple-name sites had no unique compiler symbol; candidate symbols were not promoted to exact references. This is not an exhaustive unresolved-reference analysis."});
         var compilerDiagnostics = compilation.GetDiagnostics();
-        diagnostics.AddRange(compilerDiagnostics.Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning).Take(100)
-            .Select(d => new Diagnostic { Code = d.Id, Severity = d.Severity == DiagnosticSeverity.Error ? "error" : "warning", Message = d.GetMessage(), Path = d.Location.SourceTree?.FilePath ?? "" }));
-        if (compilerDiagnostics.Length > 100) diagnostics.Add(new Diagnostic { Code = "diagnostics_truncated", Severity = "info", Message = $"{compilerDiagnostics.Length} diagnostics; at most 100 included." });
+        var visibleDiagnostics = compilerDiagnostics.Where(d => d.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning).ToArray();
+        diagnostics.AddRange(visibleDiagnostics.Take(100)
+            .Select(d => new Diagnostic { Code = d.Id, Severity = d.Severity == DiagnosticSeverity.Error ? "error" : "warning", Message = d.GetMessage(),
+                Path = d.Location.SourceTree is {FilePath.Length: > 0} tree ? Path.GetRelativePath(request.WorkspaceRoot,tree.FilePath).Replace('\\','/') : "" }));
+        if (visibleDiagnostics.Length > 100) diagnostics.Add(new Diagnostic { Code = "diagnostics_truncated", Severity = "info", Message = $"{visibleDiagnostics.Length} warning/error diagnostics; first 100 included." });
         var report = new AnalysisReport { CompilationId = id,
             Status = compilerDiagnostics.Any(d => d.Severity == DiagnosticSeverity.Error) || diagnostics.Any(d => (d.Code is "project_loading" or "artifact_too_large") || d.Severity == "error") ? "partial" : "complete" };
         report.Capabilities.Add("calls", "partial");
@@ -350,7 +363,38 @@ static partial class Analysis
         Wire.Send(new Envelope { Report = report });
     }
 
-    private static bool GeneratedFile(string? filename) => filename?.Split(Path.DirectorySeparatorChar).Contains("obj") == true;
+    private static bool IsWithin(string directory, string filename)
+    {
+        var relative=Path.GetRelativePath(directory,filename);
+        return relative!=".." && !relative.StartsWith(".."+Path.DirectorySeparatorChar,StringComparison.Ordinal) && !Path.IsPathRooted(relative);
+    }
+    private static string CanonicalPath(string filename)
+    {
+        var current=Path.GetPathRoot(Path.GetFullPath(filename))!;
+        foreach(var segment in Path.GetFullPath(filename)[current.Length..].Split(Path.DirectorySeparatorChar,StringSplitOptions.RemoveEmptyEntries))
+        {
+            current=Path.Combine(current,segment);
+            FileSystemInfo entry=Directory.Exists(current)?new DirectoryInfo(current):new FileInfo(current);
+            current=entry.ResolveLinkTarget(true)?.FullName??current;
+        }
+        return current;
+    }
+    private static Diagnostic? SourceBoundary(string root, string filename)
+    {
+        var lexicalOutside=!IsWithin(root,filename);
+        var canonicalOutside=false;
+        var unverified=false;
+        try {canonicalOutside=!IsWithin(CanonicalPath(root),CanonicalPath(filename));}
+        catch(IOException) {unverified=true;}
+        catch(UnauthorizedAccessException) {unverified=true;}
+        if(!lexicalOutside&&unverified)return new Diagnostic {Code="source_origin_unverified",Severity="info",
+            Path=ProjectFailures.Bounded(Path.GetRelativePath(root,filename).Replace('\\','/')),
+            Message="The canonical source boundary could not be verified during analysis. Retained text and ranges belong to the compiler snapshot; no inside-workspace physical origin is asserted."};
+        if(!lexicalOutside&&!canonicalOutside)return null;
+        return new Diagnostic {Code="outside_workspace_source",Severity="info",
+            Path=ProjectFailures.Bounded(Path.GetRelativePath(root,filename).Replace('\\','/')),
+            Message=$"Compiler-selected linked source is outside the workspace ({(lexicalOutside?"lexical path":"canonical symlink target")} observed during analysis). Retained text and ranges belong to the compiler snapshot, not a later filesystem target."};
+    }
 
     private static SymbolInfo ReferenceInfo(SemanticModel model, SimpleNameSyntax name)
     {

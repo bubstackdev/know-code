@@ -154,6 +154,11 @@ static class SdkMetadataServer
                 }
                 if (request.IncludeIdentity)
                 {
+                    metadata.Identity.Add("KnowCodeGeneratedDirectories", System.Text.Json.JsonSerializer.Serialize(
+                        new[] { "IntermediateOutputPath", "CompilerGeneratedFilesOutputPath" }
+                            .Select(classificationState.GetPropertyValue).Where(value => !string.IsNullOrWhiteSpace(value))
+                            .Select(value => Path.GetFullPath(value, Path.GetDirectoryName(request.ProjectPath)!))
+                            .Distinct(StringComparer.Ordinal).ToArray()));
                     var signals = new Dictionary<string, string>(StringComparer.Ordinal);
                     foreach (var name in TestClasses.Properties)
                         if (classificationState.GetProperty(name) is { } property) signals.Add(name, property.EvaluatedValue);

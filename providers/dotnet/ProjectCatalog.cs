@@ -36,7 +36,7 @@ sealed class ProjectCatalog(BuildContexts buildContexts, SdkMetadataClient metad
             async Task<bool> LoadVariants(string? selectedTarget)
             {
                 var metadata = variants[selectedTarget ?? variants.Keys.First()];
-                var selectedProperties = properties.SetItems(metadata.Where(p => p.Value.Length > 0));
+                var selectedProperties = properties.SetItems(metadata.Where(p => p.Value.Length > 0 && !p.Key.StartsWith("KnowCode", StringComparison.Ordinal)));
                 if (selectedTarget is not null) selectedProperties = selectedProperties.Add("TargetFramework", selectedTarget);
                 using var loaderWorkspace = new AdhocWorkspace();
                 var attemptDiagnostics = new List<WorkspaceDiagnostic>();

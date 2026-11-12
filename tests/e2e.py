@@ -28,6 +28,18 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'
 SMOKE = ROOT / f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll'
 
+# Compiler-selected linked files remain indexed, with origin evidence. An
+# unrelated ancestor named obj must not turn ordinary C# source into generated.
+(RUN / 'obj').mkdir()
+linked_cs = RUN / 'obj/LinkedOwned.cs'
+linked_cs.write_text('public class LinkedOwned { public static int Value => 7; }\n')
+cs_project = WORKSPACE / 'csharp/App.csproj'
+cs_project.write_text(cs_project.read_text().replace('</Project>',
+    '<ItemGroup><Compile Include="../../obj/LinkedOwned.cs" Link="LinkedOwned.cs" /></ItemGroup></Project>'))
+linked_ts = RUN / 'linked-owned.ts'
+linked_ts.write_text('export const linkedOwned = 7;\n')
+(WORKSPACE / 'typescript/src/linked-owned.ts').symlink_to(linked_ts)
+
 
 def run(arguments, success=True):
     process = subprocess.run([str(a) for a in arguments], cwd=ROOT, env=ENV,
@@ -88,6 +100,14 @@ assert all_symbols['freshness'] == 'current', 'coordinator did not acknowledge o
 coverage = all_symbols['coverage']
 assert {c['target'] for c in coverage if c['language'] == 'csharp'} == {'net10.0', 'netstandard2.1'}, coverage
 assert all(c['status'] == 'complete' for c in coverage), coverage
+for language, name in [('typescript', 'linkedOwned'), ('csharp', 'LinkedOwned')]:
+    assert any(d['code'] == 'outside_workspace_source' for c in coverage if c['language'] == language
+               for d in c['diagnostics']), coverage
+    linked = equivalent({'op': 'symbols', 'name': name})['result']['symbols']
+    assert linked and all(not loc['generated'] for row in linked for loc in row['locations']), linked
+    loc = linked[0]['locations'][0]
+    saved = equivalent({'op': 'source', 'artifact_id': loc['artifact_id']})['result']['source']
+    assert name in saved['text'] and not saved['path'].startswith('$generated/'), saved
 CS_TARGETS = {'net10.0', 'netstandard2.1'}
 
 
@@ -200,7 +220,7 @@ config.write_text(saved_config)
 broken = WORKSPACE / 'typescript/src/broken.ts'
 broken.write_text('export const problem: number = missingValue;\n')
 broken_calls = WORKSPACE / 'csharp/BrokenInvocations.cs'
-broken_calls.write_text('''using System;
+broken_calls.write_text(''.join(f'using UnusedAlias{i} = System.String;\n' for i in range(110)) + '''using System;
 class BrokenInvocations {
     static void AmbiguousInvocationTarget(string value) { }
     static void AmbiguousInvocationTarget(Uri value) { }
@@ -213,6 +233,13 @@ partial_result = equivalent({'op': 'symbols', 'name': 'greet'})['result']
 assert any(c['language'] == 'typescript' and c['status'] == 'partial' and c['diagnostics'] for c in partial_result['coverage'])
 assert partial_result['symbols'], partial_result
 assert all(c['status'] == 'partial' for c in partial_result['coverage'] if c['language'] == 'csharp'), partial_result
+for language in ('typescript', 'csharp'):
+    assert any(d['code'] == 'unresolved_name_sites' for c in partial_result['coverage'] if c['language'] == language
+               for d in c['diagnostics']), partial_result
+for context in (c for c in partial_result['coverage'] if c['language'] == 'csharp'):
+    assert not any(d['code'] == 'diagnostics_truncated' for d in context['diagnostics']), context
+    assert all(not Path(d['path']).is_absolute() for d in context['diagnostics'] if d.get('path')), context
+    assert any(d['code'] == 'CS0121' and d['path'] == 'csharp/BrokenInvocations.cs' for d in context['diagnostics']), context
 ambiguous = equivalent({'op': 'symbols', 'name': 'AmbiguousInvocationTarget'})['result']['symbols']
 assert len(ambiguous) == 2, ambiguous
 for symbol in ambiguous:
@@ -241,6 +268,7 @@ summary = {'workspace': str(WORKSPACE), 'database': DATABASE, 'checked_utf8_refe
            'inferred_refresh_seconds': round(inferred_seconds, 3), 'source_artifacts': source_copies,
            'unique_source_payloads': source_payloads, 'result': 'passed'}
 summary['compiler_generated_source_checked'] = True
+summary['linked_source_origin_unresolved_counts_and_diagnostic_paths_checked'] = True
 (RUN / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
 (ROOT / '.artifacts/e2e/latest.json').write_text(json.dumps(summary, indent=2) + '\n')
 print(json.dumps(summary, indent=2))
