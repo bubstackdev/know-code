@@ -11,11 +11,14 @@ Use `runtime-info` for an installed artifact's actual identities and compatibili
 ## Build and run
 
 ```sh
+bash scripts/test.sh                     # quick source checks, no native build
 bash scripts/build.sh
-bash scripts/test.sh
-# Optimized artifacts and matching tests:
+bash scripts/test.sh debug rust cursors  # selected regressions, matching artifacts
+# Required optimized public baseline, plus change-triggered extra checks:
 bash scripts/build.sh release
-bash scripts/test.sh release
+bash scripts/test.sh release core
+# Complete historical test coverage remains available:
+bash scripts/test.sh release all
 target/debug/know-code watch /absolute/repository
 target/debug/know-code coordinator status
 target/debug/know-code index /absolute/repository --configuration Debug
@@ -24,7 +27,7 @@ target/debug/know-code query /database/path/from/output/index.db '{"op":"symbols
 
 Build/test scripts default to `debug` and accept `release`. Rust and the bundled SQLite build use the selected Cargo profile; the .NET worker and smoke consumer use matching Debug/Release artifacts. The coordinator selects the worker matching its compiled core. Node smoke packages are staged separately under `.artifacts/build/{debug,release}/node/`; the existing `bindings/node/know_code.node` development copy remains Debug. Matching .NET native libraries sit alongside each managed smoke consumer. Both profiles can coexist without swapping binaries. This is checkout-based development staging, not release distribution packaging.
 
-The product's own build profile is separate from the indexed workspace's C# configuration. A Release Know Code build still analyzes a workspace registered as Debug using its Debug compilation settings. `scripts/test.sh release` exercises the same compiler/native/coordinator/preparation/resolution suites with optimized artifacts; `KNOW_CODE_BUILD_PROFILE` is its developer-test selector. For performance comparisons, `scripts/benchmark-index.py --profile debug|release` chooses the matching host and provider and records the analyzed configurations. The login installation remains as documented in [LOCAL_INSTALL.md](LOCAL_INSTALL.md).
+The product's own build profile is separate from the indexed workspace's C# configuration. A Release Know Code build still analyzes a workspace registered as Debug using its Debug compilation settings. The test runner now defaults to quick checks; `scripts/test.sh release` selects optimized-profile quick checks, `release core` selects the required public integration baseline, and `release all` retains the former broad coverage. [VALIDATION.md](VALIDATION.md) lists named checks, required change-triggered matrices and separate distribution gates. Artifact consumers require the existing matching producer and verify it before first use and after the selected run; pure checks do not force a full build. `KNOW_CODE_BUILD_PROFILE` remains the developer-test selector. For performance comparisons, `scripts/benchmark-index.py --profile debug|release` chooses the matching host and provider and records the analyzed configurations. The login installation remains as documented in [LOCAL_INSTALL.md](LOCAL_INSTALL.md).
 
 The locked build uses Rust 1.99.1, Node 24.22.2, .NET SDK 10.0.403, and Python 3 in the tested environment. Cargo.lock, package-lock.json, and NuGet lockfiles pin dependencies. The build restores dependencies but does not install toolchains. At the user's explicit request, development toolchains were installed under `~/.cargo`/`~/.rustup`, `~/.dotnet`, and `~/.local/share/nodejs`, with command links in `~/.local/bin`.
 
