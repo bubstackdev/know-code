@@ -1,5 +1,27 @@
 #nullable enable
 using System.Text.Json;
+if (args[0] == "--contract-query")
+{
+    // Operator-only cross-version fixture: force one exact native image rather
+    // than permitting a loader fallback, and expose the public typed exception.
+    if (args.Length != 4) throw new ArgumentException("Expected --contract-query DATABASE SCOPE FFI_PATH");
+    var native = System.Runtime.InteropServices.NativeLibrary.Load(Path.GetFullPath(args[3]));
+    System.Runtime.InteropServices.NativeLibrary.SetDllImportResolver(typeof(KnowCode.Index).Assembly,
+        (name, _, _) => name == "know_code_ffi" ? native : nint.Zero);
+    try
+    {
+        using var result = await new KnowCode.Index(args[1], new KnowCode.QueryLimitScope(args[2]))
+            .QueryJsonAsync("{\"op\":\"symbols\"}");
+        Console.WriteLine(JsonSerializer.Serialize(new { response = result.RootElement, exception_type = (string?)null }));
+    }
+    catch (KnowCode.KnowCodeException error)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new { error = new { code = error.Code, message = error.Message },
+            exception_type = error.GetType().FullName }));
+    }
+    finally { System.Runtime.InteropServices.NativeLibrary.Free(native); }
+    return;
+}
 if (args[0] == "--path-validation")
 {
     // These constructor checks must work before any native library is loaded.
