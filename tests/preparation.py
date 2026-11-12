@@ -16,6 +16,7 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 HOST = ROOT / f'target/{PROFILE}/know-code'
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
 ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
+ENV['DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE']='0'  # The adapter must override inherited SDK advertising.
 
 
 def run(args, check=True):
@@ -42,6 +43,9 @@ loose.write_text('export const looseValue = 1;\n')
 <UseArtifactsOutput>true</UseArtifactsOutput>
 <ArtifactsPath>$(MSBuildThisFileDirectory).compiler-output</ArtifactsPath>
 </PropertyGroup><Target Name="CountRestores" BeforeTargets="Restore">
+<Error Condition="'$(MSBUILDDISABLENODEREUSE)' != '1'" Text="Restore enabled reusable MSBuild nodes" />
+<Error Condition="'$(DOTNET_CLI_USE_MSBUILD_SERVER)' != '0'" Text="Restore enabled the MSBuild server" />
+<Error Condition="'$(DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE)' != '1'" Text="Restore enabled workload update advertising" />
 <WriteLinesToFile File="$(MSBuildProjectExtensionsPath)restore-count.txt" Lines="restore" Overwrite="false" />
 </Target></Project>''')
 cs = WORKSPACE / 'csharp'
@@ -86,6 +90,7 @@ def query(name):
 initial = settled()
 assert {'restoring', 'analyzing'} <= seen_stages, seen_stages
 assert query('configuredValue')['symbols'] and query('looseValue')['symbols']
+assert all(not location['generated'] for row in query('DerivedBefore')['symbols'] for location in row['locations']), 'an arbitrary obj path was labeled generated'
 assert any(c['inferred'] and c['analysis_options'].get('strict') and 'inferredRoot' in c['analysis_options'] for c in query('looseValue')['coverage'])
 assert all(c['status'] == 'complete' for c in query('configuredValue')['coverage'])
 assert not (WORKSPACE / 'package-lock.json').exists(), 'restoration synthesized a source lockfile'
@@ -105,7 +110,7 @@ assert query('savedValue')['symbols']
 derived.write_text(derived.read_text().replace('DerivedBefore', 'DerivedAfter'))
 saved = settled(saved['generation'])
 assert query('DerivedAfter')['symbols'] and not query('DerivedBefore').get('symbols')
-assert counter.read_text() == count, 'saved generated source repeated restore'
+assert counter.read_text() == count, 'saved compiler-selected excluded source repeated restore'
 
 # A dependency install can generate thousands of irrelevant watcher events. It must
 # neither force another install nor publish a replacement for unchanged inputs.
@@ -157,7 +162,7 @@ assert len(counter.read_text().splitlines()) > restores_before_repair, 'healthy 
 assert all(c['status'] == 'complete' for c in query('configuredValue')['coverage'])
 summary = {'result': 'passed', 'database': str(DATABASE), 'checks': ['npm_restore_without_scripts', 'no_synthetic_lockfile',
            'mixed_configured_inferred_typescript', 'centralized_msbuild_assets', 'source_save_restore_deduplication',
-           'failed_restore_deduplication', 'explicit_restore_retry', 'saved_generated_inputs', 'dependency_event_flood', 'restore_error_stdout', 'partial_graph_and_repair', 'visible_progress']}
+           'failed_restore_deduplication', 'explicit_restore_retry', 'saved_compiler_selected_excluded_inputs', 'restore_child_server_and_advertising_policy', 'dependency_event_flood', 'restore_error_stdout', 'partial_graph_and_repair', 'visible_progress']}
 (RUN / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
 (ROOT / '.artifacts/prep/latest.json').write_text(json.dumps(summary, indent=2) + '\n')
 print(json.dumps(summary, indent=2))

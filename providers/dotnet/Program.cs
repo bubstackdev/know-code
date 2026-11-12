@@ -151,6 +151,9 @@ static class Tools
     private static async Task<string> Run(string directory, bool progress, string[] arguments)
     {
         var info = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        info.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        info.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        info.Environment["DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE"] = "1";
         foreach (var argument in arguments) info.ArgumentList.Add(argument);
         using var process = Process.Start(info) ?? throw new InvalidOperationException("cannot start dotnet; install the required SDK");
         var stdout = Capture(process.StandardOutput, progress, directory, progress ? 4096 : 1024 * 1024);
@@ -261,7 +264,7 @@ static partial class Analysis
             CompilerVersion = $"Roslyn {typeof(CSharpCompilation).Assembly.GetName().Version}; SDK {sdkVersion}",
             Dependencies = { project.ProjectReferences.Select(r => project.Solution.GetProject(r.ProjectId)?.FilePath).Where(p => p is not null).Select(p => Path.GetRelativePath(request.WorkspaceRoot, p!).Replace('\\', '/')) },
             InputPaths = { project.AdditionalDocuments.Select(d => d.FilePath).Concat(project.AnalyzerConfigDocuments.Select(d => d.FilePath))
-                .Concat(project.Documents.Where(d => GeneratedFile(d.FilePath)).Select(d => d.FilePath)).OfType<string>()
+                .Concat(project.Documents.Select(d => d.FilePath)).OfType<string>()
                 .Concat(catalog.Inputs(projectPath)).Distinct(StringComparer.Ordinal) },
             OptionsJson = JsonSerializer.Serialize(new { sdk = sdkVersion, target, configuration, platform,
                 build_context = catalog.BuildContexts.Provenance(projectPath),
