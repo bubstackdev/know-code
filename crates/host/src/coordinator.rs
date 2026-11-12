@@ -1956,6 +1956,15 @@ fn persist_record(
 /// run under entries/cursor/settings locks. Registry ordering is retained by a
 /// nonblocking registry handoff before dropping entries for the durable write.
 fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<()> {
+    // This event loop alone starts/finishes jobs, so the reservation remains
+    // stable through this synchronous pass, including pre-writer planning.
+    // Release its mutex before taking entries or doing filesystem/SQLite work.
+    let active_database = shared
+        .active_job
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(database, _)| database.clone());
     let requests = {
         let entries = shared.entries.lock().unwrap();
         entries
@@ -1964,7 +1973,11 @@ fn maintain_disk(shared: &Shared, data: &Path, after: &mut String) -> AnyResult<
                 std::ops::Bound::Unbounded,
             ))
             .chain(entries.range(..=after.clone()))
-            .filter(|(_, entry)| entry.status.available && !entry.recovering)
+            .filter(|(database, entry)| {
+                Some(database.as_str()) != active_database.as_deref()
+                    && entry.status.available
+                    && !entry.recovering
+            })
             .take(16)
             .map(|(db, entry)| {
                 (
