@@ -399,6 +399,17 @@ pub fn extra_inputs_at(database: Option<&Path>, root: &Path) -> Result<Vec<PathB
     Ok(result)
 }
 
+fn inferred_swift_project(root: &Path, source: &Path) -> String {
+    let directory = source.parent().unwrap_or(root);
+    let relative = directory.strip_prefix(root).unwrap_or(directory);
+    let group = if relative.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        relative.to_string_lossy().replace('\\', "/")
+    };
+    format!("$swift-inferred:{group}")
+}
+
 // None means a complete refresh; Some scopes replace only those project units.
 pub fn affected_projects(
     database: &Path,
@@ -457,15 +468,30 @@ fn affected_projects_at(
             affected.insert("$inferred".into());
         }
         if language == "swift" && owners.is_empty() {
-            // A newly saved file can introduce a standalone directory group.
-            let directory = path.parent().unwrap_or(root);
-            let relative = directory.strip_prefix(root).unwrap_or(directory);
-            let relative = if relative.as_os_str().is_empty() {
-                ".".into()
-            } else {
-                relative.to_string_lossy().replace('\\', "/")
-            };
-            affected.insert(format!("$swift-inferred:{relative}"));
+            // New or already-removed loose files affect their own group. A
+            // configured project may also enroll a new file beneath its root;
+            // its adapter remains authoritative about actual target ownership.
+            affected.insert(inferred_swift_project(root, path));
+            for (project, _, language, _) in &metadata {
+                if language != "swift" || project.starts_with("$swift-inferred:") {
+                    continue;
+                }
+                let project_path = root.join(project);
+                let parent = project_path.parent().unwrap_or(root);
+                let boundary = if swift_manifest(&project_path) {
+                    Some(parent)
+                } else if project_path.file_name().is_some_and(|name| {
+                    name == "project.pbxproj" || name == "contents.xcworkspacedata"
+                }) {
+                    parent.parent()
+                } else {
+                    None
+                };
+                if boundary.is_some_and(|directory| path.starts_with(directory)) {
+                    affected.insert(project.clone());
+                }
+            }
+            continue;
         }
         if owners.is_empty() {
             affected.extend(
@@ -617,25 +643,16 @@ pub fn refresh_controlled(
     cs.retain(|p| selected(p));
     rust.retain(|p| selected(p));
     swift.retain(|p| selected(p));
-    let swift_group = |source: &str| {
-        let directory = Path::new(source).parent().unwrap_or(root);
-        let relative = directory.strip_prefix(root).unwrap_or(directory);
-        let group = if relative.as_os_str().is_empty() {
-            ".".into()
-        } else {
-            relative.to_string_lossy().replace('\\', "/")
-        };
-        format!("$swift-inferred:{group}")
-    };
     if let Some(scopes) = replacements {
         let selected: BTreeSet<_> = scopes
             .iter()
             .filter(|scope| scope.starts_with("$swift-inferred:"))
             .collect();
-        swift_sources.retain(|source| selected.contains(&swift_group(source)));
+        swift_sources
+            .retain(|source| selected.contains(&inferred_swift_project(root, Path::new(source))));
         let present: BTreeSet<_> = swift_sources
             .iter()
-            .map(|source| swift_group(source))
+            .map(|source| inferred_swift_project(root, Path::new(source)))
             .collect();
         swift.extend(
             scopes

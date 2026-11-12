@@ -600,6 +600,62 @@ fn empty_worker_cannot_remove_its_scope_while_other_units_survive() {
 }
 
 #[test]
+fn unowned_swift_changes_select_their_group_and_containing_projects() {
+    let path = database();
+    let root = path.parent().unwrap();
+    let mut writer = Writer::open(&path).unwrap();
+    for project in [
+        "$swift-inferred:swift",
+        "swift-package/Package.swift",
+        "xcode/App.xcodeproj/project.pbxproj",
+    ] {
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: project.into(),
+                language: "swift".into(),
+                project_path: project.into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: project.into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    writer.publish().unwrap();
+    for (source, mut expected) in [
+        ("swift/new/New.swift", vec!["$swift-inferred:swift/new"]),
+        (
+            "swift-package/Sources/New.swift",
+            vec![
+                "$swift-inferred:swift-package/Sources",
+                "swift-package/Package.swift",
+            ],
+        ),
+        (
+            "xcode/New.swift",
+            vec![
+                "$swift-inferred:xcode",
+                "xcode/App.xcodeproj/project.pbxproj",
+            ],
+        ),
+    ] {
+        expected.sort();
+        let scopes =
+            know_code_core::workspace::affected_projects(&path, root, &[root.join(source)])
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            scopes, expected,
+            "new/already-removed source {source} replanned unrelated groups"
+        );
+    }
+}
+
+#[test]
 fn incremental_publication_reuses_unchanged_units_and_reclaims_replaced_facts() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();
