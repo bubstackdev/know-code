@@ -909,12 +909,14 @@ mod pipe_tests {
                 send.send((messages, stdout)).unwrap();
             });
             if paused {
+                let paused_result = receive.recv_timeout(Duration::from_millis(30));
+                let resumed = unsafe { libc::kill(-(pid as i32), libc::SIGCONT) };
+                control.test_pause(false);
                 assert!(matches!(
-                    receive.recv_timeout(Duration::from_millis(30)),
+                    paused_result,
                     Err(mpsc::RecvTimeoutError::Timeout)
                 ));
-                assert_eq!(unsafe { libc::kill(-(pid as i32), libc::SIGCONT) }, 0);
-                control.test_pause(false);
+                assert_eq!(resumed, 0);
             }
             let (messages, mut stdout) = receive
                 .recv_timeout(Duration::from_secs(3))
