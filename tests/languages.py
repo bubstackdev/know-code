@@ -110,7 +110,9 @@ def check_ranges(name, provider):
 
 
 generation = wait()
-coverage = query({'op': 'symbols', 'limit': 1000}, equivalent=True)['coverage']
+# Request workspace coverage explicitly; symbol inventory size must not turn
+# this cross-provider coverage/parity check into an oversized response.
+coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full'}, equivalent=True)['coverage']
 assert {item['language'] for item in coverage} == {'typescript', 'csharp', 'rust', 'swift'}, coverage
 assert all(item['status'] == 'partial' for item in coverage if item['language'] == 'rust'), coverage
 assert all(item['status'] == 'complete' for item in coverage if item['language'] != 'rust'), coverage
@@ -182,7 +184,7 @@ assert all(item['analysis_options']['toolchainSelection']['origin'] == 'reposito
 pin.unlink()
 generation = wait(generation)
 assert all(item['analysis_options']['toolchainSelection']['swiftPin'] is None
-           for item in query({'op': 'symbols','coverage_detail':'full'})['coverage'] if item['project_path'] == 'swift-package/Package.swift')
+           for item in query({'op': 'symbols','limit':1,'coverage_detail':'full'})['coverage'] if item['project_path'] == 'swift-package/Package.swift')
 
 added = WORKSPACE / 'swift/new/New.swift'
 added.parent.mkdir()
