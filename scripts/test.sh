@@ -3,10 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Bash 3-compatible catalog. Preserve the historical all-check order.
-task_all_checks='build-record rust cli protocol jsonrpc provider-source rust-navigation native-header managed-paths typescript typescript-classification node-preparation preparation-safety swift-toolchain sdk-metadata csharp-context csharp-target-grouping csharp-classification project-trust provider-failures e2e query-admission wal-pressure test-classification recovery upgrades mcp cursors workspace-api query-deadlines query-cancellation response-budget live coordinator discovery resources preparation resolution call-graph project-links dispatch rust-provider rust-managed swift-provider swiftpm-provider xcode-provider languages'
+task_all_checks='build-record rust cli protocol jsonrpc provider-source rust-navigation native-header managed-paths typescript typescript-classification node-preparation preparation-safety swift-toolchain sdk-metadata csharp-context csharp-target-grouping csharp-classification project-trust provider-failures e2e query-admission wal-pressure test-classification recovery upgrades mcp cursors workspace-api query-deadlines query-cancellation response-budget live coordinator discovery resources preparation resolution call-graph project-links dispatch rust-provider rust-managed rust-contexts swift-provider swiftpm-provider xcode-provider languages'
 task_quick_checks='protocol provider-source native-header typescript'
 task_core_checks="$task_quick_checks build-record rust managed-paths cli project-trust e2e query-admission wal-pressure test-classification recovery upgrades mcp cursors workspace-api query-deadlines query-cancellation response-budget live coordinator discovery resources preparation call-graph"
-task_extended_checks='jsonrpc rust-navigation typescript-classification node-preparation preparation-safety swift-toolchain sdk-metadata csharp-context csharp-target-grouping csharp-classification provider-failures resolution project-links dispatch rust-provider rust-managed swift-provider swiftpm-provider xcode-provider languages'
+task_extended_checks='jsonrpc rust-navigation typescript-classification node-preparation preparation-safety swift-toolchain sdk-metadata csharp-context csharp-target-grouping csharp-classification provider-failures resolution project-links dispatch rust-provider rust-managed rust-contexts swift-provider swiftpm-provider xcode-provider languages'
 
 usage() {
   cat <<'USAGE'
@@ -126,6 +126,7 @@ run_check() {
     dispatch) python3 tests/dispatch.py ;;
     rust-provider) python3 tests/rust_provider.py ;;
     rust-managed) python3 tests/rust_managed.py ;;
+    rust-contexts) node tests/rust_contexts.mjs; node tests/rust_context_collection.mjs ;;
     swift-provider) python3 tests/swift_provider.py ;;
     swiftpm-provider) python3 tests/swiftpm_provider.py ;;
     xcode-provider) python3 tests/xcode_provider.py ;;
@@ -138,7 +139,7 @@ for task_check in $task_all_checks; do
   case " $task_selected " in *" $task_check "*) ;; *) continue ;; esac
   # These checks load source or owned fixtures, not product build outputs.
   case "$task_check" in
-    build-record|rust|protocol|jsonrpc|provider-source|rust-navigation|native-header|typescript|typescript-classification|node-preparation|preparation-safety|swift-toolchain|rust-provider|rust-managed) ;;
+    build-record|rust|protocol|jsonrpc|provider-source|rust-navigation|native-header|typescript|typescript-classification|node-preparation|preparation-safety|swift-toolchain|rust-provider|rust-managed|rust-contexts) ;;
     *)
       if [ "$task_verified" -eq 0 ]; then
         printf '\n[producer] verify %s\n' "$task_profile"

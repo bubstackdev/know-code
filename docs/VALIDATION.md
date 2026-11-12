@@ -99,3 +99,11 @@ under the managed policy, and retains malformed/oversized-cache and explicit
 retry cases. It needs installed Rust/analyzer tools but no product native build
 or hosted dependency download. Run it during relevant adapter work; it does not
 replace assembled coordinator/native, exact Cargo-context or release gates.
+
+The `rust-contexts` extended check runs owned compiler-context planning and
+collection/cache fixtures after changes to Rust capture, cfg/input/artifact
+proof or analyzer-project construction. It uses installed Cargo/rustc and
+durable local fixtures, without a native product build or hosted downloads.
+It covers warm reuse, include edits, replaced artifacts and failed-unit
+isolation; selected-root worker and native graph parity remain separate gates.
+It is intentionally excluded from routine quick and core checks.

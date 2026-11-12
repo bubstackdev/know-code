@@ -116,6 +116,16 @@ captures occurred where zero were expected. Evidence:
 cause is fixed and the focused fixture passes. Swift compiler argument
 normalization was extracted unchanged into one helper for both planners.
 
+The collection rerun at `e720a63` passes all seven focused scenarios, including
+warm reuse without compiler capture, known include edits, artifact replacement,
+healthy contexts after a test compilation failure, wrapper refusal and scratch
+cleanup (`wave-01/rust-context-collection-02/`). The fixture now declares its
+build-script marker as an output through precise rerun inputs; Cargo's default
+whole-package watch had legitimately invalidated the earlier run. Capture also
+preserves actual Cargo jobserver descriptors rather than dropping them in the
+wrapper subprocess. Worker routing remains pending, and independent review
+found a blocking-open-before-regular-file-check issue being addressed separately.
+
 The package-cache experiment has not qualified. The first attempt selected
 Command Line Tools and stopped before compiler execution. With explicit Xcode
 selection, the restore still tried the global SwiftPM manifest cache despite
@@ -125,3 +135,19 @@ commands in the adjacent run directories. Keep the global cache blocked while
 finding supported manifest-cache isolation; do not treat package repository
 cache flags as complete offline/cache control. Neither attempt reached the
 missing/restored-cache analysis comparison.
+
+Actual compiler/IndexStore extraction now passes the owned Xcode body gates on
+both platforms, preserving all captured indexing flags. Each app context
+contains 18 symbols and 23 relationships, including a private Unicode-named
+function, nested local declarations/calls and a function-value reference that
+is not a call. BOM/CRLF source locations decode at exact UTF-8 byte ranges.
+Independent body-error extraction reports the expected missing-value diagnostic,
+partial coverage and no invented symbol even though module preparation
+succeeded. Evidence: `xcode-graph-plan-01/`,
+`xcode-compiler-graph-preserve-01/`, `xcode-graph-body-error-plan-01/` and
+`xcode-compiler-body-error-preserve-01/` under the implementation artifact root.
+The shared ingester still reports honest partial graph capabilities; this is
+finite compiler/protocol evidence, not storage/native parity, real-corpus or
+installed production certification. No indexing shortcut removal was justified
+or attempted. Sampled aggregate compiler/probe RSS stayed around 638–645 MiB;
+these samples are neither hard limits nor true peaks.
