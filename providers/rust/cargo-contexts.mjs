@@ -159,7 +159,11 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
         '--target-dir', targetDirectory, ...cargoSelection(policy)];
       if (target) args.push('--target', target);
       const result = spawnSync('cargo', args, {cwd: path.dirname(manifest), env: {...compilerEnvironment(),
-        CARGO_BUILD_BUILD_DIR: path.join(state, 'build'), RUSTC_WRAPPER: wrapper, KNOW_CODE_RUST_CAPTURE_CONFIG: configuration},
+        // Public Cargo control: ask the currently selected compiler for its
+        // identity even when compilation artifacts are fresh. This does not
+        // disable metadata/incremental reuse or force source compilation.
+        CARGO_CACHE_RUSTC_INFO: '0', CARGO_BUILD_BUILD_DIR: path.join(state, 'build'),
+        RUSTC_WRAPPER: wrapper, KNOW_CODE_RUST_CAPTURE_CONFIG: configuration},
         encoding: 'utf8', timeout: 120000, maxBuffer: LIMIT});
       if (result.error || result.signal) throw new Error(`Cargo context preparation failed: ${result.error?.message ?? result.signal}`);
       cargoSucceeded = result.status === 0;
