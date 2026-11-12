@@ -127,6 +127,57 @@ for language, name, expected in [('rust','Greeter','included'),('swift','message
     assert context['declarations'] and any(d['source_status']==expected for d in context['declarations']), context
 print('languages: four-provider native parity and exact retained UTF-8 ranges passed', flush=True)
 
+# The same stored traversal and native SDKs must preserve compiler evidence
+# from both new adapters, including the difference between calls and values.
+for language, leaf_name, direct_name, reference_name in [
+        ('swift', 'swiftGraphLeaf(_:)', 'swiftGraphDirect()', 'swiftGraphReference()'),
+        ('rust', 'graph_leaf', 'graph_entry', 'graph_value_only')]:
+    selected = {}
+    for name in (leaf_name, direct_name, reference_name):
+        matches = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True).get('symbols', [])
+                   if symbol['name'] == name and symbol['compilation_id'].startswith(language + ':')]
+        assert len(matches) == 1, (language, name, matches)
+        selected[name] = matches[0]['id']
+    leaf_id, direct_id, reference_id = (selected[name] for name in (leaf_name, direct_name, reference_name))
+    callers = query({'op': 'callers', 'symbol_id': leaf_id}, equivalent=True)['graph']
+    assert reference_id not in {finding['symbol']['id'] for finding in callers['findings']}, callers
+    direct = next(finding for finding in callers['findings'] if finding['symbol']['id'] == direct_id)
+    assert direct['paths'] and all(edge['kind'] == 'call' and edge['resolution'] == 'compiler_bound'
+                                   for path in direct['paths'] for edge in path), direct
+    callees = query({'op': 'callees', 'symbol_id': direct_id, 'max_depth': 1}, equivalent=True)['graph']
+    called = next(finding for finding in callees['findings'] if finding['symbol']['id'] == leaf_id)
+    assert called['paths'] and all(edge['source_id'] == direct_id and edge['target_id'] == leaf_id
+                                  and edge['kind'] == 'call' and edge['resolution'] == 'compiler_bound'
+                                  for path in called['paths'] for edge in path), called
+    assert not query({'op': 'callees', 'symbol_id': reference_id}, equivalent=True)['graph']['findings']
+    impact = query({'op': 'impact', 'symbol_id': leaf_id}, equivalent=True)['graph']
+    assert {direct_id, reference_id} <= {finding['symbol']['id'] for finding in impact['findings']}, impact
+    value_use = next(finding for finding in impact['findings'] if finding['symbol']['id'] == reference_id)
+    assert value_use['paths'] and all(edge['kind'] == 'reference' and edge['resolution'] == 'compiler_bound'
+                                    for path in value_use['paths'] for edge in path), value_use
+    reports = query({'op': 'symbols', 'name': leaf_name, 'coverage_detail': 'full'}, equivalent=True)['coverage']
+    assert reports and all(report['capabilities']['calls'] == 'partial'
+                           and report['capabilities']['dependencies'] == 'partial'
+                           and report['capabilities']['dispatch'] == 'partial' for report in reports), reports
+    if language == 'rust':
+        assert all(report['status'] == 'partial' for report in reports), reports
+        constants = [symbol for symbol in query({'op': 'symbols', 'name': 'GRAPH_VALUE'}, equivalent=True).get('symbols', [])
+                     if symbol['name'] == 'GRAPH_VALUE' and symbol['compilation_id'].startswith('rust:')]
+        assert len(constants) == 1, constants
+        constant_impact = query({'op': 'impact', 'symbol_id': constants[0]['id'], 'kinds': ['reference']}, equivalent=True)['graph']
+        for identifier in (leaf_id, direct_id):
+            finding = next(item for item in constant_impact['findings'] if item['symbol']['id'] == identifier)
+            assert finding['paths'] and all(edge['kind'] == 'reference' and edge['resolution'] == 'compiler_bound'
+                                           for path in finding['paths'] for edge in path), finding
+    else:
+        assert all(report['capabilities']['project_links'] == 'unavailable' for report in reports), reports
+        for name in ('swiftGraphLoaded', 'swiftGraphClosure'):
+            values = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True).get('symbols', [])
+                      if symbol['name'] == name and symbol['compilation_id'].startswith('swift:')]
+            assert len(values) == 1, (name, values)
+            assert not query({'op': 'callees', 'symbol_id': values[0]['id']}, equivalent=True)['graph']['findings']
+print('languages: stored Swift/Rust calls, value impact and honest graph capability parity passed', flush=True)
+
 before = owners()
 rust = WORKSPACE / 'rust/src/lib.rs'
 rust.write_text(rust.read_text() + '\n// saved Rust change\n')
@@ -269,6 +320,8 @@ assert owners(), 'Saved standalone TypeScript source did not restore a compilati
 summary = {'result': 'passed', 'profile': PROFILE, 'database': DATABASE,
            'checked_utf8_ranges': checked, 'rust_coverage': 'explicitly partial',
            'checks': ['four_provider_publication', 'native_parity', 'UTF8_source_ranges', 'build_cache_and_worktree_exclusions',
+                      'Swift_Rust_stored_call_and_impact_native_parity', 'compiler_bound_paths_and_value_reference_separation',
+                      'Rust_constant_dependency_impact', 'Swift_value_initializers_do_not_invent_calls',
                       'Rust_scoped_save', 'extensionless_Cargo_config', 'Swift_scoped_save', 'SwiftPM_target_save',
                       'Swift_pin_failure_repair_and_removal', 'new_Swift_group',
                       'last_Swift_file_deletion_without_sibling_reanalysis', 'Swift_partial_and_repair',
