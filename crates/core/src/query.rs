@@ -1742,6 +1742,209 @@ mod tests {
         )
         .unwrap();
     }
+    #[test]
+    fn test_mask_index_plan_comparison_preserves_symbol_results() {
+        use crate::protocol::{
+            FactBatch, Occurrence, SourceArtifact, Symbol, TestClassification, TestEvidence,
+        };
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/test-mask-plans")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ))
+            .join("index.db");
+        let mut writer = Writer::open(&path).unwrap();
+        for unit in 0..4 {
+            let id = format!("unit{unit}");
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: id.clone(),
+                    target: format!("target{}", unit % 2),
+                    ..Default::default()
+                }))
+                .unwrap();
+            for kind in ["unknown", "test", "non_test"] {
+                writer
+                    .stage(Payload::Source(SourceArtifact {
+                        id: kind.into(),
+                        path: format!("{id}/{kind}.ts"),
+                        utf8: b"x".to_vec(),
+                        sha256: format!("{:x}", Sha256::digest(b"x")),
+                        compilation_id: id.clone(),
+                        test_classification: Some(TestClassification {
+                            policy_version: crate::testing::POLICY_VERSION,
+                            kind: kind.into(),
+                            evidence: vec![TestEvidence {
+                                basis: "fixture".into(),
+                                value: kind.into(),
+                                path: id.clone(),
+                                inferred: false,
+                            }],
+                        }),
+                        ..Default::default()
+                    }))
+                    .unwrap();
+            }
+            let mut facts = FactBatch {
+                compilation_id: id.clone(),
+                ..Default::default()
+            };
+            for number in 0..256 {
+                let symbol_id = format!("symbol{number:04}");
+                facts.symbols.push(Symbol {
+                    id: symbol_id.clone(),
+                    name: if number % 8 == 0 {
+                        "needle".into()
+                    } else {
+                        format!("member{number:04}")
+                    },
+                    kind: "function".into(),
+                    ..Default::default()
+                });
+                let mask = number % 7 + 1;
+                for (bit, kind) in [(1, "unknown"), (2, "test"), (4, "non_test")] {
+                    if mask & bit != 0 {
+                        facts.occurrences.push(Occurrence {
+                            symbol_id: symbol_id.clone(),
+                            artifact_id: kind.into(),
+                            role: "declaration".into(),
+                            end_byte: 1,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            writer.stage(Payload::Facts(facts)).unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: id,
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+        writer.publish().unwrap();
+
+        // Exact production SQL, including target/compilation scopes and all
+        // masks. Compare both unanalysed and analysed planner statistics.
+        let mut evidence = vec![];
+        for analyzed in [false, true] {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch("CREATE INDEX IF NOT EXISTS symbol_test_mask ON symbols(test_mask)")
+                .unwrap();
+            if analyzed {
+                connection.execute_batch("ANALYZE").unwrap();
+            }
+            drop(connection);
+            let capture = |with_index: bool| {
+                let view = crate::query::fixture_view(&path).unwrap();
+                let masks: Vec<(u8, u32)> = view.connection.prepare("SELECT test_mask,count(*) FROM symbols GROUP BY test_mask ORDER BY test_mask").unwrap()
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(std::result::Result::unwrap).collect();
+                assert_eq!(
+                    masks.iter().map(|(mask, _)| *mask).collect::<Vec<_>>(),
+                    vec![1, 2, 3, 4, 5, 6, 7]
+                );
+                let sqlite_source: String = view
+                    .connection
+                    .query_row("SELECT sqlite_source_id()", [], |r| r.get(0))
+                    .unwrap();
+                let mut captures = vec![];
+                for (name, text) in [
+                    (None, None),
+                    (Some("needle"), None),
+                    (None, Some("needle")),
+                    (Some("needle"), Some("needle")),
+                ] {
+                    for tests in ["all", "only", "exclude"] {
+                        for target in [None, Some("target1")] {
+                            for compilation in [None, Some("unit0")] {
+                                for limit in [12, 1000] {
+                                    let input = serde_json::json!({"op":"symbols", "name":name, "query":text, "tests":tests, "target":target, "compilation_id":compilation, "limit":limit});
+                                    let request: QueryRequest =
+                                        serde_json::from_value(input.clone()).unwrap();
+                                    let sql = symbols_sql(&request);
+                                    let terms = text.map(|text| format!("\"{text}\""));
+                                    let parameters = params![
+                                        view.generation,
+                                        name,
+                                        terms,
+                                        target,
+                                        limit + 1,
+                                        compilation
+                                    ];
+                                    let plan: Vec<String> = view
+                                        .connection
+                                        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                                        .unwrap()
+                                        .query_map(parameters, |r| r.get(3))
+                                        .unwrap()
+                                        .map(std::result::Result::unwrap)
+                                        .collect();
+                                    let keys: Vec<String> = view
+                                        .connection
+                                        .prepare(&sql)
+                                        .unwrap()
+                                        .query_map(parameters, |r| r.get(0))
+                                        .unwrap()
+                                        .map(std::result::Result::unwrap)
+                                        .collect();
+                                    // Also compare complete projected result/classification
+                                    // bytes for every search/mask shape, at a small limit.
+                                    let projected =
+                                        if target.is_none() && compilation.is_none() && limit == 12
+                                        {
+                                            Some(
+                                                serde_json::to_vec(&view.query(request).unwrap())
+                                                    .unwrap(),
+                                            )
+                                        } else {
+                                            None
+                                        };
+                                    captures.push((serde_json::json!({"request":input,"sql":sql,"plan":plan,"mask_index_used":plan.iter().any(|p| p.contains("symbol_test_mask")),"rows":keys.len(),"keys_sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&keys).unwrap())),"projected_sha256":projected.as_ref().map(|bytes| format!("{:x}",Sha256::digest(bytes)))}), keys, projected));
+                                }
+                            }
+                        }
+                    }
+                }
+                (
+                    serde_json::json!({"with_index":with_index,"sqlite_version":rusqlite::version(),"sqlite_source_id":sqlite_source,"mask_counts":masks,"mask_index_used_any":captures.iter().any(|(record, _, _)|record["mask_index_used"] == true),"queries":captures.iter().map(|(record, _, _)|record).collect::<Vec<_>>()}),
+                    captures,
+                )
+            };
+            let (before, before_rows) = capture(true);
+            Connection::open(&path)
+                .unwrap()
+                .execute_batch("DROP INDEX symbol_test_mask")
+                .unwrap();
+            let (after, after_rows) = capture(false);
+            let unchanged = before_rows.iter().zip(&after_rows).all(
+                |((_, keys, projected), (_, other_keys, other_projected))| {
+                    keys == other_keys && projected == other_projected
+                },
+            );
+            evidence.push(serde_json::json!({"analyzed":analyzed,"results_unchanged":unchanged,"before":before,"after":after}));
+            std::fs::write(
+                path.with_file_name("comparison.json"),
+                serde_json::to_vec_pretty(&evidence).unwrap(),
+            )
+            .unwrap();
+            assert!(
+                unchanged,
+                "mask-index removal changed a bounded selection/projection; see {}",
+                path.with_file_name("comparison.json").display()
+            );
+        }
+        eprintln!(
+            "test-mask plan evidence: {}",
+            path.with_file_name("comparison.json").display()
+        );
+    }
     fn declaration_fixture() -> (std::path::PathBuf, [u64; 3]) {
         use crate::protocol::{FactBatch, Occurrence, SourceArtifact, Symbol};
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

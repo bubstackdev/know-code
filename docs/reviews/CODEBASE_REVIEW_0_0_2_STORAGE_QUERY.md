@@ -141,6 +141,24 @@ SQL grouping for broad browsing versus focused lookup, and actual mask-index
 plans/write cost. Keep failed observations and distinguish setup/cold work from
 the accepted warm focused lookup gate. None is closed by this static review.
 
+L17 now has a root-run comparison prepared in
+`query::tests::test_mask_index_plan_comparison_preserves_symbol_results`.
+Its deterministic fixture has 1,024 symbols across four units, two targets and
+all seven classification masks. It records the exact production `symbols_sql`
+plans for name/text/combined/browse searches, each test filter, optional target
+and compilation scope and two limits (96 shapes). Each matrix runs before/after
+dropping the index, with both unanalysed and analysed statistics. Selected key
+bytes must agree; twelve complete projected responses per phase must also agree,
+including origin classifications. `comparison.json` under the test's durable
+`.artifacts/test-mask-plans/` directory records actual SQLite version/source ID,
+SQL, plans, mask counts and result hashes, plus whether any plan uses the index.
+This is a proposed measurement, not executed evidence or permission to infer
+that every possible future data distribution/planner ignores the index.
+
+```sh
+cargo test -p know-code-core --locked --lib query::tests::test_mask_index_plan_comparison_preserves_symbol_results -- --exact --nocapture
+```
+
 Registry versioning (architecture 4) belongs to the runtime lane. Recovery/disk
 module decomposition (architecture 5) is not needed for the confirmed narrow
 fixes here. A typed operation rewrite (architecture 7) is not introduced without
