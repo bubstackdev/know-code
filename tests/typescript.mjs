@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import {createRequire} from 'node:module';
 import {analyze} from '../providers/typescript/analysis.mjs';
 import {declarationSymbols, dispatchTypeKeys} from '../providers/typescript/symbols.mjs';
+
+// Exercise the same semantic fixtures against an exact restored legacy compiler.
+// Default stays the pinned provider compiler; this does not select product compilers.
+const require = createRequire(import.meta.url);
+const selectedCompiler = process.env.KNOW_CODE_TEST_TYPESCRIPT_ROOT;
+const ts = require(selectedCompiler ? path.resolve(selectedCompiler) : 'typescript');
+assert(typeof ts.version === 'string' && /^(?:5\.9|6\.0)\./.test(ts.version), 'This legacy API fixture requires TypeScript 5.9.x or 6.0.x');
 
 const root = path.resolve('.artifacts/typescript', String(Date.now()));
 fs.mkdirSync(root, {recursive: true});

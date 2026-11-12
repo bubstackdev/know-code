@@ -26,8 +26,8 @@ function compilerFor(directory, root, declared) {
   let ts;
   try {ts=ownRequire(filename);}
   catch(error) {throw new ProjectSetupError('typescript_load_failed',`Cannot load selected TypeScript: ${error.message}`);}
-  if (typeof ts.version!=='string'||!ts.version.startsWith('5.9.'))
-    throw new ProjectSetupError('unsupported_compiler',`unsupported TypeScript ${ts.version??'unknown'}: this provider supports 5.9.x; no compiler substitution was made`,ts.version??'unavailable');
+  if (typeof ts.version!=='string'||!(ts.version.startsWith('5.9.')||ts.version.startsWith('6.0.')))
+    throw new ProjectSetupError('unsupported_compiler',`unsupported TypeScript ${ts.version??'unknown'}: this provider supports 5.9.x and 6.0.x; native TypeScript 7 analysis is not available yet; no compiler substitution was made`,ts.version??'unavailable');
   return ts;
 }
 
