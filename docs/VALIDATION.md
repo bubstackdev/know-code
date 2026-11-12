@@ -83,3 +83,10 @@ final producer verification at `c646bcf` in 1,135.4 seconds (about 18m55s), reta
 in `.artifacts/snow-leopard/wave-01/full-release-01/summary.json`. That is the
 historical full selection, not a measured duration for the new quick/core groups.
 Preserve original failures and source/profile/command receipts for every selected run.
+
+The tier selector was subsequently checked at `3b7960a`: all47 historical
+commands are retained, parser errors precede work, and a named artifact check
+verifies its producer before/after. The default quick selection passed in about
+one second on this machine (`quick-tier-01`); core's elapsed duration has not been
+measured separately. This is narrower coverage than `all`, not an equal-coverage
+performance comparison.
