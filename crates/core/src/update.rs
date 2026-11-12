@@ -72,6 +72,9 @@ struct WorkerPipe<P> {
     leader: libc::pid_t,
     reaped: Arc<AtomicBool>,
     drain: Option<usize>,
+    drain_start: Option<usize>,
+    read_bytes: u64,
+    eof: Option<&'static str>,
 }
 impl<P: AsRawFd> WorkerPipe<P> {
     fn new(
@@ -91,6 +94,9 @@ impl<P: AsRawFd> WorkerPipe<P> {
             leader: leader as libc::pid_t,
             reaped: Arc::clone(reaped),
             drain: None,
+            drain_start: None,
+            read_bytes: 0,
+            eof: None,
         })
     }
     fn check(&self) -> std::io::Result<()> {
@@ -159,15 +165,21 @@ impl<P: Read + AsRawFd> Read for WorkerPipe<P> {
                     return Err(std::io::Error::last_os_error());
                 }
                 self.drain = Some(available.max(0) as usize);
+                self.drain_start = self.drain;
             }
             let count = self
                 .drain
                 .map_or(buffer.len(), |left| left.min(buffer.len()));
             if count == 0 {
+                self.eof = Some("owned-exit drain exhausted");
                 return Ok(0);
             }
             match self.pipe.read(&mut buffer[..count]) {
                 Ok(count) => {
+                    self.read_bytes = self.read_bytes.saturating_add(count as u64);
+                    if count == 0 {
+                        self.eof = Some("pipe read returned zero");
+                    }
                     if let Some(left) = &mut self.drain {
                         *left = left.saturating_sub(count);
                     }
@@ -176,6 +188,7 @@ impl<P: Read + AsRawFd> Read for WorkerPipe<P> {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if self.drain.is_some() {
+                        self.eof = Some("owned-exit drain would block");
                         return Ok(0);
                     }
                     self.poll(libc::POLLIN)?;
@@ -183,6 +196,34 @@ impl<P: Read + AsRawFd> Read for WorkerPipe<P> {
                 Err(error) => return Err(error),
             }
         }
+    }
+}
+
+// Failure-only observation: WNOWAIT keeps the leader PID reserved until the
+// owned Worker removes its group, cleans up descendants, and reaps it.
+fn worker_exit_snapshot(leader: u32) -> String {
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            leader,
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    };
+    if result == 0 {
+        let info = unsafe { info.assume_init() };
+        format!(
+            "si_pid={} si_code={} si_status={}",
+            info.si_pid, info.si_code, info.si_status
+        )
+    } else {
+        let error = std::io::Error::last_os_error();
+        format!(
+            "waitid error kind={:?} errno={:?}",
+            error.kind(),
+            error.raw_os_error()
+        )
     }
 }
 impl<P: Write + AsRawFd> Write for WorkerPipe<P> {
@@ -367,19 +408,31 @@ pub(crate) fn index_published(
         let errors = std::thread::spawn(move || {
             let mut retained = std::collections::VecDeque::with_capacity(8192);
             let mut buffer = [0; 1024];
-            while let Ok(n) = stderr.read(&mut buffer) {
-                if n == 0 {
-                    break;
-                }
+            let read_error = loop {
+                let n = match stderr.read(&mut buffer) {
+                    Ok(0) => break None,
+                    Ok(n) => n,
+                    Err(error) => {
+                        break Some(format!(
+                            "stderr read error kind={:?} errno={:?}",
+                            error.kind(),
+                            error.raw_os_error()
+                        ));
+                    }
+                };
                 for byte in &buffer[..n] {
                     if retained.len() == 8192 {
                         retained.pop_front();
                     }
                     retained.push_back(*byte);
                 }
-            }
-            String::from_utf8_lossy(&retained.into_iter().collect::<Vec<_>>()).into_owned()
+            };
+            (
+                String::from_utf8_lossy(&retained.into_iter().collect::<Vec<_>>()).into_owned(),
+                read_error,
+            )
         });
+        let mut stdout = None;
         let execution = (|| -> Result<()> {
             protocol::write_frame(
                 &mut WorkerPipe::new(
@@ -394,15 +447,15 @@ pub(crate) fn index_published(
                     payload: Some(Payload::Analyze(worker.request)),
                 },
             )?;
-            let mut stdout = BufReader::new(WorkerPipe::new(
+            let stdout = stdout.insert(BufReader::new(WorkerPipe::new(
                 child.child.stdout.take().expect("piped stdout"),
                 control,
                 leader,
                 &reaped,
-            )?);
+            )?));
             let mut hello = false;
             let mut completed = false;
-            while let Some(message) = protocol::read_frame(&mut stdout)? {
+            while let Some(message) = protocol::read_frame(&mut *stdout)? {
                 control.check()?;
                 if message.job_id != job_id || completed {
                     return Err(Error::Protocol(
@@ -494,12 +547,28 @@ pub(crate) fn index_published(
             }
             Ok(())
         })();
+        let failure_context = execution.is_err().then(|| {
+            let pipe_context = stdout.as_ref().map(|stdout| {
+                let pipe = stdout.get_ref();
+                format!("stdout_eof={:?} stdout_read_bytes={} drain_start={:?} drain_remaining={:?}",
+                    pipe.eof, pipe.read_bytes, pipe.drain_start, pipe.drain)
+            }).unwrap_or_else(|| "stdout not initialized".into());
+            format!(
+                "leader={leader} before_cleanup=[{}] {pipe_context}", worker_exit_snapshot(leader)
+            )
+        });
         if execution.is_err() {
             child.terminate();
         }
         let exit = child.wait()?;
         reaped.store(true, Ordering::Release);
-        let details = errors.join().unwrap_or_default();
+        let (mut details, stderr_error) = errors
+            .join()
+            .unwrap_or_else(|_| (String::new(), Some("stderr reader panicked".into())));
+        if let Some(error) = stderr_error {
+            details.push('\n');
+            details.push_str(&error);
+        }
         control.check()?;
         execution.map_err(|error| match error {
             Error::UpdateRequired(_)
@@ -510,7 +579,10 @@ pub(crate) fn index_published(
             | Error::Cancelled
             | Error::Sqlite(_)
             | Error::Io(_) => error,
-            other => Error::Provider(format!("{other}\n{details}")),
+            other => Error::Provider(format!(
+                "{other}\nworker failure diagnostics: {}; forced_cleanup_requested=true; owned_wait={exit}\n{details}",
+                failure_context.as_deref().unwrap_or("unavailable")
+            )),
         })?;
         if !exit.success() {
             return Err(Error::Provider(format!(
@@ -660,9 +732,10 @@ mod pipe_tests {
         };
         let root = PathBuf::from(root);
         // This owned shell leaves the worker's process group, retains both
-        // output endpoints, emits no bytes, and exits on release or watchdog.
+        // output endpoints and exits on release or watchdog. Complete-stream
+        // cases emit late bytes on release, after the owned leader's EOF.
         // Tests release it through a file; they never kill an escaped process.
-        let mut retainer=Command::new("/bin/sh").args(["-c","n=0; while [ ! -f \"$KNOW_CODE_PIPE_FIXTURE/release\" ] && [ $n -lt 500 ]; do /bin/sleep 0.02; n=$((n+1)); done; : > \"$KNOW_CODE_PIPE_FIXTURE/retainer-done\""])
+        let mut retainer=Command::new("/bin/sh").args(["-c","n=0; while [ ! -f \"$KNOW_CODE_PIPE_FIXTURE/release\" ] && [ $n -lt 500 ]; do /bin/sleep 0.02; n=$((n+1)); done; case \"$KNOW_CODE_PIPE_MODE\" in complete*) printf late-descendant-output;; esac; : > \"$KNOW_CODE_PIPE_FIXTURE/retainer-done\""])
             .env("KNOW_CODE_PIPE_FIXTURE",&root).process_group(0).stdin(Stdio::null()).spawn().unwrap();
         std::fs::write(root.join("retainer-pid"), retainer.id().to_string()).unwrap();
         // The fixture leader exits explicitly below; while alive it still
@@ -672,6 +745,39 @@ mod pipe_tests {
         });
         println!("--worker-stream--");
         std::io::stdout().flush().unwrap();
+        let mode = std::env::var("KNOW_CODE_PIPE_MODE").unwrap();
+        if mode.starts_with("complete") {
+            for payload in [
+                Payload::Provider(ProviderInfo {
+                    language: "typescript".into(),
+                    ..Default::default()
+                }),
+                Payload::Source(SourceArtifact {
+                    id: "owned".into(),
+                    utf8: vec![
+                        b'b';
+                        if mode == "complete-small" {
+                            128
+                        } else {
+                            2 * 1024 * 1024
+                        }
+                    ],
+                    ..Default::default()
+                }),
+                Payload::Complete(Completion { success: true }),
+            ] {
+                protocol::write_frame(
+                    &mut std::io::stdout(),
+                    &Envelope {
+                        protocol_version: VERSION,
+                        job_id: "pipe-complete".into(),
+                        payload: Some(payload),
+                    },
+                )
+                .unwrap();
+            }
+            std::process::exit(0);
+        }
         std::io::stdout().write_all(&[1, 0]).unwrap();
         std::io::stdout().flush().unwrap();
         eprintln!("owned-worker-stderr");
@@ -729,6 +835,118 @@ mod pipe_tests {
         reader.join().unwrap();
         fixture.release();
         assert!(fixture.0.join("retainer-done").exists());
+    }
+    #[test]
+    fn complete_stream_survives_fast_exit_pause_and_late_escaped_output() {
+        for (size, paused) in [
+            (128, false),
+            (2 * 1024 * 1024, false),
+            (2 * 1024 * 1024, true),
+        ] {
+            let fixture = Fixture::new();
+            let control = Control::test_managed();
+            let mode = if size == 128 {
+                "complete-small"
+            } else {
+                "complete"
+            };
+            let mut worker = control.spawn(&mut fixture.command(mode)).unwrap();
+            let reaped = Arc::new(AtomicBool::new(false));
+            let pid = worker.child.id();
+            let mut stdout =
+                WorkerPipe::new(worker.child.stdout.take().unwrap(), &control, pid, &reaped)
+                    .unwrap();
+            fixture.ready();
+            if size == 128 {
+                let until = Instant::now() + Duration::from_secs(3);
+                while !stdout.exited().unwrap() {
+                    assert!(
+                        Instant::now() < until,
+                        "small complete stream leader did not exit"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            let mut stdout = framed(stdout);
+            if paused {
+                // The 2 MiB synchronous frame exceeds pipe capacity, keeping the
+                // leader alive until this reader starts consuming its payload.
+                assert_eq!(unsafe { libc::kill(-(pid as i32), libc::SIGSTOP) }, 0);
+                let until = Instant::now() + Duration::from_secs(3);
+                loop {
+                    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+                    assert_eq!(
+                        unsafe {
+                            libc::waitid(
+                                libc::P_PID,
+                                pid,
+                                info.as_mut_ptr(),
+                                libc::WSTOPPED | libc::WNOWAIT | libc::WNOHANG,
+                            )
+                        },
+                        0
+                    );
+                    let info = unsafe { info.assume_init() };
+                    if info.si_pid != 0 {
+                        assert_eq!(info.si_code, libc::CLD_STOPPED);
+                        break;
+                    }
+                    assert!(Instant::now() < until, "owned leader did not stop");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                assert!(
+                    !stdout.get_mut().exited().unwrap(),
+                    "WEXITED reported a stopped leader"
+                );
+                control.test_pause(true);
+            }
+            let (send, receive) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                let mut messages = Vec::new();
+                while let Some(message) = protocol::read_frame(&mut stdout).unwrap() {
+                    messages.push(message);
+                }
+                send.send((messages, stdout)).unwrap();
+            });
+            if paused {
+                assert!(matches!(
+                    receive.recv_timeout(Duration::from_millis(30)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                ));
+                assert_eq!(unsafe { libc::kill(-(pid as i32), libc::SIGCONT) }, 0);
+                control.test_pause(false);
+            }
+            let (messages, mut stdout) = receive
+                .recv_timeout(Duration::from_secs(3))
+                .expect("complete worker stream did not reach bounded EOF");
+            reader.join().unwrap();
+            assert_eq!(messages.len(), 3);
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| message.job_id == "pipe-complete")
+            );
+            assert!(
+                matches!(&messages[0].payload, Some(Payload::Provider(info)) if info.language == "typescript")
+            );
+            assert!(
+                matches!(&messages[1].payload, Some(Payload::Source(source)) if source.utf8 == vec![b'b'; size])
+            );
+            assert!(matches!(&messages[2].payload, Some(Payload::Complete(done)) if done.success));
+            assert!(
+                !fixture.0.join("retainer-done").exists(),
+                "EOF waited for escaped holder"
+            );
+            assert!(worker.wait().unwrap().success());
+            reaped.store(true, Ordering::Release);
+            fixture.release();
+            assert!(fixture.0.join("retainer-done").exists());
+            assert_eq!(
+                stdout.read(&mut [0; 64]).unwrap(),
+                0,
+                "late descendant output became worker protocol"
+            );
+        }
     }
     #[test]
     fn cancellation_unblocks_full_stdin_and_retained_stdout_stderr_and_releases_the_slot() {
