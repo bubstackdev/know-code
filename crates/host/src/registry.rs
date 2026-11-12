@@ -126,21 +126,25 @@ mod tests {
     use super::*;
     use rusqlite::types::Value;
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
 
     const LEGACY: &str = "CREATE TABLE workspaces(database TEXT PRIMARY KEY,root TEXT UNIQUE NOT NULL,configuration TEXT NOT NULL,generation INTEGER NOT NULL,inputs TEXT NOT NULL,error TEXT NOT NULL);";
 
     fn directory() -> std::path::PathBuf {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.artifacts/registry")
-            .join(format!(
-                "{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-        std::fs::create_dir_all(&root).unwrap();
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/registry");
+        std::fs::create_dir_all(&parent).unwrap();
+        let root = parent.join(format!(
+            "{}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
         root
     }
 
