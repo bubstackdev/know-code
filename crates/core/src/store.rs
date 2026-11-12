@@ -286,12 +286,13 @@ fn migrate_project_links(connection: &Connection) -> Result<()> {
 }
 
 /// These child/probe keys serve publication, retention and project replacement.
-/// Compatible retained stores need the same repair as newly created stores.
+/// Compatible retained stores need the same repair/retirement as new stores.
 pub(crate) fn ensure_cleanup_indexes(connection: &Connection) -> Result<()> {
     connection.execute_batch("CREATE INDEX IF NOT EXISTS unit_artifact_owner ON unit_artifacts(owner_generation,artifact_id);
         CREATE INDEX IF NOT EXISTS artifact_content ON artifacts(content_hash);
         CREATE INDEX IF NOT EXISTS generation_unit_owner ON generation_units(owner_generation,compilation_id);
-        CREATE INDEX IF NOT EXISTS compilation_project ON compilations(project_path,id);")?;
+        CREATE INDEX IF NOT EXISTS compilation_project ON compilations(project_path,id);
+        DROP INDEX IF EXISTS symbol_test_mask;")?;
     Ok(())
 }
 
@@ -439,7 +440,7 @@ impl Writer {
             migrate_dispatch_keys(&tx)?;
         }
         if version < 7 {
-            tx.execute_batch("ALTER TABLE compilations ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE unit_artifacts ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN test_mask INTEGER NOT NULL DEFAULT 1; CREATE INDEX symbol_test_mask ON symbols(test_mask); PRAGMA user_version=7;")?;
+            tx.execute_batch("ALTER TABLE compilations ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE unit_artifacts ADD COLUMN test_classification_json TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN test_mask INTEGER NOT NULL DEFAULT 1; PRAGMA user_version=7;")?;
         }
         if version < 8 {
             tx.execute_batch("ALTER TABLE compilations ADD COLUMN target_family TEXT NOT NULL DEFAULT ''; ALTER TABLE compilations ADD COLUMN target_equivalence_policy INTEGER NOT NULL DEFAULT 0; ALTER TABLE symbols ADD COLUMN declaration_key TEXT NOT NULL DEFAULT ''; ALTER TABLE symbols ADD COLUMN grouping_key TEXT NOT NULL DEFAULT ''; CREATE INDEX symbol_grouping ON symbols(grouping_key) WHERE grouping_key<>''; PRAGMA user_version=8;")?;

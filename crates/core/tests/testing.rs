@@ -267,10 +267,69 @@ fn shared_source_inherits_distinct_contexts_and_explicit_unknown() {
     );
 }
 #[test]
+fn format8_mask_index_retirement_preserves_classified_pinned_and_reopened_results() {
+    let p = fixture();
+    let connection = rusqlite::Connection::open(&p).unwrap();
+    let index_count = || {
+        connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='symbol_test_mask'",
+                [],
+                |r| r.get::<_, u32>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+            .unwrap(),
+        8
+    );
+    assert_eq!(
+        index_count(),
+        0,
+        "fresh migration must not build the retired index"
+    );
+    // A retained compatible store from the prior release still has this
+    // optional index. It must retire without reanalysis or loss of origin masks.
+    connection
+        .execute_batch("CREATE INDEX symbol_test_mask ON symbols(test_mask)")
+        .unwrap();
+    assert_eq!(index_count(), 1);
+    let pinned = ReadView::open_in_scope(&p, &common::scope(&p)).unwrap();
+    let requests: Vec<serde_json::Value> = ["all", "only", "exclude"]
+        .into_iter()
+        .map(|tests| serde_json::json!({"op":"symbols","tests":tests}))
+        .collect();
+    let expected: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|request| serde_json::to_value(query(&pinned, request.clone())).unwrap())
+        .collect();
+    for _ in 0..2 {
+        let writer = Writer::open_incremental(&p, &[]).unwrap();
+        assert_eq!(index_count(), 0);
+        // Abort the empty stage: current generation/facts remain unchanged,
+        // while compatible write-schema setup has already committed its repair.
+        drop(writer);
+        let reopened = ReadView::open_in_scope(&p, &common::scope(&p)).unwrap();
+        for (request, expected) in requests.iter().zip(&expected) {
+            assert_eq!(
+                serde_json::to_value(query(&pinned, request.clone())).unwrap(),
+                *expected
+            );
+            assert_eq!(
+                serde_json::to_value(query(&reopened, request.clone())).unwrap(),
+                *expected
+            );
+        }
+        assert_eq!(index_count(), 0);
+    }
+}
+#[test]
 fn format6_migration_keeps_old_readers_unknown_until_backfill() {
     let p = fixture();
     let c = rusqlite::Connection::open(&p).unwrap();
-    c.execute_batch("DROP INDEX symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; UPDATE reports SET capabilities_json='{}'; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=6;").unwrap();
+    c.execute_batch("DROP INDEX IF EXISTS symbol_test_mask; ALTER TABLE symbols DROP COLUMN test_mask; ALTER TABLE compilations DROP COLUMN test_classification_json; ALTER TABLE unit_artifacts DROP COLUMN test_classification_json; UPDATE reports SET capabilities_json='{}'; DROP INDEX symbol_grouping; ALTER TABLE symbols DROP COLUMN grouping_key; ALTER TABLE symbols DROP COLUMN declaration_key; ALTER TABLE compilations DROP COLUMN target_family; ALTER TABLE compilations DROP COLUMN target_equivalence_policy; PRAGMA user_version=6;").unwrap();
     let old = ReadView::open_in_scope(&p, &common::scope(&p)).unwrap();
     assert!(old.needs_test_classification().unwrap());
     assert!(
@@ -280,6 +339,15 @@ fn format6_migration_keeps_old_readers_unknown_until_backfill() {
     );
     let w = Writer::open_incremental(&p, &[]).unwrap();
     w.publish().unwrap();
+    assert_eq!(
+        c.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='symbol_test_mask'",
+            [],
+            |r| r.get::<_, u32>(0)
+        )
+        .unwrap(),
+        0
+    );
     assert_eq!(
         query(&old, serde_json::json!({"op":"symbols","tests":"exclude"}))
             .symbols

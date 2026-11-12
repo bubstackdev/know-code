@@ -79,6 +79,27 @@ cargo test -p know-code-core --locked --test graph graph_coverage_keeps_empty_ro
 cargo test -p know-code-core --locked --test graph
 ```
 
+**L17 — measured mask-index retirement.** Root's assembled `9b23c25` run passed
+the plan comparison using pinned SQLite 3.54.1. Across the 96 real search shapes
+in each statistics state, no plan used `symbol_test_mask`; before/after selections
+and complete sampled projections agreed. Shared compatible write-schema setup
+now drops this optional index, and the migration through format 7 no longer
+builds it just to drop it. Stored masks/classification evidence and format 8
+remain unchanged. A focused regression seeds the prior-release index on a
+classified store, retains a pinned reader, opens/aborts two ordinary writers,
+and compares all/only/exclude results through pinned and reopened views. Fresh
+and format-6-migrated stores must also lack the index. Older-schema test teardown
+uses `DROP INDEX IF EXISTS` for this now-optional index.
+
+Root validation requested for the retirement change:
+
+```sh
+cargo test -p know-code-core --locked --test testing format8_mask_index_retirement_preserves_classified_pinned_and_reopened_results -- --exact
+cargo test -p know-code-core --locked --test testing
+cargo test -p know-code-core --locked --test graph
+cargo test -p know-code-core --locked --lib query::tests::test_mask_index_plan_comparison_preserves_symbol_results -- --exact --nocapture
+```
+
 ## Per-ID disposition
 
 “Fixed before this lane” refers to released source, not a newly executed test.
@@ -101,7 +122,7 @@ validation. Outstanding measurements below remain outstanding.
 | M25 | Changed here; root validation requested above. | Request-local, bounded hash/offset checkpoints reduce repeated source-prefix work while preserving byte-based newline semantics. |
 | M26 | Claim overstated; SQL setup measurement remains open. | `symbols_sql` groups/orders matching finding keys before SQL LIMIT; Rust collects only `limit+1` keys. Exact-name/FTS paths have `symbol_filters_use_name_or_fts_lookups`; browsing and target-equivalent grouping remain accepted behavior. |
 | L16 | Residual cleanup measurement remains open; not fixed by a new bound. | `Writer::drop` still deletes staging/manifests and reclaims without a progress handler. Missing cleanup/FK probes are repaired; `publication_checkpoint_and_failed_writer_cleanup_release_the_cursor_fence` verifies cleanup is outside the cursor mutex, not that all cleanup is fast. |
-| L17 | Plan/write-cost measurement remains open. | `symbol_test_mask` cannot provide an ordinary seek for the current bitwise predicates, but “never usable” is stronger than demonstrated. A covering scan or future plan is not ruled out by static inspection. Index retained pending measured evidence. |
+| L17 | Changed after actual pinned query-plan comparison; retirement regression pending. | No use in 96 real shapes with either statistics state and unchanged selected/projected results. Optional index retires through compatible setup and is no longer built during migration. This is scoped planner evidence, not proof SQLite can never use a mask index. |
 | L18 | Changed here; root validation requested above. | Shared idempotent `compilation_project(project_path,id)` plus exact replacement-probe plan assertion. |
 | L19 | Fixed before this lane. | `GraphResult::limit` deduplicates labels on insertion; depth-frontier regression does not accumulate per-neighbor depth labels. |
 | L20 | Confirmed metadata parsing; setup-cost measurement remains open. | `Contexts::load` parses current compilation references for exact consumer/fingerprint compatibility. These are compilation metadata, not all graph facts. No resident/global graph cache added. |
@@ -136,12 +157,12 @@ benefit to fresh-view callers and retain unnecessary state; measure that lifecyc
 before changing it. Existing converging-context and compiler-witness regressions
 remain mandatory for any optimization.
 
-**M17/M26/L17:** measure sealing under accepted resource/contention conditions,
-SQL grouping for broad browsing versus focused lookup, and actual mask-index
-plans/write cost. Keep failed observations and distinguish setup/cold work from
-the accepted warm focused lookup gate. None is closed by this static review.
+**M17/M26:** measure sealing under accepted resource/contention conditions and
+SQL grouping for broad browsing versus focused lookup. Keep failed observations
+and distinguish setup/cold work from the accepted warm focused lookup gate.
+Neither is closed by this static review.
 
-L17 now has a root-run comparison prepared in
+L17's actual root-run comparison is
 `query::tests::test_mask_index_plan_comparison_preserves_symbol_results`.
 Its deterministic fixture has 1,024 symbols across four units, two targets and
 all seven classification masks. It records the exact production `symbols_sql`
@@ -152,8 +173,15 @@ bytes must agree; twelve complete projected responses per phase must also agree,
 including origin classifications. `comparison.json` under the test's durable
 `.artifacts/test-mask-plans/` directory records actual SQLite version/source ID,
 SQL, plans, mask counts and result hashes, plus whether any plan uses the index.
-This is a proposed measurement, not executed evidence or permission to infer
-that every possible future data distribution/planner ignores the index.
+The actual receipt is
+`.artifacts/test-mask-plans/65542-1794498768438263000/comparison.json`, SHA-256
+`92ba54aecf80efa167a75e8bad29f227de51eab695d4d95fbe278cb8e73a1961`.
+Both states have `results_unchanged: true` and `mask_index_used_any: false`
+before/after. SQLite source ID is
+`2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76`.
+This does not establish that every future data distribution/planner ignores a
+mask index, nor a measured write-time speedup. It supports removing maintenance
+for an index unused by these current production query shapes.
 
 ```sh
 cargo test -p know-code-core --locked --lib query::tests::test_mask_index_plan_comparison_preserves_symbol_results -- --exact --nocapture
@@ -221,7 +249,12 @@ maximum-2-MiB live-metadata boundary, and two fixture assertions failed. The
 follow-up qualifies L17 artifact IDs by their unit so distinct paths do not
 conflict, and updates the primary-page replay test's out-of-range position
 expectation to accepted L12 `invalid_request`. Storage identity validation is
-unchanged. These fixture corrections still require the matching rerun.
+unchanged. Root's matching rerun at
+`9b23c25691fccd89edb37a590514754c4e4e3429` passed the Rust workspace: 266 tests
+and two explicit ignored tests, with receipt
+`.artifacts/snow-leopard/wave-01/rust-03/summary.json`. That closes the two fixture
+corrections and binds the L17 comparison above; it predates the index-retirement
+implementation and does not certify that new regression.
 
 All owned Rust files pass standalone `rustfmt --edition 2024 --check`; all diffs
 pass `git diff --check`. No cargo/build/native/runtime/VM command ran in this
