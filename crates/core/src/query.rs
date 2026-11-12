@@ -1890,7 +1890,7 @@ mod tests {
             for kind in ["unknown", "test", "non_test"] {
                 writer
                     .stage(Payload::Source(SourceArtifact {
-                        id: kind.into(),
+                        id: format!("{id}/{kind}"),
                         path: format!("{id}/{kind}.ts"),
                         utf8: b"x".to_vec(),
                         sha256: format!("{:x}", Sha256::digest(b"x")),
@@ -1930,7 +1930,7 @@ mod tests {
                     if mask & bit != 0 {
                         facts.occurrences.push(Occurrence {
                             symbol_id: symbol_id.clone(),
-                            artifact_id: kind.into(),
+                            artifact_id: format!("{id}/{kind}"),
                             role: "declaration".into(),
                             end_byte: 1,
                             ..Default::default()

@@ -922,7 +922,7 @@ mod tests {
             assert_eq!(all, rows);
             assert!(matches!(
                 validate(Cursor::new(&bytes), 3, PREFIX, 7, execution()),
-                Err(Error::CursorInvalidated)
+                Err(Error::InvalidRequest(_))
             ));
         }
     }

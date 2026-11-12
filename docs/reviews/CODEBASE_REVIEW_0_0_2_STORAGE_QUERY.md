@@ -215,6 +215,14 @@ KNOW_CODE_BUILD_PROFILE=debug python3 tests/query_cancellation.py
 
 ## Static checks and broader handoff
 
+Root's assembled `939d4dc` Rust run is retained as failed at
+`.artifacts/snow-leopard/wave-01/rust-02/`: 167 core tests passed, including the
+maximum-2-MiB live-metadata boundary, and two fixture assertions failed. The
+follow-up qualifies L17 artifact IDs by their unit so distinct paths do not
+conflict, and updates the primary-page replay test's out-of-range position
+expectation to accepted L12 `invalid_request`. Storage identity validation is
+unchanged. These fixture corrections still require the matching rerun.
+
 All owned Rust files pass standalone `rustfmt --edition 2024 --check`; all diffs
 pass `git diff --check`. No cargo/build/native/runtime/VM command ran in this
 lane. In addition to the focused commands above, root should run affected core
