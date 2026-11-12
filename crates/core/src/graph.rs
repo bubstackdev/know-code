@@ -148,6 +148,8 @@ pub struct Boundary {
 }
 #[derive(Debug, Serialize)]
 pub struct GraphResult {
+    #[serde(skip)]
+    pub(crate) relevant_compilations: BTreeSet<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub root_definitions: Vec<DefinitionLink>,
     pub findings: Vec<Finding>,
@@ -206,6 +208,69 @@ impl GraphResult {
             self.limits.push(reason.into());
         }
     }
+    fn retain_relevant_coverage(&mut self) {
+        let ids = &mut self.relevant_compilations;
+        for link in &self.root_definitions {
+            collect_link_contexts(ids, link);
+        }
+        for finding in &self.findings {
+            ids.insert(finding.symbol.compilation_id.clone());
+            for path in &finding.paths {
+                for edge in path {
+                    collect_edge_contexts(ids, edge);
+                }
+            }
+            for support in &finding.supporting_targets {
+                ids.insert(support.symbol.compilation_id.clone());
+                for path in &support.paths {
+                    for edge in path {
+                        collect_edge_contexts(ids, edge);
+                    }
+                }
+            }
+        }
+        for boundary in &self.boundaries {
+            ids.insert(boundary.compilation_id.clone());
+            if let Some(conflict) = &boundary.context_conflict {
+                ids.insert(conflict.selected_compilation_id.clone());
+                ids.insert(conflict.required_compilation_id.clone());
+            }
+            if let Some(edge) = &boundary.evidence {
+                collect_edge_contexts(ids, edge);
+            }
+        }
+        self.capability_coverage.retain(|id, _| ids.contains(id));
+    }
+}
+fn collect_link_contexts(ids: &mut BTreeSet<String>, link: &DefinitionLink) {
+    ids.insert(link.source_compilation_id.clone());
+    ids.insert(link.definition_compilation_id.clone());
+}
+fn collect_edge_contexts(ids: &mut BTreeSet<String>, edge: &Edge) {
+    ids.insert(edge.compilation_id.clone());
+    ids.extend(edge.target_compilation_id.iter().cloned());
+    ids.extend(edge.dispatch_context_id.iter().cloned());
+    for link in [
+        edge.definition_link.as_deref(),
+        edge.binding_definition_link.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        collect_link_contexts(ids, link);
+    }
+    if let Some(proof) = &edge.dispatch_proof {
+        ids.insert(proof.compilation_id.clone());
+        for link in [
+            proof.source_definition_link.as_ref(),
+            proof.target_definition_link.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            collect_link_contexts(ids, link);
+        }
+    }
 }
 
 struct Step {
@@ -231,6 +296,7 @@ struct Context {
 }
 type Bindings = Arc<BTreeMap<String, String>>;
 struct Contexts {
+    relevant: BTreeSet<String>,
     units: BTreeMap<String, Context>,
     sets: Vec<Bindings>,
     interned: BTreeMap<Bindings, usize>,
@@ -288,6 +354,7 @@ impl Contexts {
         }
         let empty = Arc::new(BTreeMap::new());
         Ok(Self {
+            relevant: BTreeSet::new(),
             units,
             sets: vec![empty.clone()],
             interned: BTreeMap::from([(empty, 0)]),
@@ -311,9 +378,14 @@ impl Contexts {
         index: usize,
         id: &str,
     ) -> std::result::Result<usize, Option<ContextConflict>> {
+        self.relevant.insert(id.into());
         let Some(unit) = self.units.get(id) else {
             return Err(None);
         };
+        // Every selected reference participates in compatibility, even when
+        // this attempted merge ends at an unavailable/conflicting context.
+        self.relevant
+            .extend(unit.references.iter().map(|r| r.compilation_id.clone()));
         if !unit.complete {
             return Err(None);
         }
@@ -584,6 +656,7 @@ pub(crate) fn query(
         "calls"
     };
     let mut result = GraphResult {
+        relevant_compilations: BTreeSet::new(),
         root_definitions: vec![],
         findings: vec![],
         boundaries: vec![],
@@ -608,6 +681,13 @@ pub(crate) fn query(
         result.limit("node_budget");
     }
     if view.format_version < 4 {
+        for root in &roots {
+            result.relevant_compilations.insert(
+                view.connection
+                    .prepare_cached("SELECT compilation_id FROM symbols WHERE rowid=?")?
+                    .query_row([root], |r| r.get(0))?,
+            );
+        }
         result.boundaries.push(Boundary {
             context_conflict: None,
             reason: "capability_unknown_in_legacy_index".into(),
@@ -615,6 +695,9 @@ pub(crate) fn query(
             compilation_id: String::new(),
             evidence: None,
         });
+        if request.coverage_detail != crate::query::CoverageDetail::Full {
+            result.retain_relevant_coverage();
+        }
         return Ok(result);
     }
     let mut contexts = Contexts::load(view)?;
@@ -1131,6 +1214,10 @@ pub(crate) fn query(
     }
     result.limits.sort();
     result.limits.dedup();
+    if request.coverage_detail != crate::query::CoverageDetail::Full {
+        result.relevant_compilations.extend(contexts.relevant);
+        result.retain_relevant_coverage();
+    }
     Ok(result)
 }
 

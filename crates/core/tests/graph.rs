@@ -580,6 +580,14 @@ fn project_links_are_exact_snapshot_bound_and_keep_pinned_readers() {
     let graph = query(&pinned, request.clone()).graph.unwrap();
     assert_eq!(
         graph
+            .capability_coverage
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["app", "lib8"]
+    );
+    assert_eq!(
+        graph
             .findings
             .iter()
             .map(|f| f.symbol.id.as_str())
@@ -848,10 +856,44 @@ fn dispatch_uses_specializations_and_snapshot_bound_composition_witnesses() {
         vec![node("composition")],
         vec![],
     );
+    dispatch_unit(
+        &mut w,
+        "unrelated",
+        "unrelated",
+        vec![],
+        vec![node("unrelated")],
+        vec![],
+    );
     w.publish().unwrap();
     let pinned = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
     let request = serde_json::json!({"op":"callees","symbol_id":"caller"});
-    let graph = query(&pinned, request.clone()).graph.unwrap();
+    let result = query(&pinned, request.clone());
+    assert_eq!(result.coverage_scope, "relevant");
+    assert_eq!(result.workspace_coverage.compilations, 5);
+    assert_eq!(
+        result
+            .coverage
+            .iter()
+            .map(|c| c.compilation_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["a", "b", "c", "d"].into()
+    );
+    let graph = result.graph.unwrap();
+    assert_eq!(
+        graph
+            .capability_coverage
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "c", "d"]
+    );
+    let full = query(
+        &pinned,
+        serde_json::json!({"op":"callees","symbol_id":"caller","coverage_detail":"full"}),
+    );
+    assert_eq!(full.coverage_scope, "workspace");
+    assert_eq!(full.coverage.len(), 5);
+    assert_eq!(full.graph.unwrap().capability_coverage.len(), 5);
     assert_eq!(graph.findings.len(), 2);
     let candidate = graph
         .findings
@@ -913,6 +955,58 @@ fn dispatch_uses_specializations_and_snapshot_bound_composition_witnesses() {
         g.boundaries
             .iter()
             .any(|b| b.reason == "dispatch_context_unproven")
+    );
+    // Even without a valid witness, the returned unresolved boundary still
+    // requires the call, binding-body and dispatch-proof coverage contexts.
+    assert_eq!(
+        g.capability_coverage
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "c"]
+    );
+}
+
+#[test]
+fn graph_coverage_keeps_empty_roots_and_unavailable_contexts() {
+    let db = database("empty-root-coverage");
+    let mut w = Writer::open(&db).unwrap();
+    w.stage(Payload::Compilation(Compilation {
+        id: "root".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    w.stage(Payload::Facts(FactBatch {
+        compilation_id: "root".into(),
+        symbols: vec![node("root")],
+        ..Default::default()
+    }))
+    .unwrap();
+    populate(&mut w, "unrelated", &["unrelated"], vec![]);
+    w.stage(Payload::Report(AnalysisReport {
+        compilation_id: "root".into(),
+        status: "unavailable".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    w.publish().unwrap();
+    let view = ReadView::open_in_scope(&db, &common::scope(&db)).unwrap();
+    let result = query(
+        &view,
+        serde_json::json!({"op":"callees","symbol_id":"root"}),
+    );
+    assert_eq!(result.coverage_scope, "relevant");
+    assert_eq!(result.coverage.len(), 1);
+    assert_eq!(result.coverage[0].compilation_id, "root");
+    assert_eq!(result.coverage[0].status, "unavailable");
+    let graph = result.graph.unwrap();
+    assert!(graph.findings.is_empty());
+    assert_eq!(graph.capability_coverage.len(), 1);
+    assert!(
+        graph
+            .boundaries
+            .iter()
+            .any(|b| b.reason == "capability_unavailable")
     );
 }
 #[test]

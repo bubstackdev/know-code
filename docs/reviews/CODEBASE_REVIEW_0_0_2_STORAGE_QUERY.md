@@ -57,6 +57,26 @@ cargo test -p know-code-core --locked --lib query::tests::indexed_line_checkpoin
 cargo test -p know-code-core --locked --lib query::tests::declaration_source_selects_exact_owner_origin_and_hash_before_limit -- --exact
 ```
 
+**M23 — graph coverage projection.** Summary graph queries now use the shared
+relevant-coverage projection instead of returning every compilation's metadata
+and capability entry. Workspace aggregate status/diagnostic counts remain
+workspace-wide; explicit `coverage_detail: full` still returns workspace detail.
+Relevance includes roots with no findings, selected compatibility references,
+attempted unavailable/conflicting contexts, body-definition links, each path's
+source/target, dispatch proof owners/links and selected consumer witnesses.
+Boundary evidence and conflicting context IDs are retained; public IDs are not
+parsed. This narrows unrelated metadata without treating missing capability or
+an unresolved boundary as successful analysis.
+
+Root validation requested:
+
+```sh
+cargo test -p know-code-core --locked --test graph project_links_are_exact_snapshot_bound_and_keep_pinned_readers -- --exact
+cargo test -p know-code-core --locked --test graph dispatch_uses_specializations_and_snapshot_bound_composition_witnesses -- --exact
+cargo test -p know-code-core --locked --test graph graph_coverage_keeps_empty_roots_and_unavailable_contexts -- --exact
+cargo test -p know-code-core --locked --test graph
+```
+
 ## Current-source baseline
 
 | IDs | Released-source disposition |

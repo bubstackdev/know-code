@@ -841,11 +841,11 @@ impl ReadView {
                 ));
             }
         }
-        if request.coverage_detail != CoverageDetail::Full
-            && request.op != "coverage"
-            && result.graph.is_none()
-        {
+        if request.coverage_detail != CoverageDetail::Full && request.op != "coverage" {
             let mut relevant = relevant_roots;
+            if let Some(graph) = &result.graph {
+                relevant.extend(graph.relevant_compilations.iter().cloned());
+            }
             for s in &result.symbols {
                 relevant.insert(s.compilation_id.clone());
                 relevant.extend(
