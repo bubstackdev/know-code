@@ -172,19 +172,19 @@ impl ServerHandler for Mcp {
             let admission = tokio::task::spawn_blocking(move || {
                 let owned_permit = permit;
                 if admission_cancellation.is_cancelled() {
-                    return Err(failure("cancelled", "request cancelled"));
+                    return Err(("cancelled".to_owned(), "request cancelled".to_owned()));
                 }
                 let reservation = match admission::AdmissionScope::local()
                     .and_then(|scope| scope.try_reserve())
                 {
                     Ok(reservation) => Arc::new(reservation),
-                    Err(error) => return Err(failure(error.code(), &error)),
+                    Err(error) => return Err((error.code().to_owned(), error.to_string())),
                 };
                 if admission_cancellation.is_cancelled() {
-                    return Err(failure("cancelled", "request cancelled"));
+                    return Err(("cancelled".to_owned(), "request cancelled".to_owned()));
                 }
                 if let Err(error) = connection.retain_response(&key, reservation.clone()) {
-                    return Err(failure("internal_error", error));
+                    return Err(("internal_error".to_owned(), error.to_string()));
                 }
                 Ok((owned_permit, Some(reservation)))
             });
@@ -195,7 +195,7 @@ impl ServerHandler for Mcp {
                 },
                 value=admission=>match value.map_err(|error| ErrorData::internal_error(error.to_string(), None))? {
                     Ok(owned) => owned,
-                    Err(response) => return Ok(response),
+                    Err((code, message)) => return Ok(failure(&code, message)),
                 },
             }
         };
