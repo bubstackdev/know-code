@@ -2900,6 +2900,98 @@ mod live_lifetime_tests {
         }
     }
     #[test]
+    fn disk_maintenance_respects_reserved_analysis_before_writer_open() {
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.artifacts/maintenance-reservation")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&data).unwrap();
+        let managed = |name: &str| {
+            let path = data.join("workspaces").join(name).join("index.db");
+            let mut writer = know_code_core::store::Writer::open(&path).unwrap();
+            writer
+                .stage(Payload::Compilation(Compilation {
+                    id: "fixture".into(),
+                    language: "typescript".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            writer
+                .stage(Payload::Report(AnalysisReport {
+                    compilation_id: "fixture".into(),
+                    status: "complete".into(),
+                    ..Default::default()
+                }))
+                .unwrap();
+            let generation = writer.publish().unwrap();
+            recovery::adopt(&path, generation).unwrap();
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch("PRAGMA wal_autocheckpoint=0; CREATE TABLE maintenance_probe(value); INSERT INTO maintenance_probe VALUES(zeroblob(262144));").unwrap();
+            (path.to_string_lossy().into_owned(), connection)
+        };
+        let (active, _active_connection) = managed(&"a".repeat(24));
+        let (sibling, _sibling_connection) = managed(&"b".repeat(24));
+        let wal_bytes =
+            |database: &str| std::fs::metadata(format!("{database}-wal")).unwrap().len();
+        let before = wal_bytes(&active);
+        assert!(before > 0 && wal_bytes(&sibling) > 0);
+        let publisher = Arc::new(Publisher::new(&data));
+        let mut entries = BTreeMap::new();
+        for database in [&active, &sibling] {
+            let mut entry = permission_entry(&data, database);
+            entry.project_trusted = true;
+            entry.status.phase = "queued".into();
+            entry.status.generation = 1;
+            entries.insert(database.clone(), entry);
+        }
+        let shared = Shared {
+            entries: Mutex::new(entries),
+            publisher,
+            changed: Condvar::new(),
+            registry: Mutex::new(Connection::open_in_memory().unwrap()),
+            discovery: Mutex::new(
+                crate::discovery::Discovery::open(&Connection::open_in_memory().unwrap()).unwrap(),
+            ),
+            stop: AtomicBool::new(false),
+            maintenance: Mutex::new(None),
+            analysis_running: AtomicBool::new(true),
+            resources: Governor::new(Limits::default()).unwrap(),
+            active_job: Mutex::new(Some((active.clone(), Control::default()))),
+            overflow: AtomicBool::new(false),
+            clients: AtomicUsize::new(0),
+            cursors: Arc::new(
+                know_code_core::cursor::CursorService::new(&data, Vec::new()).unwrap(),
+            ),
+        };
+        let mut after = String::new();
+        maintain_disk(&shared, &data, &mut after).unwrap();
+        assert_eq!(
+            wal_bytes(&sibling),
+            0,
+            "idle sibling maintenance was skipped"
+        );
+        assert_eq!(
+            wal_bytes(&active),
+            before,
+            "maintenance entered the reserved pre-writer analysis window"
+        );
+        assert_eq!(
+            shared.entries.lock().unwrap()[&active].status.phase,
+            "queued"
+        );
+        drop(know_code_core::store::Writer::open(Path::new(&active)).unwrap());
+        shared.active_job.lock().unwrap().take();
+        shared.analysis_running.store(false, Ordering::Release);
+        maintain_disk(&shared, &data, &mut after).unwrap();
+        assert_eq!(wal_bytes(&active), 0, "idle maintenance did not resume");
+    }
+    #[test]
     fn permission_overlay_preserves_failed_input_and_durable_outcome() {
         let job = cancellation_job();
         let mut entry = permission_entry(&job.root, &job.database);
