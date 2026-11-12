@@ -1169,7 +1169,7 @@ mod tests {
                     })
                 })
             });
-            wait_for_publication(&service);
+            wait_for_publication_fence(&service);
             assert!(!called.load(Ordering::Acquire));
             assert_eq!(
                 crate::recovery::selected_incarnation(&db)
@@ -1177,10 +1177,11 @@ mod tests {
                     .as_deref(),
                 Some(stored.index_incarnation.as_str())
             );
-            assert!(matches!(
-                call(&service, &db, action("borrow", Some(&stored))),
-                Err(Error::ResourceLimited(_))
-            ));
+            let denied = call(&service, &db, action("borrow", Some(&stored)));
+            assert!(
+                matches!(&denied, Err(Error::ResourceLimited(_))),
+                "unexpected cursor admission result: {denied:?}"
+            );
             let connection =
                 rusqlite::Connection::open(crate::recovery::selected_path(&db).unwrap()).unwrap();
             connection.busy_timeout(Duration::from_millis(100)).unwrap();
@@ -1665,6 +1666,18 @@ mod tests {
             std::thread::yield_now();
         }
     }
+    fn wait_for_publication_fence(service: &CursorService) {
+        // Ownership precedes the fence so CPU-throttled publishers still
+        // permit reads. Pressure tests require the actual admission fence.
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while !service.lock().unwrap().registry.publication_waiting {
+            assert!(
+                std::time::Instant::now() < until,
+                "publisher never entered the cursor admission fence"
+            );
+            std::thread::yield_now();
+        }
+    }
     #[test]
     fn cursor_mutex_wait_observes_deadline_without_acquiring_the_fence() {
         let (_, db, service) = fixture();
@@ -1773,11 +1786,12 @@ mod tests {
         let next_generation = writer.generation;
         std::thread::scope(|scope| {
             let publish = scope.spawn(|| service.publish(&db, writer, &Control::default()));
-            wait_for_publication(&service);
-            assert!(matches!(
-                call(&service, &db, action("borrow", Some(&stored))),
-                Err(Error::ResourceLimited(_))
-            ));
+            wait_for_publication_fence(&service);
+            let denied = call(&service, &db, action("borrow", Some(&stored)));
+            assert!(
+                matches!(&denied, Err(Error::ResourceLimited(_))),
+                "unexpected cursor admission result: {denied:?}"
+            );
             // A competing writer can acquire IMMEDIATE while publication waits.
             let connection = rusqlite::Connection::open(&db).unwrap();
             connection.busy_timeout(Duration::from_millis(100)).unwrap();
