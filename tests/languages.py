@@ -1,6 +1,7 @@
 """Four providers share publication, native queries, and saved-input invalidation."""
 from fixture_trust import grant_fixture
 import atexit
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -67,7 +68,8 @@ def wait(after=0, allow_failed=False):
     while time.monotonic() < until:
         status = json.loads(run([HOST, 'coordinator', 'status']).stdout)['workspaces'][0]
         assert allow_failed or status['phase'] != 'failed', status
-        if status['phase'] == 'idle' and status['generation'] > after:
+        if (status['phase'] == 'idle' and status['generation'] > after
+                and status['published_epoch'] == status['observed_epoch']):
             return status['generation']
         time.sleep(.05)
     raise AssertionError(('language indexing did not settle', status))
@@ -191,10 +193,13 @@ added.parent.mkdir()
 added.write_text('struct AddedSwift {}\n')
 generation = wait(generation)
 assert query({'op': 'symbols', 'name': 'AddedSwift'})['symbols']
+before = owners()
 added.unlink()
 generation = wait(generation)
 assert not query({'op': 'symbols', 'name': 'AddedSwift'}).get('symbols')
-assert 'swift:$swift-inferred:swift/new' not in owners()
+after = owners()
+assert 'swift:$swift-inferred:swift/new' not in after
+assert all(after[key] == value for key, value in before.items() if key != 'swift:$swift-inferred:swift/new')
 
 before = owners()
 healthy = swift.read_text()
@@ -207,12 +212,69 @@ swift.write_text(healthy)
 generation = wait(generation)
 assert all(item['status'] == 'complete' for item in query({'op': 'symbols'})['coverage'] if item['language'] == 'swift')
 
+# Keep one real cursor across removal of all owned language inputs. The saved
+# sources move outside discovery, but remain durable evidence for pinned reads.
+retained = query({'op': 'symbols', 'name': 'reply', 'limit': 1, 'page_size': 1}, equivalent=True)
+assert retained['generation'] == generation and len(retained['symbols']) == 1, retained
+cursor = retained['page']['cursor']
+location = retained['symbols'][0]['locations'][0]
+saved_swift = swift.read_bytes()
+assert saved_swift[location['start_byte']:location['end_byte']].decode() == 'reply', location
+retained_page = {key: value for key, value in retained.items() if key not in ('freshness', 'coordination')}
+removed = RUN / 'removed-inputs'
+removed.mkdir()
+for directory in ('typescript', 'csharp', 'rust', 'swift', 'swift-package'):
+    shutil.move(str(WORKSPACE / directory), removed / directory)
+generation = wait(generation, allow_failed=True)
+
+
+def check_empty():
+    result = query({'op': 'symbols', 'coverage_detail': 'full'}, equivalent=True)
+    assert result['freshness'] == 'current' and result['generation'] == generation, result
+    assert not result.get('symbols', []) and not result['coverage'], result
+    assert result['workspace_coverage']['compilations'] == 0 and not owners(), result
+
+
+check_empty()
+replayed = query({'op': 'next_page', 'cursor': cursor}, equivalent=True)
+assert replayed['freshness'] == 'stale', replayed
+assert {key: value for key, value in replayed.items() if key not in ('freshness', 'coordination')} == retained_page
+pinned = query({'op': 'source', 'cursor': cursor, 'artifact_id': location['artifact_id'],
+                'content_hash': location['content_hash'], 'start_byte': 0,
+                'max_bytes': len(saved_swift) + 1}, equivalent=True)
+assert pinned['generation'] == retained['generation'] and pinned['freshness'] == 'stale', pinned
+body = pinned['source']
+assert body['text'].encode() == saved_swift and body['start_byte'] == 0 and body['end_byte'] == len(saved_swift), body
+assert body['content_hash'] == location['content_hash'] == hashlib.sha256(saved_swift).hexdigest(), body
+run([HOST, 'index', WORKSPACE])
+generation = wait(generation)
+check_empty()
+stop()
+until = time.monotonic() + 15
+while (RUN / 'data/c.sock').exists() and time.monotonic() < until:
+    time.sleep(.05)
+assert not (RUN / 'data/c.sock').exists(), 'Isolated coordinator did not stop'
+assert json.loads(run([HOST, 'watch', WORKSPACE]).stdout)['database'] == DATABASE
+generation = wait(generation - 1)
+check_empty()
+# Cursors are deliberately not reused after the coordinator restart.
+restored_source = WORKSPACE / 'restored.ts'
+restored_source.write_text('export function restoredAfterEmpty() { return 7; }\n')
+generation = wait(generation)
+restored = query({'op': 'symbols', 'name': 'restoredAfterEmpty'}, equivalent=True)
+assert restored['freshness'] == 'current' and restored['symbols'], restored
+assert {item['language'] for item in restored['coverage']} == {'typescript'}, restored
+assert owners(), 'Saved standalone TypeScript source did not restore a compilation'
+
 summary = {'result': 'passed', 'profile': PROFILE, 'database': DATABASE,
            'checked_utf8_ranges': checked, 'rust_coverage': 'explicitly partial',
            'checks': ['four_provider_publication', 'native_parity', 'UTF8_source_ranges', 'build_cache_and_worktree_exclusions',
                       'Rust_scoped_save', 'extensionless_Cargo_config', 'Swift_scoped_save', 'SwiftPM_target_save',
                       'Swift_pin_failure_repair_and_removal', 'new_Swift_group',
-                      'last_Swift_file_deletion', 'Swift_partial_and_repair']}
+                      'last_Swift_file_deletion_without_sibling_reanalysis', 'Swift_partial_and_repair',
+                      'all_inputs_removed_empty_current_manifest_and_native_parity',
+                      'retained_page_and_exact_UTF8_source_across_empty_publication',
+                      'explicit_empty_refresh_and_restart', 'saved_source_rediscovery_after_empty']}
 (RUN / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
 (ROOT / '.artifacts/languages/latest.json').write_text(json.dumps(summary, indent=2) + '\n')
 print(json.dumps(summary, indent=2))
