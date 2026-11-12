@@ -26,7 +26,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{File, OpenOptions},
     os::unix::{
-        fs::{DirBuilderExt, PermissionsExt},
+        fs::PermissionsExt,
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
@@ -517,10 +517,7 @@ fn maintenance_active(shared: &Shared) -> bool {
 }
 
 pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(data)?;
+    control::prepare_data_root(data)?;
     let lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -702,6 +699,9 @@ pub fn run(data: &Path, installation: &Path) -> AnyResult<()> {
             let Ok(socket) = socket else {
                 continue;
             };
+            if control::verify_peer(&socket).is_err() {
+                continue;
+            }
             if accepting.clients.fetch_add(1, Ordering::AcqRel) >= 64 {
                 accepting.clients.fetch_sub(1, Ordering::AcqRel);
                 continue;
@@ -2217,6 +2217,7 @@ fn serve(
     sender: &SyncSender<Event>,
     data: &Path,
 ) -> AnyResult<()> {
+    control::verify_peer(&socket)?;
     // Darwin can reject timeout setup after a one-way peer closes. Drain its
     // buffered frame without blocking, including any unexpected EINVAL case.
     if let Err(error) = socket.set_read_timeout(Some(Duration::from_secs(3))) {

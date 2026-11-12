@@ -25,6 +25,138 @@ pub fn data_root() -> Result<PathBuf> {
 pub fn socket_path(root: &Path) -> PathBuf {
     root.join("c.sock")
 }
+/// An explicit DATA override designates a dedicated per-user state directory.
+/// Tighten only its owned leaf, preserving caller path spelling and aliases.
+pub fn prepare_data_root(root: &Path) -> Result<()> {
+    let account_home = std::env::var_os("HOME").map(PathBuf::from);
+    prepare_data_root_owned(root, unsafe { libc::geteuid() }, account_home.as_deref())
+}
+fn prepare_data_root_owned(
+    root: &Path,
+    expected: libc::uid_t,
+    account_home: Option<&Path>,
+) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    let account_home = account_home.map(std::fs::canonicalize).transpose()?;
+    let absolute = if root.is_absolute() {
+        root.to_owned()
+    } else {
+        std::env::current_dir()?.join(root)
+    };
+    let git_metadata = |path: &Path| {
+        path.components().any(|part| {
+            part.as_os_str()
+                .as_encoded_bytes()
+                .eq_ignore_ascii_case(b".git")
+        })
+    };
+    // Resolve only the nearest existing ancestor before creating a new leaf,
+    // so an alias into Git metadata cannot create state there before refusal.
+    for ancestor in absolute.ancestors() {
+        match std::fs::canonicalize(ancestor) {
+            Ok(existing) => {
+                if git_metadata(&existing) {
+                    return Err(Error::InvalidRequest(
+                        "DATA cannot use Git metadata directories".into(),
+                    ));
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(root)?;
+    let canonical = std::fs::canonicalize(root)?;
+    if canonical.parent().is_none()
+        || account_home
+            .as_ref()
+            .is_some_and(|path| path.starts_with(&canonical))
+        || git_metadata(&canonical)
+    {
+        return Err(Error::InvalidRequest("DATA must be a dedicated state directory, not HOME, its ancestor, filesystem root or Git metadata".into()));
+    }
+    match std::fs::symlink_metadata(canonical.join(".git")) {
+        Ok(_) => {
+            return Err(Error::InvalidRequest(
+                "DATA must be outside source repository roots; choose a dedicated state directory"
+                    .into(),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let directory = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&canonical)?;
+    let owned = directory.metadata()?;
+    if !owned.is_dir() || owned.uid() != expected {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "coordinator DATA is not a directory owned by the effective user",
+        )
+        .into());
+    }
+    let same_directory = || -> Result<()> {
+        let current = std::fs::symlink_metadata(&canonical)?;
+        let alias = std::fs::metadata(root)?;
+        if !current.is_dir()
+            || current.uid() != expected
+            || (current.dev(), current.ino()) != (owned.dev(), owned.ino())
+            || (alias.dev(), alias.ino()) != (owned.dev(), owned.ino())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "coordinator DATA directory changed during ownership validation",
+            )
+            .into());
+        }
+        Ok(())
+    };
+    same_directory()?;
+    if owned.mode() & 0o7777 != 0o700 {
+        directory.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+    }
+    same_directory()?;
+    Ok(())
+}
+/// The local coordinator is per effective user, even when a pathname or
+/// existing descriptor was supplied through a less-private directory.
+pub fn verify_peer(socket: &UnixStream) -> std::io::Result<()> {
+    verify_peer_uid(socket, unsafe { libc::geteuid() })
+}
+fn verify_peer_uid(socket: &UnixStream, expected: libc::uid_t) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        let mut user: libc::uid_t = 0;
+        let mut group: libc::gid_t = 0;
+        // SAFETY: the live socket descriptor and both writable credential
+        // outputs belong to this call. Failed lookup never authenticates a peer.
+        if unsafe { libc::getpeereid(socket.as_raw_fd(), &mut user, &mut group) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if user != expected {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "coordinator socket peer belongs to a different effective user",
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (socket, expected);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "coordinator peer verification requires supported macOS getpeereid",
+        ))
+    }
+}
 pub fn root_for_database(database: &Path) -> Option<&Path> {
     let workspaces = database.parent()?.parent()?;
     (workspaces.file_name()? == "workspaces")
@@ -56,6 +188,7 @@ pub fn request_installer(
     request.index_lifecycle_version = lifecycle_version;
     let timeout = request.wait_ms.saturating_add(500).max(1);
     let mut socket = UnixStream::connect(socket_path(root))?;
+    verify_peer(&socket)?;
     socket.set_write_timeout(Some(Duration::from_millis(u64::from(timeout))))?;
     socket.set_read_timeout(Some(Duration::from_millis(u64::from(timeout))))?;
     let response = exchange_raw(&mut socket, request)?;
@@ -101,6 +234,7 @@ fn request_with_timeout(
     timeout: u32,
 ) -> Result<ControlResponse> {
     let mut socket = UnixStream::connect(socket_path(root))?;
+    verify_peer(&socket)?;
     socket.set_write_timeout(Some(Duration::from_millis(u64::from(timeout.max(1)))))?;
     socket.set_read_timeout(Some(Duration::from_millis(u64::from(timeout.max(1)))))?;
     exchange(&mut socket, request)
@@ -489,6 +623,7 @@ fn probe(data: &Path) -> Result<bool> {
 /// Connect first; only a missing/refused socket permits starting a known host.
 /// Never launch the embedding process (node/dotnet) as though it were know-code.
 pub fn ensure_running(data: &Path, executable: Option<&Path>) -> Result<()> {
+    prepare_data_root(data)?;
     if probe(data)? {
         return Ok(());
     }
@@ -498,11 +633,7 @@ pub fn ensure_running(data: &Path, executable: Option<&Path>) -> Result<()> {
     if probe(data)? {
         return Ok(());
     }
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(data)?;
+    use std::os::unix::fs::OpenOptionsExt;
     let lifecycle = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -729,6 +860,7 @@ fn notify_activity(root: &Path, database: &str) -> Result<()> {
         return Err(IoError::last_os_error().into());
     }
     let mut socket = UnixStream::from(fd);
+    verify_peer(&socket)?;
     if socket.write(&frame)? != frame.len() {
         return Err(IoError::new(ErrorKind::WriteZero, "incomplete activity hint").into());
     }
@@ -796,6 +928,138 @@ pub fn resources(
         rebuild_disk_mib: limits.rebuild_disk_mib,
         min_free_disk_mib: limits.min_free_disk_mib,
     })
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod privacy_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        os::{
+            fd::OwnedFd,
+            unix::fs::{MetadataExt, PermissionsExt, symlink},
+        },
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    fn root() -> PathBuf {
+        let parent = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/control-privacy");
+        std::fs::create_dir_all(&parent).unwrap();
+        let path = parent.join(format!(
+            "{}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+    fn mode(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().mode() & 0o777
+    }
+    fn different_uid() -> libc::uid_t {
+        if unsafe { libc::geteuid() } == 0 {
+            1
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn actual_unix_peer_credentials_accept_current_uid_and_refuse_mismatch_without_reading() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        verify_peer(&client).unwrap();
+        verify_peer(&server).unwrap();
+        client.set_nonblocking(true).unwrap();
+        server.set_nonblocking(true).unwrap();
+        client.write_all(b"untouched control bytes").unwrap();
+        for peer in [&client, &server] {
+            assert_eq!(
+                verify_peer_uid(peer, different_uid()).unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        }
+        verify_peer(&server).unwrap();
+        let mut bytes = [0; 23];
+        server.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"untouched control bytes");
+        // A real kernel lookup failure must not authenticate default uid zero.
+        let path = root().join("not-a-socket");
+        std::fs::write(&path, b"preserve").unwrap();
+        let descriptor: OwnedFd = std::fs::File::open(&path).unwrap().into();
+        let not_socket = UnixStream::from(descriptor);
+        assert!(verify_peer(&not_socket).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"preserve");
+    }
+
+    #[test]
+    fn dedicated_data_leaf_is_tightened_with_aliases_and_retained_files_preserved() {
+        for initial in [0o755, 0o777] {
+            let root = root();
+            let data = root.join("data");
+            std::fs::create_dir(&data).unwrap();
+            std::fs::set_permissions(&data, std::fs::Permissions::from_mode(initial)).unwrap();
+            std::fs::write(data.join(".DS_Store"), b"retained Finder metadata").unwrap();
+            std::fs::write(data.join("retained-state"), b"not a filename whitelist").unwrap();
+            let alias = root.join("data-alias");
+            symlink(data.canonicalize().unwrap(), &alias).unwrap();
+            let parent_mode = mode(&root);
+            prepare_data_root(&alias).unwrap();
+            assert_eq!(mode(&data), 0o700);
+            assert_eq!(mode(&root), parent_mode);
+            assert!(std::fs::symlink_metadata(&alias).unwrap().is_symlink());
+            assert_eq!(
+                std::fs::read(data.join(".DS_Store")).unwrap(),
+                b"retained Finder metadata"
+            );
+            assert_eq!(
+                std::fs::read(data.join("retained-state")).unwrap(),
+                b"not a filename whitelist"
+            );
+        }
+    }
+
+    #[test]
+    fn data_root_refusal_never_chmods_foreign_owner_home_repo_or_git_metadata() {
+        let root = root();
+        let account_home = root.join("account-home");
+        let data = root.join("data");
+        let repository = root.join("repository");
+        for path in [&account_home, &data, &repository] {
+            std::fs::create_dir(path).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let uid = unsafe { libc::geteuid() };
+        assert!(prepare_data_root_owned(&data, different_uid(), Some(&account_home)).is_err());
+        assert_eq!(mode(&data), 0o755);
+        std::fs::create_dir(repository.join(".git")).unwrap();
+        for path in [&root, &account_home, &repository, &repository.join(".git")] {
+            let before = mode(path);
+            assert!(prepare_data_root_owned(path, uid, Some(&account_home)).is_err());
+            assert_eq!(mode(path), before);
+        }
+        let alias = root.join("git-alias");
+        symlink(repository.join(".git").canonicalize().unwrap(), &alias).unwrap();
+        assert!(
+            prepare_data_root_owned(&alias.join("new-state"), uid, Some(&account_home)).is_err()
+        );
+        assert!(!repository.join(".git/new-state").exists());
+        let before = mode(Path::new("/"));
+        assert!(prepare_data_root_owned(Path::new("/"), uid, None).is_err());
+        assert_eq!(mode(Path::new("/")), before);
+        // Dedicated descendants underneath a source checkout remain valid.
+        prepare_data_root_owned(
+            &repository.join(".artifacts/data"),
+            uid,
+            Some(&account_home),
+        )
+        .unwrap();
+        assert_eq!(mode(&repository.join(".artifacts/data")), 0o700);
+    }
 }
 
 #[cfg(test)]

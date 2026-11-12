@@ -274,6 +274,7 @@ pub(crate) fn connect(path: &Path, execution: Execution) -> Result<UnixStream> {
             return Err(error.into());
         }
     }
+    crate::control::verify_peer(&stream)?;
     execution.check()?;
     Ok(stream)
 }
