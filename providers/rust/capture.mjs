@@ -2,6 +2,7 @@
 // Invoked only by the managed Cargo-check planner after its trust/tool guard.
 import fs from 'node:fs';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {boundedRead} from './preparation.mjs';
 import {contextArguments, fileEvidence, flagValues} from './contexts.mjs';
@@ -12,8 +13,8 @@ const record = {compiler, args, cwd: process.cwd(), environment: {}, absentEnvir
 let configuration;
 try {
   configuration = JSON.parse(boundedRead(process.env.KNOW_CODE_RUST_CAPTURE_CONFIG, LIMIT).toString('utf8'));
-  if (!path.isAbsolute(configuration.directory ?? '') || !Array.isArray(configuration.inputs) || configuration.inputs.length > 16000 ||
-      !configuration.inputs.every(item => typeof item === 'string' && path.isAbsolute(item)) ||
+  if (!path.isAbsolute(configuration.directory ?? '') || !(configuration.snapshots || Array.isArray(configuration.inputs)) ||
+      configuration.inputs && (configuration.inputs.length > 16000 || !configuration.inputs.every(item => typeof item === 'string' && path.isAbsolute(item))) ||
       !Array.isArray(configuration.toolRoots) || !configuration.toolRoots.every(item => typeof item === 'string' && path.isAbsolute(item)))
     throw new Error('Rust context unavailable: invalid bounded compiler capture configuration');
   if (args.some(item => !item.startsWith('-') && item.endsWith('.rs'))) {
@@ -22,12 +23,18 @@ try {
     const tooling = configuration.toolRoots.includes(parsed.root);
     if (!emit.length || emit.some(item => !['dep-info', 'metadata', ...(tooling ? ['link'] : [])].includes(item)))
       throw new Error('Rust context unavailable: final-product/codegen output is outside compiler preparation');
-    record.beforeInputs = fileEvidence(configuration.inputs);
+    if (configuration.snapshots) {
+      const snapshot = configuration.snapshots[process.env.CARGO_MANIFEST_PATH];
+      if (!snapshot || !path.isAbsolute(snapshot.filename ?? '')) throw new Error('Rust context unavailable: no package input snapshot');
+      const bytes = boundedRead(snapshot.filename, LIMIT);
+      if (createHash('sha256').update(bytes).digest('hex') !== snapshot.sha256) throw new Error('Rust context unavailable: package snapshot changed');
+      record.beforeSnapshot = snapshot;
+    } else record.beforeInputs = fileEvidence(configuration.inputs);
     record.beforeArtifacts = fileEvidence(flagValues(args, '--extern').map(value => {
       const separator = value.indexOf('=');
       if (separator < 1) throw new Error('Rust context unavailable: pathless extern artifact');
       return path.resolve(record.cwd, value.slice(separator + 1));
-    }));
+    }), {artifact: true});
   }
   const result = spawnSync(compiler, args, {cwd: record.cwd, env: process.env, encoding: 'utf8',
     timeout: 120000, maxBuffer: LIMIT});

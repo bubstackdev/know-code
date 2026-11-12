@@ -4,10 +4,12 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {boundedRead} from './preparation.mjs';
 
-const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const gap = reason => { throw new Error(`Rust context unavailable: ${reason}`); };
 const MAX_INPUT = 8 * 1024 * 1024;
 const MAX_TOTAL = 64 * 1024 * 1024;
+const MAX_ARTIFACT = 256 * 1024 * 1024;
+const MAX_ARTIFACT_TOTAL = 512 * 1024 * 1024;
+const compilerImages = new Map();
 export const flagValues = (args, name) => args.flatMap((value, index) =>
   value === name ? [args[index + 1]] : value.startsWith(`${name}=`) ? [value.slice(name.length + 1)] : []);
 const flag = (args, name) => flagValues(args, name)[0];
@@ -59,8 +61,10 @@ export function compilerCfg(record, command) {
   // build.rustc wrapper is not equivalent merely because it prints a version.
   if (fs.realpathSync(record.compiler) !== fs.realpathSync(path.join(sysroot, 'bin/rustc')))
     gap('Cargo compiler cannot be proven equivalent to the analyzer sysroot compiler');
+  const stat = fs.statSync(record.compiler), imageKey = JSON.stringify([record.compiler, stat.size, stat.mtimeMs, stat.ctimeMs]);
+  if (!compilerImages.has(imageKey)) compilerImages.set(imageKey, fileEvidence([record.compiler], {artifact: true})[record.compiler]);
   return {...parsed, effective, baseline, removals: baseline.filter(value => !effective.includes(value)), sysroot,
-    compilerVersion: command(record.compiler, ['-Vv'], record.cwd)};
+    compilerVersion: command(record.compiler, ['-Vv'], record.cwd), compilerSha256: compilerImages.get(imageKey)};
 }
 
 export function compilerInputs(record) {
@@ -94,14 +98,33 @@ export function compilerInputs(record) {
   return {files: [...files].sort(), environment};
 }
 
-export function fileEvidence(paths) {
+function fileDigest(filename, limit) {
+  const descriptor = fs.openSync(filename, 'r');
+  try {
+    const initial = fs.fstatSync(descriptor);
+    if (!initial.isFile() || initial.size > limit) gap(`file exceeds bounded hashing allowance: ${filename}`);
+    const hash = createHash('sha256'), buffer = Buffer.alloc(64 * 1024);
+    let bytes = 0;
+    for (let count; (count = fs.readSync(descriptor, buffer, 0, buffer.length, null));) {
+      bytes += count;
+      if (bytes > limit) gap(`file grew beyond bounded hashing allowance: ${filename}`);
+      hash.update(buffer.subarray(0, count));
+    }
+    const final = fs.fstatSync(descriptor);
+    if (bytes !== initial.size || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs)
+      gap(`file changed during hashing: ${filename}`);
+    return {digest: hash.digest('hex'), bytes};
+  } finally { fs.closeSync(descriptor); }
+}
+
+export function fileEvidence(paths, {artifact = false} = {}) {
   const result = {}, names = [...new Set(paths)];
   let total = 0;
   for (const filename of names) {
-    const bytes = boundedRead(filename, MAX_INPUT);
-    total += bytes.length;
-    if (total > MAX_TOTAL) gap('captured input/artifact hashing exceeds 64 MiB');
-    result[filename] = digest(bytes);
+    const file = fileDigest(filename, artifact ? MAX_ARTIFACT : MAX_INPUT);
+    total += file.bytes;
+    if (total > (artifact ? MAX_ARTIFACT_TOTAL : MAX_TOTAL)) gap('captured input/artifact hashing exceeds its shared operation allowance');
+    result[filename] = file.digest;
   }
   return result;
 }
@@ -123,19 +146,19 @@ export function capturedUnit(record, artifact, command, setupInputs = []) {
     if (separator < 1) gap('pathless extern dependency cannot select an exact producer');
     return path.resolve(record.cwd, value.slice(separator + 1));
   });
-  const dependencyHashes = fileEvidence(dependencies);
+  const dependencyHashes = fileEvidence(dependencies, {artifact: true});
   for (const filename of dependencies)
     if (record.beforeArtifacts?.[filename] !== dependencyHashes[filename]) gap('extern artifact lacks matching compiler-consumption snapshot');
   return {record, cargo: artifact, cfg, inputs, outputs, artifactIdentity: cargoArtifactIdentity(artifact),
-    inputHashes, dependencyHashes, outputHashes: fileEvidence(outputs)};
+    inputHashes, dependencyHashes, outputHashes: fileEvidence(outputs, {artifact: true})};
 }
 
 export function capturedUnitCurrent(unit, artifact) {
   try {
     return unit.record.status === 0 && unit.artifactIdentity === cargoArtifactIdentity(artifact) &&
-      Object.entries(unit.inputHashes).every(([filename, expected]) => digest(boundedRead(filename, MAX_INPUT)) === expected) &&
-      Object.entries(unit.outputHashes).every(([filename, expected]) => digest(boundedRead(filename, MAX_INPUT)) === expected) &&
-      Object.entries(unit.dependencyHashes).every(([filename, expected]) => digest(boundedRead(filename, MAX_INPUT)) === expected) &&
+      Object.entries(unit.inputHashes).every(([filename, expected]) => fileDigest(filename, MAX_INPUT).digest === expected) &&
+      Object.entries(unit.outputHashes).every(([filename, expected]) => fileDigest(filename, MAX_ARTIFACT).digest === expected) &&
+      Object.entries(unit.dependencyHashes).every(([filename, expected]) => fileDigest(filename, MAX_ARTIFACT).digest === expected) &&
       Object.entries(unit.inputs.environment).every(([name, expected]) =>
         name.startsWith('CARGO_PKG_') || ['CARGO_CRATE_NAME', 'CARGO_MANIFEST_DIR', 'CARGO_MANIFEST_PATH', 'OUT_DIR'].includes(name) ||
         (process.env[name] ?? null) === expected);
@@ -173,7 +196,8 @@ export function selectedProject(units, selected, metadata) {
   const sysroot = units[selected].cfg.sysroot, compilerVersion = units[selected].cfg.compilerVersion;
   for (const index of reachable) {
     const unit = units[index];
-    if (unit.cfg.sysroot !== sysroot || unit.cfg.compilerVersion !== compilerVersion) gap('reachable units select incompatible compiler/sysroot identities');
+    if (unit.cfg.sysroot !== sysroot || unit.cfg.compilerVersion !== compilerVersion || unit.cfg.compilerSha256 !== units[selected].cfg.compilerSha256)
+      gap('reachable units select incompatible compiler/sysroot identities');
     if (JSON.stringify(unit.cfg.removals) !== removals) gap('reachable units need different analyzer cfg removals');
     for (const filename of unit.inputs.files.filter(item => item.endsWith('.rs'))) {
       const physical = fs.realpathSync(filename);
@@ -202,6 +226,6 @@ export function selectedProject(units, selected, metadata) {
   });
   return {reachable, project: {sysroot, sysroot_src: path.join(sysroot, 'lib/rustlib/src/rust/library'), crates},
     analyzerCfg: {setTest: false}, cargoCfgs: [...(removeAnalyzerCfg ? ['!rust_analyzer'] : []), ...overrides],
-    firstPartyFiles: reachable.flatMap(index => metadata.workspace_members.includes(units[index].cargo.package_id) ?
-      units[index].inputs.files.filter(filename => filename.endsWith('.rs')) : [])};
+    firstPartyFiles: metadata.workspace_members.includes(units[selected].cargo.package_id) ?
+      units[selected].inputs.files.filter(filename => filename.endsWith('.rs')) : []};
 }
