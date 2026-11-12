@@ -33,15 +33,17 @@ owns change reconciliation and scheduling. These are not complete Cargo input
 or environment fingerprints: external path dependencies, configuration changes
 outside these paths and generated inputs need further work.
 
-## Compiler-context planning checkpoint
+## Compiler-context implementation checkpoint
 
 The user accepted Cargo-check capture followed by separate rust-analyzer
 selected-root graphs as the production direction. The finite probe receipts
 in the current integration documentation establish only their declared fixture
 cases; they do not certify general cfg/input replay or production publication.
 
-`contexts.mjs` and the managed-planner-only `capture.mjs` begin that boundary.
-They are not yet routed from the worker. Captured units require successful
+Managed policy requests now route through `cargo-contexts.mjs`, `contexts.mjs`
+and the compiler-only `capture.mjs`. Absent-policy direct requests retain the
+historical experimental combined view described elsewhere in this document.
+Captured units require successful
 compiler status, exact Cargo/rustc artifact joins, emitted dep-info membership,
 matching pre-compilation input hashes and content-bound outputs. Unknown
 argument/dep-info forms are explicit gaps. Actual compiler queries determine
@@ -49,17 +51,46 @@ effective cfg and the corresponding target baseline; a graph is refused when
 reachable crates need different global cfg removals or consume the same Rust
 source under different contexts. The compiler must match its analyzer sysroot
 compiler. A Cargo package ID remains opaque; extern artifact paths supply
-dependency joins, and only Cargo workspace members may own source facts.
+dependency joins. Each selected workspace unit owns only its consumed Rust
+source; reachable dependencies are semantic lookup, including other workspace
+units. Independently indexed dependency bodies are not linked without exact
+context/snapshot pointers. Source payload sharing remains core-owned.
 
 The initial capture helper refuses unexpected application/test linking before
 execution, while metadata-selected build-script/proc-macro tooling roots may
-produce required tools. Its input inventory is supplied by the eventual managed
-planner. General inventory/wrapper/configuration guards, generated inputs,
-procedural-macro replay, cache orchestration and worker routing remain unfinished.
-The focused `tests/rust_contexts.mjs` fixture exercises actual profile/feature cfg
-replay, module/include inputs, cache content checks, shared-source ambiguity and
-failed-unit exclusion when the shared build owner runs it. Source checks alone
-do not establish that those runtime assertions pass.
+produce required tools. The collector hashes a bounded saved inventory once,
+keeps package-specific pre-compilation snapshots and retains only actual
+dep-info consumption in each record. Unknown include inputs or missing proof
+permit one controlled recapture of owned metadata/required macro tools. Artifact
+hashing streams fixed-size buffers rather than allocating metadata-sized blobs.
+Cargo `--keep-going` lets healthy units finish after sibling failures; failed
+units never borrow prior successful body proof. Wrapper/configuration forms that
+cannot be preserved are unavailable. Nonstandard Cargo-injected environment
+origins can conservatively prevent warm proof reuse; no TOML evaluator is added.
+
+Selected and unavailable managed rows stamp `rustContextPolicy=1` for the
+existing readiness/backfill path. Workspace compiler diagnostics remain on a
+workspace-summary/unavailable coverage row rather than marking healthy units
+as failed. Saved source reads are checked against captured input bytes.
+Generated/expansion identities require authored syntax declaration kinds and
+exact anchors; unproven targets are omitted. Lookup-only files above the
+64 KiB syntax-proof allowance are an explicit early coverage limit.
+
+The shared build owner passed the focused I/O/planning/collection catalog at
+`ab992a6` (`.artifacts/implementation-0.0.3/wave-01/rust-contexts-catalog-03/`)
+and the actual selected-worker fixture at `4ea97fa`
+(`.artifacts/implementation-0.0.3/wave-01/rust-context-worker-01/`). Those receipts
+retain earlier failed attempts. They do not establish installed/native parity,
+real-corpus performance or complete Rust support.
+
+The next source slice supplies captured proc-macro dylibs to the matching public
+analyzer graph only after exact emitted-output/extern-content joins. It retains
+the authored-origin guard and lookup-only dependency boundary, and defers
+rust-src validation to the actual Cargo-selected compiler rather than an
+unrelated PATH rustc. Its owned function/attribute/derive binding fixture is
+prepared for runtime qualification; source checks alone do not certify replay.
+Arbitrary macro runtime file/environment inputs, expanded-source identities,
+cross-unit body links and incompatible cfg-removal cases remain limits.
 
 ## Semantic evidence
 
