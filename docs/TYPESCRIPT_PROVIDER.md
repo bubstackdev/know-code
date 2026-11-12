@@ -2,6 +2,8 @@
 
 The adapter uses repository-selected TypeScript 5.9.x and the existing configured/inferred planning path. [Implementation scope](IMPLEMENTATION.md) still applies: a first explicitly partial call/impact slice is now implemented; see [supported forms and limits](CALL_GRAPH.md). The declaration/collection measurements below predate graph activation and do not include its added facts.
 
+TypeScript 6 and 7 are not currently supported. The user identified the omitted TS7 compatibility work during 0.0.3 planning; [current readiness findings](TYPESCRIPT_7_READINESS.md) distinguish the native TS7.0 compiler from the new TS7.1 beta API. No version-range relaxation or implicit legacy-compiler substitution establishes native support.
+
 Test-origin policy 1 adds inferred `.test`/`.spec`/`__tests__` evidence on owned source artifacts, with unknown compilation/default origins and exact worker acknowledgment. Owned module/initializer declaration anchors are additive; identities, calls and reference occurrences stay unchanged. See [adapter contract, snapshot behavior and focused checks](TYPESCRIPT_TEST_CLASSIFICATION.md); shared filters/backfill and final native/package validation remain common-core integration work.
 
 ## npm/pnpm preparation policy

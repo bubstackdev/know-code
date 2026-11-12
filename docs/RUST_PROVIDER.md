@@ -64,6 +64,13 @@ refactoring continuity is not implemented here.
 
 ## Toolchain and execution policy
 
+Accepted v0.0.3 policy: Cargo build scripts and procedural macros may run under
+the existing personal repository trust grant and shared resource limits. They
+execute project/dependency code; untrusted workspaces must not run them. Reuse
+the common execution-grant path, with generated/configuration provenance and
+cancellation. This policy is not implemented yet: the current adapter behavior
+below still disables build scripts and procedural macros.
+
 The worker runs `cargo`, `rustc` and `rust-analyzer` in each selected workspace
 directory, allowing rustup's repository selection to apply. It records `rustc
 -Vv`, rust-analyzer identity, Node runtime identity and effective analysis
@@ -90,14 +97,24 @@ a marker when executed; the tests verify that indexing and saved updates leave
 that marker absent. A cfg declared only by that script remains an explicit
 generated/configuration gap.
 
-One analyzer lives at a time. LSP requests are serial and frames are bounded at
-8 MiB; tool commands, project loading and individual requests time out after
-120 seconds. Process failures/timeouts fail the worker job so the coordinator
-can preserve prior publication. This is bounded request concurrency, not a
-measured memory/CPU ceiling. Per-token navigation requests and cold analyzer
-startup will need performance work before large-workspace support is claimed.
+One analyzer lives at a time. Definition requests run in ordered windows of
+four; the external-source cache accounts up to 16 MiB of retained payload and
+at most 64 entries ([adapter bounds](../providers/rust/navigation.mjs)). Other
+requests remain sequential and frames are bounded at 8 MiB; tool commands,
+project loading and individual requests time out after 120 seconds. Process
+failures/timeouts fail the worker job so the coordinator can preserve prior
+publication. Shared coordinator resource controls still apply; these adapter
+bounds do not establish actual peak RSS or large-workspace throughput. Owned
+source buffers/maps are still materialized for the workspace. Measure that
+residency and cold analyzer startup before claiming large-workspace support.
 
 ## Honest limits and verification
+
+Accepted v0.0.3 selection policy: use repository-configured target platforms,
+or the host when unset, and default features, with workspace target/feature
+overrides. Include libraries, binaries and tests with distinct compilation
+contexts; do not enumerate every possible feature combination. The current
+single-view implementation below does not satisfy that context policy yet.
 
 The current workspace view combines rust-analyzer's default Cargo features and
 all-target discovery; it does not produce a separate complete compilation for

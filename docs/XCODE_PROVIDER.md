@@ -5,6 +5,13 @@ adapter. **Xcode's required device-plus-simulator project support is not
 complete.** The installed command-line indexing-settings interface is not a
 reliable context selector; this is a measured blocker, not a missing compiler.
 
+Accepted 0.0.3 release policy: working device-and-simulator indexing is required.
+Use one selected shared scheme per workspace, including its dependencies and
+tests. Select the sole shared scheme automatically; require a workspace choice
+when several exist. The prototype boundaries below remain implementation
+history, not evidence that this policy or production Xcode support is complete.
+Optional SwiftBuild/BSP bridge adoption remains undecided.
+
 ## Smallest integration and its limit
 
 The rejected experiment used the installed, documented
