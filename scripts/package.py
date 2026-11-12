@@ -39,10 +39,27 @@ def evidence(kind,name,version,license_text,source,files):
  entry={'ecosystem':kind,'name':name,'version':version,'license':license_text,'source':source,'notice_files':[]}
  for file in files:
   if not file.is_file():continue
-  suffix=file.suffix if len(file.suffix)<12 else '.txt';dest=NOTICES/'texts'/(digest(file)+suffix)
+  # NuGet treats extensionless PackagePath values as directories and drops
+  # foreign .nuspec files. Retain the exact evidence bytes under one safe suffix;
+  # ecosystem, package, source and pinned upstream provenance remain in inventory.
+  dest=NOTICES/'texts'/(digest(file)+'.txt')
   if not dest.exists():copy(file,dest)
   entry['notice_files'].append(str(dest.relative_to(NOTICES)))
  inventory.append(entry)
+
+def verify_notice_archive(read_member,names,prefix):
+ expected={prefix+p.relative_to(NOTICES).as_posix():p.read_bytes() for p in provenance.files(NOTICES)}
+ actual=[name for name in names if name.startswith(prefix)]
+ if len(actual)!=len(set(actual)) or set(actual)!=set(expected):
+  raise provenance.Invalid(f'Archive third-party notice paths differ from staging: {prefix}')
+ for name,content in expected.items():
+  if read_member(name)!=content:raise provenance.Invalid(f'Archive third-party notice bytes differ from staging: {name}')
+ packaged=json.loads(read_member(prefix+'inventory.json'))
+ if packaged!=inventory:raise provenance.Invalid(f'Archive dependency inventory differs from staging: {prefix}')
+ for entry in packaged:
+  if not entry.get('notice_files'):raise provenance.Invalid(f'Missing notice evidence for {entry["name"]}')
+  for name in entry['notice_files']:
+   if prefix+name not in expected:raise provenance.Invalid(f'Dangling archive notice inventory path: {prefix+name}')
 
 # Runtime JS dependencies come from the installed pinned closure, never workspace links.
 for source in provenance.runtime_packages(ROOT):
@@ -121,9 +138,11 @@ run('dotnet','pack',ROOT/'bindings/dotnet/KnowCode/KnowCode.csproj','--no-build'
 nuget=OUT/f'KnowCode.{VERSION}.nupkg';assert nuget.is_file()
 with tarfile.open(node_archive) as archive:
  provenance.require_output(BUILD_RECORD,f'target/{PROFILE}/libknow_code_node.dylib',hashlib.sha256(archive.extractfile('package/know_code.node').read()).hexdigest(),PROFILE)
+ verify_notice_archive(lambda name:archive.extractfile(name).read(),[entry.name for entry in archive.getmembers() if entry.isfile()],'package/THIRD_PARTY/')
 with zipfile.ZipFile(nuget) as archive:
  for entry,source in [('lib/net10.0/KnowCode.dll',f'bindings/dotnet/KnowCode/bin/{CONFIG}/net10.0/KnowCode.dll'),('runtimes/osx-arm64/native/libknow_code_ffi.dylib',f'target/{PROFILE}/libknow_code_ffi.dylib')]:
   provenance.require_output(BUILD_RECORD,source,hashlib.sha256(archive.read(entry)).hexdigest(),PROFILE)
+ verify_notice_archive(archive.read,[entry.filename for entry in archive.infolist() if not entry.is_dir()],'THIRD_PARTY/')
 
 # Normalize archive metadata; gzip timestamp does not encode the build time.
 def archive_filter(info):
@@ -131,6 +150,8 @@ def archive_filter(info):
 runtime_archive=OUT/f'know-code-runtime-{VERSION}-darwin-arm64.tar.gz'
 with runtime_archive.open('wb') as stream,gzip.GzipFile(fileobj=stream,mode='wb',filename='',mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w') as archive:
  archive.add(RUNTIME,arcname=RUNTIME.name,filter=archive_filter)
+with tarfile.open(runtime_archive) as archive:
+ verify_notice_archive(lambda name:archive.extractfile(name).read(),[entry.name for entry in archive.getmembers() if entry.isfile()],RUNTIME.name+'/lib/know-code/THIRD_PARTY/')
 artifacts=[runtime_archive,node_archive,nuget]
 # Build provenance records actual source content; do not pretend an uncommitted tree is a release revision.
 sources={}
