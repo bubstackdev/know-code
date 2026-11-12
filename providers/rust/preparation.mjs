@@ -1,0 +1,58 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {cargoSelection} from './policy.mjs';
+
+const hash = value => createHash('sha256').update(value).digest('hex');
+const exists = filename => { try { return fs.statSync(filename).isFile(); } catch { return false; } };
+
+// Preparation checkpoint ownership, retries and publication stay in the shared
+// coordinator. Cargo owns resolution, registry/git credentials and its cache.
+export function prepareCargo({request, root, manifest, metadata, policy, identity, command, inputPaths, send}) {
+  if (!policy) return metadata; // Legacy direct workers remain offline.
+  const directory = path.dirname(manifest), key = `cargo:${manifest}`;
+  const fingerprint = hash(JSON.stringify([request.preparationFingerprint, identity, policy, 'cargo-fetch-v1']));
+  const previous = request.preparations.find(item => item.key === key);
+  const state = path.join(policy.cacheDirectory, hash(manifest).slice(0, 24));
+  const planFile = path.join(state, 'dependency-plan.json');
+  let plan;
+  try { plan = JSON.parse(fs.readFileSync(planFile, 'utf8')); } catch { /* Missing derived state is restorable. */ }
+  const valid = plan?.fingerprint === fingerprint && plan.outputs.every(exists) &&
+    Object.entries(plan.inputs).every(([filename, expected]) => exists(filename) && hash(fs.readFileSync(filename)) === expected);
+  if (previous?.fingerprint === fingerprint && !request.retryPreparation) {
+    if (!previous.succeeded) throw new Error(`Cargo dependency preparation previously failed; refresh explicitly to retry: ${previous.error}`);
+    if (valid) return plan.metadata;
+  }
+  let error = '';
+  try {
+    // Probe the full resolved graph, not only --no-deps: local dependency
+    // manifests and restored external packages are setup outputs too.
+    const args = ['metadata', '--offline', '--format-version', '1', '--manifest-path', manifest, ...cargoSelection(policy)];
+    let resolved;
+    try { resolved = JSON.parse(command('cargo', args, directory)); }
+    catch (cause) {
+      if (!policy.executionAllowed) throw new Error(`Cargo dependencies are unavailable; a personal repository trust grant is required before restoration: ${cause.message}`);
+      send('progress', {stage: 'restoring', projectPath: path.relative(root, manifest),
+        message: 'Fetching repository-selected Cargo dependencies; no build scripts, procedural macros or products are run by fetch.'});
+      const fetch = ['fetch', '--manifest-path', manifest];
+      if (exists(path.join(metadata.workspace_root, 'Cargo.lock'))) fetch.push('--locked');
+      for (const target of policy.targets) fetch.push('--target', target);
+      // Fetch has no feature flags. The subsequent metadata query evaluates
+      // the requested features. Preserve any user-selected offline environment.
+      command('cargo', fetch, directory, {restore: true});
+      resolved = JSON.parse(command('cargo', args, directory));
+    }
+    if (fs.realpathSync(resolved.workspace_root) !== fs.realpathSync(metadata.workspace_root))
+      throw new Error('Cargo workspace ownership changed during dependency preparation; refresh saved inputs');
+    const inputs = {};
+    for (const filename of new Set([...inputPaths(resolved, manifest, policy), ...resolved.packages.map(item => item.manifest_path)]))
+      if (exists(filename)) inputs[filename] = hash(fs.readFileSync(filename));
+    const outputs = [planFile, ...resolved.packages.map(item => item.manifest_path)];
+    plan = {fingerprint, inputs, outputs, metadata: resolved};
+    fs.mkdirSync(state, {recursive: true});
+    fs.writeFileSync(planFile, JSON.stringify(plan));
+  } catch (cause) { error = cause.message.slice(-4096); }
+  send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
+  if (error) throw new Error(`Cargo dependency preparation failed: ${error}`);
+  return plan.metadata;
+}

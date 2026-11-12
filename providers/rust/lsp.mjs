@@ -2,7 +2,10 @@ import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 
 // Dependency analysis may use installed rustup shims, but must never provision
 // a missing repository-selected compiler as a side effect of invoking them.
-export const compilerEnvironment = () => ({...process.env, CARGO_NET_OFFLINE: 'true', RUSTUP_AUTO_INSTALL: '0'});
+export const compilerEnvironment = ({restore = false} = {}) => ({...process.env,
+  // Only deliberate dependency fetching drops our forced offline setting;
+  // user-selected Cargo offline settings remain authoritative during fetch.
+  ...(!restore ? {CARGO_NET_OFFLINE: 'true'} : {}), RUSTUP_AUTO_INSTALL: '0'});
 
 // Only Rust readiness/diagnostic policy lives here; SwiftPM shares transport.
 export class Analyzer extends JsonRpcProcess {

@@ -34,6 +34,7 @@ export function cargoSelection(policy, target) {
 export function analyzerCargo(policy, manifest, target) {
   const cargo = {offline: true, allTargets: true, buildScripts: {enable: false}};
   if (!policy) return cargo; // Preserve the legacy direct-worker defaults.
+  cargo.buildScripts.enable = policy.executionAllowed;
   cargo.features = policy.features;
   cargo.noDefaultFeatures = !policy.defaultFeatures;
   if (target) cargo.target = target; // Otherwise Cargo keeps repository defaults.

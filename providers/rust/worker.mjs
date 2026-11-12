@@ -9,12 +9,13 @@ import {relative,byteOffsets,sourceBoundary} from '../shared/source.mjs';
 import {orderedDefinitions,ExternalSources} from './navigation.mjs';
 import {syntaxGraph, outgoingCalls} from './graph.mjs';
 import {rustPolicy, cargoSelection, analyzerCargo} from './policy.mjs';
+import {prepareCargo} from './preparation.mjs';
 
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
 const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'const', 'static', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
 
-function command(tool, args, cwd) {
-  const result = spawnSync(tool, args, {cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: compilerEnvironment()});
+function command(tool, args, cwd, options) {
+  const result = spawnSync(tool, args, {cwd, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024, env: compilerEnvironment(options)});
   if (result.error || result.status !== 0) throw new Error(`${tool} prerequisite/project evaluation failed: ${result.error?.message ?? result.stderr}; install the repository-selected Rust toolchain, rust-analyzer and rust-src components, and restore Cargo dependencies separately`);
   return result.stdout.trim();
 }
@@ -63,7 +64,7 @@ function inputPaths(metadata, manifest, policy) {
   return [...result].filter(p => fs.existsSync(p));
 }
 
-async function analyze(root, manifest, metadata, configuration, policy, selectedTarget) {
+async function analyze(root, manifest, metadata, configuration, policy, selectedTarget, request, prepared) {
   const directory = path.dirname(manifest);
   const projectPath = relative(root, manifest);
   const compilationId = `rust:${projectPath}${selectedTarget ? `:target:${encodeURIComponent(selectedTarget)}` : ''}`;
@@ -74,6 +75,12 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
   if (!fs.existsSync(path.join(librarySources, 'Cargo.toml')) || !fs.existsSync(path.join(librarySources, 'core/src/lib.rs')))
     throw new Error(`missing rust-src prerequisite for repository-selected Rust sysroot ${sysroot}; install rust-src separately for that toolchain and refresh. Know Code does not install toolchains or components`);
   const analyzerVersion = command('rust-analyzer', ['--version'], directory);
+  if (policy) {
+    if (!prepared.has(manifest)) prepared.set(manifest, prepareCargo({request, root, manifest, metadata, policy,
+      identity: [compilerVersion, analyzerVersion, command('cargo', ['--version'], directory)], command, inputPaths, send}));
+    metadata = prepared.get(manifest);
+  }
+  const trustedPreparation = policy?.executionAllowed === true;
   const members = metadata.packages.filter(p => metadata.workspace_members.includes(p.id));
   const files = new Set();
   // Cargo supplies crate roots. Additional module sources are enrolled only
@@ -82,15 +89,17 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     if (typeof target.src_path === 'string' && fs.existsSync(target.src_path)) files.add(target.src_path);
   const sources = new Map([...files].sort().map(filename => [pathToFileURL(filename).href, source(filename, root, compilationId)]));
   const options = {provider: 'rust-analyzer-lsp', analyzerVersion, positionEncoding: 'utf-16', configuration,
-    cargo: {...cargo, buildScripts: false, features: policy?.features ?? 'default'}, procMacros: false,
+    cargo: {...cargo, features: policy?.features ?? 'default'}, procMacros: trustedPreparation,
     requestedPolicy: policy ? {targets: policy.targets, defaultFeatures: policy.defaultFeatures, executionAllowed: policy.executionAllowed} : null,
     sourceOwnership: 'Cargo target roots and unique analyzer-selected module files',
     coverage: 'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
   send('compilation', {id: compilationId, language: 'rust', projectPath, target: selectedTarget ? `${selectedTarget}/rust-analyzer-workspace-view` : 'rust-analyzer-workspace-view', configuration,
     inferred: false, compilerVersion, optionsJson: JSON.stringify(options), inputPaths: inputPaths(metadata, manifest, policy), dependencies: []});
-  send('progress', {stage: 'analysis', projectPath, message: 'Loading repository-selected Rust analyzer; build scripts and procedural macro execution are disabled.'});
+  send('progress', {stage: 'analysis', projectPath, message: trustedPreparation ?
+    'Loading repository-selected Rust analyzer with trusted compiler-integrated build-script and procedural-macro preparation; product checks on save are disabled.' :
+    'Loading repository-selected Rust analyzer; build scripts and procedural macro execution are disabled.'});
   const diagnostics = [{code: 'rust_coverage_limits', severity: 'warning', path: projectPath,
-    message: 'Experimental compiler-backed Rust navigation: build scripts/procedural macros are disabled; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Only unique analyzer-resolved references are published. This is a partial graph.'}];
+    message: `Experimental compiler-backed Rust navigation: build scripts/procedural macros are ${trustedPreparation ? 'personally authorized for compiler preparation' : 'disabled'}; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not fully covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Only unique analyzer-resolved references are published. This is a partial graph.`}];
   if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
   const analyzer = new Analyzer(directory);
@@ -134,7 +143,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         textDocument: {documentSymbol: {hierarchicalDocumentSymbolSupport: true}, definition: {linkSupport: true}, hover: {contentFormat: ['plaintext']},
           callHierarchy: {}, semanticTokens: {requests: {full: true}, tokenTypes: [...kinds, 'keyword'], tokenModifiers: ['declaration', 'definition'], formats: ['relative']}}},
       initializationOptions: {checkOnSave: false, check: {enable: false}, cargo,
-        procMacro: {enable: false}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
+        procMacro: {enable: trustedPreparation}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
         hover: {documentation: {enable: false}, memoryLayout: {enable: false}}}});
     if (initialized.capabilities.positionEncoding && initialized.capabilities.positionEncoding !== 'utf-16') throw new Error('unsupported rust-analyzer position encoding');
     const legend = initialized.capabilities.semanticTokensProvider?.legend;
@@ -317,8 +326,9 @@ try {
     const canonical = path.join(metadata.workspace_root, 'Cargo.toml');
     workspaces.set(canonical, metadata);
   }
+  const prepared = new Map();
   for (const [manifest, metadata] of workspaces) for (const target of policy?.targets.length ? policy.targets : [undefined])
-    await analyze(root, manifest, metadata, request.configuration || 'Debug', policy, target);
+    await analyze(root, manifest, metadata, request.configuration || 'Debug', policy, target, request, prepared);
   if (!workspaces.size) throw new Error('Rust analysis requires a Cargo.toml project; standalone Rust files are not supported by this provider yet');
   send('complete', {success: true});
 } catch (e) {
