@@ -7,6 +7,7 @@ import {readRequest, send} from '../shared/protocol.mjs';
 import {Analyzer, compilerEnvironment} from './lsp.mjs';
 import {relative,byteOffsets} from '../shared/source.mjs';
 import {orderedDefinitions,ExternalSources} from './navigation.mjs';
+import {syntaxGraph, outgoingCalls} from './graph.mjs';
 
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
 const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
@@ -42,6 +43,15 @@ function source(filename, root, compilationId) {
       const end = position.line + 1 < lines.length ? lines[position.line + 1] : text.length;
       if (offset > end) throw new Error('compiler source position exceeds indexed source');
       return offsets[offset];
+    },
+    position(byte) {
+      let low = 0, high = offsets.length - 1;
+      while (low < high) { const middle = (low + high) >>> 1; if (offsets[middle] < byte) low = middle + 1; else high = middle; }
+      if (offsets[low] !== byte) throw new Error('compiler byte range splits a UTF-8 character');
+      const characterOffset = low;
+      low = 0; high = lines.length;
+      while (low < high) { const middle = (low + high) >>> 1; if (lines[middle] <= characterOffset) low = middle + 1; else high = middle; }
+      return {line: low - 1, character: characterOffset - lines[low - 1]};
     }};
 }
 
@@ -88,16 +98,41 @@ async function analyze(root, manifest, metadata, configuration) {
   const externalSources = new ExternalSources();
   let batch = {compilationId, symbols: [], occurrences: [], relationships: []};
   const flush = () => {
-    if (batch.symbols.length || batch.occurrences.length) send('facts', batch);
+    if (batch.symbols.length || batch.occurrences.length || batch.relationships.length) send('facts', batch);
     batch = {compilationId, symbols: [], occurrences: [], relationships: []};
   };
-  let unresolved = 0;
+  let unresolved = 0, graphCalls = 0, graphDependencies = 0, graphUnavailable = 0;
+  const relationship = edge => batch.relationships.push(edge);
+  const recordLimit = () => { if (batch.symbols.length + batch.occurrences.length + batch.relationships.length >= 128) flush(); };
+  async function definitionSymbol(definition, kind, fallback) {
+    let target = sources.get(definition.uri) ?? externalSources.get(definition.uri);
+    if (!target && definition.uri.startsWith('file:')) {
+      const filename = fileURLToPath(definition.uri);
+      if (fs.existsSync(filename)) { target = source(filename, root, compilationId); externalSources.set(definition.uri, target); }
+    }
+    if (!target) return undefined;
+    const anchor = target.byte(definition.range.start), endAnchor = target.byte(definition.range.end);
+    const id = `${compilationId}:${relative(root, target.filename)}:${anchor}`;
+    if (!emitted.has(id)) {
+      const selectedName = target.artifact.utf8.subarray(anchor, endAnchor).toString('utf8');
+      const identifierSelection = /^(?:r#)?[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(selectedName);
+      const name = identifierSelection ? selectedName : fallback.name;
+      const hover = await analyzer.request('textDocument/hover', {textDocument: {uri: identifierSelection ? definition.uri : fallback.uri},
+        position: identifierSelection ? definition.range.start : fallback.position});
+      const content = hover?.contents;
+      const signature = typeof content === 'string' ? content : Array.isArray(content) ? content.map(c => typeof c === 'string' ? c : c.value).join('\n') : content?.value;
+      emitted.add(id);
+      batch.symbols.push({id, name, kind, signature: signature ?? name, external: !sources.has(definition.uri)});
+      recordLimit();
+    }
+    return {id, target, anchor, endAnchor};
+  }
   try {
     const initialized = await analyzer.request('initialize', {processId: process.pid, rootUri: pathToFileURL(directory).href,
       workspaceFolders: [{uri: pathToFileURL(directory).href, name: path.basename(directory)}],
       capabilities: {general: {positionEncodings: ['utf-16']}, experimental: {serverStatusNotification: true},
         textDocument: {documentSymbol: {hierarchicalDocumentSymbolSupport: true}, definition: {linkSupport: true}, hover: {contentFormat: ['plaintext']},
-          semanticTokens: {requests: {full: true}, tokenTypes: [...kinds, 'keyword'], tokenModifiers: ['declaration', 'definition'], formats: ['relative']}}},
+          callHierarchy: {}, semanticTokens: {requests: {full: true}, tokenTypes: [...kinds, 'keyword'], tokenModifiers: ['declaration', 'definition'], formats: ['relative']}}},
       initializationOptions: {checkOnSave: false, check: {enable: false}, cargo: {offline: true, allTargets: true, buildScripts: {enable: false}},
         procMacro: {enable: false}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
         hover: {documentation: {enable: false}, memoryLayout: {enable: false}}}});
@@ -110,6 +145,28 @@ async function analyze(root, manifest, metadata, configuration) {
     for (const current of sources.values()) {
       send('source', current.artifact);
       analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
+      const graph = await syntaxGraph(analyzer, current);
+      if (!graph) graphUnavailable++;
+      const moduleId = `${compilationId}:module:${relative(root, current.filename)}`;
+      if (graph) {
+        graph.root.id = moduleId;
+        emitted.add(moduleId);
+        batch.symbols.push({id: moduleId, name: relative(root, current.filename), kind: 'module', signature: '<Rust source module>', external: false});
+        if (current.artifact.utf8.length) batch.occurrences.push({symbolId: moduleId, artifactId: current.artifact.id,
+          startByte: 0, endByte: current.artifact.utf8.length, role: 'definition', enclosingSymbolId: ''});
+      }
+      const initializerIds = new Map();
+      const initializer = owner => {
+        if (!initializerIds.has(owner.id)) {
+          const id = `${compilationId}:initializer:${relative(root, current.filename)}:${owner.start}`;
+          initializerIds.set(owner.id, id);
+          batch.symbols.push({id, name: `<${owner.kind.toLowerCase()} initialization>`, kind: 'initializer', signature: '<Rust constant/static initialization>', external: false});
+          batch.occurrences.push({symbolId: id, artifactId: current.artifact.id, startByte: owner.start, endByte: owner.end, role: 'definition', enclosingSymbolId: owner.id});
+          relationship({sourceId: owner.id, targetId: id, kind: 'initializes', resolution: 'compiler_bound', artifactId: current.artifact.id,
+            startByte: owner.selection.start, endByte: owner.selection.end});
+        }
+        return initializerIds.get(owner.id);
+      };
       const extents = new Map();
       if (initialized.capabilities.documentSymbolProvider) {
         const outline = await analyzer.request('textDocument/documentSymbol', {textDocument: {uri: current.uri}});
@@ -154,46 +211,46 @@ async function analyze(root, manifest, metadata, configuration) {
         }));
         if (unique.size !== 1) { unresolved++; continue; }
         const definition = [...unique.values()][0];
-        let target = sources.get(definition.uri) ?? externalSources.get(definition.uri);
-        if (!target && definition.uri.startsWith('file:')) {
-          const filename = fileURLToPath(definition.uri);
-          if (fs.existsSync(filename)) {
-            target = source(filename, root, compilationId);
-            externalSources.set(definition.uri, target);
-          }
-        }
-        if (!target) { unresolved++; continue; }
-        const startByte = current.byte(position);
-        const endByte = current.byte(endPosition);
-        const anchor = target.byte(definition.range.start);
-        const endAnchor = target.byte(definition.range.end);
-        const symbolId = `${compilationId}:${relative(root, target.filename)}:${anchor}`;
+        const startByte = current.byte(position), endByte = current.byte(endPosition);
+        const selected = await definitionSymbol(definition, kind, {uri: current.uri, position,
+          name: current.artifact.utf8.subarray(startByte, endByte).toString('utf8')});
+        if (!selected) { unresolved++; continue; }
+        const {id: symbolId, anchor, endAnchor} = selected;
         const declaration = current.uri === definition.uri && startByte === anchor && endByte === endAnchor;
-        if (!emitted.has(symbolId)) {
-          // File-backed modules/crates can navigate to an entire file instead
-          // of an identifier selection. Never turn that file into a name or
-          // fallback signature, or publish dependency source through that path.
-          const selectedName = target.artifact.utf8.subarray(anchor, endAnchor).toString('utf8');
-          const identifierSelection = /^(?:r#)?[_\p{ID_Start}][_\p{ID_Continue}]*$/u.test(selectedName);
-          const name = identifierSelection ? selectedName : current.artifact.utf8.subarray(startByte, endByte).toString('utf8');
-          const hover = await analyzer.request('textDocument/hover', {textDocument: {uri: identifierSelection ? definition.uri : current.uri},
-            position: identifierSelection ? definition.range.start : position});
-          const content = hover?.contents;
-          const signature = typeof content === 'string' ? content : Array.isArray(content) ? content.map(c => typeof c === 'string' ? c : c.value).join('\n') : content?.value;
-          emitted.add(symbolId);
-          batch.symbols.push({id: symbolId, name, kind, signature: signature ?? name, external: !sources.has(definition.uri)});
+        if (declaration) graph?.bind(startByte, endByte, symbolId);
+        const owner = graph?.enclosing(startByte, endByte, declaration ? symbolId : '');
+        batch.occurrences.push({symbolId, artifactId: current.artifact.id, startByte, endByte,
+          role: declaration ? 'declaration' : 'reference', enclosingSymbolId: owner?.id ?? ''});
+        if (declaration && owner && owner.id !== symbolId)
+          relationship({sourceId: owner.id, targetId: symbolId, kind: 'contains', resolution: 'compiler_bound',
+            artifactId: current.artifact.id, startByte, endByte});
+        const dependency = !declaration && owner && graph.dependency(startByte, endByte);
+        if (dependency && owner.id !== symbolId) {
+          relationship({sourceId: owner.kind === 'CONST' || owner.kind === 'STATIC' ? initializer(owner) : owner.id,
+            targetId: symbolId, kind: dependency, resolution: 'compiler_bound', artifactId: current.artifact.id, startByte, endByte});
+          graphDependencies++;
         }
-        batch.occurrences.push({symbolId, artifactId: current.artifact.id, startByte, endByte, role: declaration ? 'declaration' : 'reference', enclosingSymbolId: ''});
         if (declaration) {
           const ranges = extents.get(rangeKey(definition.range));
           if (ranges?.length === 1) {
             const start = current.byte(ranges[0].start), end = current.byte(ranges[0].end);
             if (start <= startByte && end >= endByte)
-              batch.occurrences.push({symbolId,artifactId:current.artifact.id,startByte:start,endByte:end,role:'definition',enclosingSymbolId:''});
+              batch.occurrences.push({symbolId,artifactId:current.artifact.id,startByte:start,endByte:end,role:'definition',enclosingSymbolId:owner?.id ?? ''});
           }
         }
-        if (batch.occurrences.length >= 128) flush();
+        recordLimit();
       }
+      if (graph && initialized.capabilities.callHierarchyProvider) {
+        graphCalls += await outgoingCalls(analyzer, graph, {
+          position: byte => current.position(byte), relationship, initializer, recordLimit,
+          symbol: async item => {
+            if (![6, 12].includes(item.kind)) return undefined;
+            const selected = await definitionSymbol({uri: item.uri, range: item.selectionRange}, item.kind === 6 ? 'method' : 'function',
+              {name: item.name, uri: item.uri, position: item.selectionRange.start});
+            return selected && {id: selected.id, method: item.kind === 6};
+          }
+        });
+      } else graphUnavailable++;
       analyzer.notify('textDocument/didClose', {textDocument: {uri: current.uri}});
       flush();
     }
@@ -204,7 +261,10 @@ async function analyze(root, manifest, metadata, configuration) {
     }
     if (unresolved) diagnostics.push({code: 'rust_unresolved_navigation', severity: 'warning', path: projectPath,
       message: `${unresolved} semantic tokens had no unique supported definition; no exact reference was invented.`});
-    send('report', {compilationId, status: 'partial', diagnostics});
+    diagnostics.push({code: 'rust_graph_limits', severity: 'warning', path: projectPath,
+      message: `Analyzer-bound graph slice: ${graphCalls} direct/declared-target calls and ${graphDependencies} syntax-classified value/type/import dependencies. Closures/async blocks, implicit operations, trait/dynamic candidates and independently selected Cargo contexts remain partial; ${graphUnavailable} unavailable syntax/call-hierarchy operations.`});
+    send('report', {compilationId, status: 'partial', diagnostics,
+      capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
   } finally { await analyzer.close(); }
 }
 

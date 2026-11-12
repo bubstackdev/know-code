@@ -31,3 +31,33 @@ mod tests {
         assert_eq!(Greeter.greet("Know Code"), expected);
     }
 }
+
+const GRAPH_VALUE: i32 = 7;
+
+pub fn graph_leaf(value: i32) -> i32 {
+    value + GRAPH_VALUE
+}
+
+pub fn graph_entry() -> i32 {
+    graph_leaf(GRAPH_VALUE)
+}
+
+// Taking a function value is an impact dependency, not an invocation.
+pub fn graph_value_only() -> fn(i32) -> i32 {
+    graph_leaf
+}
+
+pub fn graph_nested() -> i32 {
+    fn graph_inner() -> i32 { graph_leaf(1) }
+    graph_inner()
+}
+
+// Deferred execution must not be attributed to this containing function.
+pub fn graph_deferred() {
+    let _closure = || graph_leaf(2);
+    let _future = async { graph_leaf(3) };
+}
+
+pub fn graph_type_reference(value: &Greeter) -> &Greeter {
+    value
+}

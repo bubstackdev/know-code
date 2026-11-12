@@ -57,6 +57,10 @@ workspace = ARTIFACTS / 'fixture'
 if workspace.exists():
     shutil.rmtree(workspace)
 shutil.copytree(ROOT / 'tests/fixtures/rust', workspace)
+# The compiler syntax extension uses byte columns and may normalize line ends;
+# retain the original CRLF bytes while LSP navigation stays UTF-16.
+helper_source = workspace / 'src/helper.rs'
+helper_source.write_bytes(('// 🦀 saved CRLF source\n' + helper_source.read_text()).replace('\n', '\r\n').encode())
 clean = run('clean', workspace)
 symbols, occurrences, sources = facts(clean)
 names = {s['name'] for s in symbols.values()}
@@ -79,6 +83,44 @@ assert all(len(s['signature']) < 4096 for s in symbols.values()), 'hover docs le
 assert any(s.get('external') and s['name'] == 'String' for s in symbols.values())
 assert len(sources) == 3, 'dependency source was indexed'
 assert not (workspace / 'know-code-build-ran').exists(), 'analysis executed the build script'
+
+# Actual outgoing-call evidence, syntax ownership and unique definitions must
+# agree. Navigation references alone are not calls, including a function value.
+relationships = [edge for frame in clean['messages'] if 'facts' in frame
+                 for edge in frame['facts'].get('relationships', [])]
+for edge in relationships:
+    assert edge['sourceId'] in symbols and edge['targetId'] in symbols, edge
+    assert edge['resolution'] == 'compiler_bound', edge
+    text = sources[edge['artifactId']]
+    assert 0 <= edge.get('startByte', 0) < edge['endByte'] <= len(text), edge
+    text[edge.get('startByte', 0):edge['endByte']].decode('utf8')
+
+def symbol_named(name):
+    matches = [sid for sid, symbol in symbols.items() if symbol['name'] == name]
+    assert len(matches) == 1, (name, matches)
+    return matches[0]
+
+def edges(source, target, kind):
+    return [edge for edge in relationships if edge['sourceId'] == symbol_named(source)
+            and edge['targetId'] == symbol_named(target) and edge['kind'] == kind]
+
+assert edges('graph_entry', 'graph_leaf', 'call'), 'direct call missing'
+assert edges('graph_leaf', 'GRAPH_VALUE', 'reference'), 'constant read missing'
+assert edges('graph_value_only', 'graph_leaf', 'reference'), 'function value dependency missing'
+assert not edges('graph_value_only', 'graph_leaf', 'call'), 'function value fabricated a call'
+assert edges('graph_inner', 'graph_leaf', 'call'), 'nested function lost its call'
+assert edges('graph_nested', 'graph_inner', 'call'), 'nested function invocation missing'
+assert not edges('graph_nested', 'graph_leaf', 'call'), 'inner call attributed to containing function'
+assert not edges('graph_deferred', 'graph_leaf', 'call'), 'closure/async call attributed to containing function'
+assert edges('graph_type_reference', 'Greeter', 'type_reference'), 'signature type dependency missing'
+assert any(o.get('enclosingSymbolId') == symbol_named('graph_entry')
+           and o['symbolId'] == symbol_named('graph_leaf') for o in occurrences), 'enclosing owner missing'
+for frame in clean['messages']:
+    if 'report' in frame:
+        assert frame['report']['capabilities']['calls'] == 'partial'
+        assert frame['report']['capabilities']['dependencies'] == 'partial'
+        assert frame['report']['capabilities']['dispatch'] == 'partial'
+
 
 # Same project scope, changed saved text: a replacement has new exact source
 # payload/ranges and no old symbol. Storage publication/parity is tested above
@@ -204,6 +246,8 @@ assert 'install rust-src separately' in missing_source['stderr'] and not source_
 assert not any('compilation' in f or f.get('complete', {}).get('success') for f in missing_source['messages'])
 
 summary = {'passed': True, 'checks': ['compiler-defined method/cross-file references', 'distinct same-named Unicode locals and exact byte ranges',
+           'outgoing direct calls with compiler locations', 'value/type dependency kinds and enclosing owners',
+           'function values and deferred/nested execution are not fabricated calls',
            'test symbols', 'external identity without dependency source publication', 'saved-source replacement scope',
            'unresolved call does not invent symbol', 'Cargo workspace member deduplication', 'out-of-root workspace rejection', 'build script execution disabled', 'missing analyzer prerequisite', 'uninstalled pin without install/network', 'missing rust-src before analyzer launch'],
            'clean_symbols': len(symbols), 'clean_occurrences': len(occurrences),
