@@ -3,6 +3,7 @@
 Run only after a matching build. All scopes, coordinator state and evidence are
 owned by this durable run; default account admission and live runtime are unused.
 """
+from cli_assertions import check_exit
 from pathlib import Path
 from fixture_trust import grant_fixture
 import atexit,ctypes,hashlib,json,os,selectors,subprocess,time,traceback
@@ -35,7 +36,7 @@ def run(args,*,input=None,env=None,check=True,timeout=60):
  log({'args':args,'input':input,'data_directory':selected['KNOW_CODE_DATA_DIR'],
       'query_scope':selected['KNOW_CODE_QUERY_SCOPE'],'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,
       'elapsed_ms':(time.monotonic()-started)*1000})
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,args,check)
  return p
 
 def cli(*args,**kwargs):return run([HOST,*args],**kwargs)

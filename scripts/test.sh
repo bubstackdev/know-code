@@ -5,14 +5,26 @@ export PATH="$HOME/.cargo/bin:$HOME/.dotnet:$HOME/.local/bin:$PATH"
 export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 export KNOW_CODE_BUILD_PROFILE="${1:-debug}"
 case "$KNOW_CODE_BUILD_PROFILE" in
-  debug) task_cargo_profile=test ;;
-  release) task_cargo_profile=release ;;
+  debug)
+    task_cargo_profile=test
+    task_managed_profile=Debug
+    ;;
+  release)
+    task_cargo_profile=release
+    task_managed_profile=Release
+    ;;
   *) echo "Usage: bash scripts/test.sh [debug|release]" >&2; exit 2 ;;
 esac
 python3 tests/build_record.py
 cargo test --workspace --locked --profile "$task_cargo_profile"
+python3 tests/cli.py
 node tests/protocol.mjs
 node tests/jsonrpc.mjs
+node tests/provider_source.mjs
+node tests/rust_navigation.mjs
+clang -Wall -Werror -fsyntax-only -x c tests/native_header.c
+clang++ -Wall -Werror -fsyntax-only -x c++ tests/native_header.c
+dotnet "bindings/dotnet/Smoke/bin/$task_managed_profile/net10.0/Smoke.dll" --path-validation
 node tests/typescript.mjs
 node tests/typescript_test_classification.mjs
 node tests/node_preparation.mjs

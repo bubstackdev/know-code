@@ -1,4 +1,5 @@
 """Complete response caps agree across CLI and both real in-process SDKs."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import atexit,ctypes,json,os,subprocess,time
@@ -11,7 +12,7 @@ ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 (WORKSPACE/'values.ts').write_text(''.join(f'export function budgetFunction{i:04d}{"Name"*20}() {{ return {i}; }}\n' for i in range(1000)))
 def command(argv):
  p=subprocess.run(list(map(str,argv)),cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=120)
- assert p.returncode==0,(argv,p.stdout,p.stderr)
+ check_exit(p,argv)
  return p.stdout
 atexit.register(lambda:subprocess.run([str(HOST),'coordinator','stop'],env=ENV,capture_output=True,timeout=20))
 grant_fixture(HOST,WORKSPACE,ENV,RUN,RUN/'fixture-trust.jsonl')

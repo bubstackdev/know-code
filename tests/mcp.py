@@ -1,4 +1,5 @@
 """Real stdio sessions, shared native operators and persistent saved-file indexing."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,selectors,signal,struct,subprocess,time
@@ -17,7 +18,7 @@ checks=[];clients=[];paused=None
 
 def cli(*args,check=True):
  p=subprocess.run([str(HOST),*map(str,args)],cwd=ROOT,env=ENV,capture_output=True,text=True,timeout=120)
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,[HOST,*args],check)
  return p
 
 def status():return json.loads(cli('coordinator','status').stdout)['workspaces'][0]
@@ -139,6 +140,18 @@ try:
  tool,value=c.tool('workspace_status');assert not tool['isError'] and value['result']['workspaces'][0]['workspace_root']==str(WORKSPACE)
  tool,value=c.tool('search_symbols',{'name':'target'});assert not tool['isError'] and value==equivalent({'op':'symbols','name':'target'})
  target=value['result']['symbols'][0];location=target['locations'][0];snapshot=value['result']['snapshot'];assert snapshot
+ for name,args,unexpected in [
+  ('find_references',{'symbol_id':target['id'],'include_source':True},'include_source'),
+  ('search_symbols',{'name':'target','exact_only':True},'exact_only'),
+  ('coverage_details',{'snapshot':snapshot,'tests':'only'},'tests'),
+  ('read_source',{'artifact_id':location['artifact_id'],'symbol_id':target['id']},'symbol_id'),
+  ('workspace_status',{'limit':1},'limit'),
+  ('callers',{'symbol_id':target['id'],'artifact_id':location['artifact_id']},'artifact_id')]:
+  tool,rejected=c.tool(name,args)
+  assert tool['isError'] and rejected['error']['code']=='invalid_request',rejected
+  assert name in rejected['error']['message'] and unexpected in rejected['error']['message'],rejected
+ assert not c.tool('workspace_status')[0]['isError']
+ checks.append('per_tool_additional_properties_rejected_without_ignoring_known_foreign_options')
  guard={'generation':generation,'snapshot':snapshot}
  tool,detail=c.tool('coverage_details',guard)
  assert not tool['isError'] and detail==equivalent({'op':'coverage',**guard})

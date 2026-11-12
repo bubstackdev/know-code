@@ -98,9 +98,9 @@ impl ServerHandler for Mcp {
     ) -> Result<CallToolResponse, ErrorData> {
         let start = know_code_core::execution::QueryStart::default();
         let name = request.name.as_ref();
-        if self.get_tool(name).is_none() {
+        let Some(tool) = self.get_tool(name) else {
             return Err(ErrorData::invalid_params("unknown Know Code tool", None));
-        }
+        };
         if context.ct.is_cancelled() {
             return Ok(failure("cancelled", "request cancelled"));
         }
@@ -115,6 +115,9 @@ impl ServerHandler for Mcp {
             ));
         };
         let mut arguments = request.arguments.unwrap_or_default();
+        if let Some(message) = unexpected_argument(&tool, &arguments) {
+            return Ok(failure("invalid_request", message));
+        }
         let status = name == "workspace_status";
         if status {
             if !arguments.is_empty() {
@@ -151,24 +154,49 @@ impl ServerHandler for Mcp {
         }
         // One account-wide charge begins before serialization/dispatch and is
         // shared with the blocking task and the eventual transport response.
-        let reservation = if status {
-            None
+        let (permit, reservation) = if status {
+            (permit, None)
         } else {
-            match admission::AdmissionScope::local().and_then(|scope| scope.try_reserve()) {
-                Ok(reservation) => {
-                    let reservation = Arc::new(reservation);
-                    let Some(key) = context.extensions.get::<bounded::ResponseKey>() else {
-                        return Err(ErrorData::internal_error(
-                            "MCP request ownership is missing",
-                            None,
-                        ));
-                    };
-                    self.connection
-                        .retain_response(key, reservation.clone())
-                        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-                    Some(reservation)
+            let Some(key) = context.extensions.get::<bounded::ResponseKey>().cloned() else {
+                return Err(ErrorData::internal_error(
+                    "MCP request ownership is missing",
+                    None,
+                ));
+            };
+            let connection = self.connection.clone();
+            let admission_cancellation = cancellation.clone();
+            // Account-policy filesystem work must not block the stdio runtime.
+            // Its bounded local permit stays with the actual admission task,
+            // including after the caller cancels. Reserve globally before
+            // serializing or queuing graph work, and retain through delivery.
+            let admission = tokio::task::spawn_blocking(move || {
+                let owned_permit = permit;
+                if admission_cancellation.is_cancelled() {
+                    return Err(failure("cancelled", "request cancelled"));
                 }
-                Err(error) => return Ok(failure(error.code(), error.to_string())),
+                let reservation = match admission::AdmissionScope::local()
+                    .and_then(|scope| scope.try_reserve())
+                {
+                    Ok(reservation) => Arc::new(reservation),
+                    Err(error) => return Err(failure(error.code(), &error)),
+                };
+                if admission_cancellation.is_cancelled() {
+                    return Err(failure("cancelled", "request cancelled"));
+                }
+                if let Err(error) = connection.retain_response(&key, reservation.clone()) {
+                    return Err(failure("internal_error", error));
+                }
+                Ok((owned_permit, Some(reservation)))
+            });
+            tokio::select! {
+                _=context.ct.cancelled()=>{
+                    cancellation.cancel();
+                    return Ok(failure("cancelled", "request cancelled"));
+                },
+                value=admission=>match value.map_err(|error| ErrorData::internal_error(error.to_string(), None))? {
+                    Ok(owned) => owned,
+                    Err(response) => return Ok(response),
+                },
             }
         };
         let encoded = Value::Object(arguments).to_string();
@@ -223,6 +251,24 @@ impl ServerHandler for Mcp {
     }
 }
 
+fn unexpected_argument(tool: &Tool, arguments: &Map<String, Value>) -> Option<String> {
+    let properties = tool.input_schema.get("properties")?.as_object()?;
+    arguments
+        .keys()
+        .find(|key| !properties.contains_key(*key))
+        .map(|key| {
+            let mut characters = key.chars();
+            let mut shown: String = characters.by_ref().take(64).collect();
+            if characters.next().is_some() {
+                shown.push_str("...");
+            }
+            format!(
+                "{} does not accept argument {shown:?}; inspect its input schema",
+                tool.name
+            )
+        })
+}
+
 fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
     let common = json!({
         "tests":{"type":"string","enum":["all","exclude","only"],"default":"all","description":"Filter findings by declaration/use evidence. Unknown is retained by exclude; traversal remains unfiltered."},
@@ -239,17 +285,17 @@ fn schema(keys: &[&str], required: &[&str]) -> Map<String, Value> {
         "detail_max_bytes":{"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES},
         "content_hash":{"type":"string","description":"Indexed location's content hash; required for byte ranges."},
         "start_byte":{"type":"integer","minimum":0},"end_byte":{"type":"integer","minimum":0},
-        "target":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":1000,"default":100},
+        "target":{"type":"string","description":"Restrict returned findings/root target selection; compiler-selected dependency contexts remain distinct."},"limit":{"type":"integer","minimum":1,"maximum":1000,"default":100,"description":"Total logical finding cap across all pages; hitting it is explicit truncation."},
         "page_size":{"type":"integer","minimum":1,"maximum":1000,"description":"Opt into repeatable generation-pinned pages; limit remains the total result cap."},
         "cursor":{"type":"string","description":"Opaque page token returned by a prior query. Expiry, coordinator restart or retention eviction requires restarting the original query."},
         "freshness_wait_ms":{"type":"integer","minimum":0,"maximum":120000,"default":500},
         "deadline_ms":{"type":"integer","minimum":0,"maximum":execution::MAX_DEADLINE_MS,"default":execution::DEFAULT_DEADLINE_MS,"description":"Overall query budget, including freshness, execution and core response encoding; expiry returns deadline_exceeded."},
         "response_max_bytes":{"type":"integer","minimum":execution::MIN_RESPONSE_BYTES,"maximum":execution::MAX_RESPONSE_BYTES,"default":execution::DEFAULT_RESPONSE_BYTES,"description":"Complete core JSON response budget, including metadata/source; excludes outer MCP framing. Exceeding it returns response_limit_exceeded."},
-        "include_implicit":{"type":"boolean","default":true},"exact_only":{"type":"boolean","default":false},
+        "include_implicit":{"type":"boolean","default":true,"description":"Include labeled compiler-implied calls such as property accessors, operators and conversions."},"exact_only":{"type":"boolean","default":false,"description":"Exclude possible runtime dispatch targets; compiler binding still does not prove execution."},
         "kinds":{"type":"array","items":{"type":"string","enum":["call","reference","type_reference","inherits","imports","implements","overrides","contains","initializes"]}},
         "max_depth":{"type":"integer","minimum":1},"max_edges":{"type":"integer","minimum":1},
         "max_nodes":{"type":"integer","minimum":1},"paths_per_symbol":{"type":"integer","minimum":1},
-        "max_bytes":{"type":"integer","minimum":1},"time_budget_ms":{"type":"integer","minimum":1},
+        "max_bytes":{"type":"integer","minimum":1,"description":"Graph JSON materialization budget across the entire query/cursor; separate from source_max_bytes and the complete response_max_bytes page budget."},"time_budget_ms":{"type":"integer","minimum":1,"description":"Bound graph search work with explicitly partial results; separate from the overall request deadline_ms."},
         "op":{"type":"string","enum":["callers","callees","impact"]}
     });
     let properties: Map<_, _> = keys
@@ -313,13 +359,16 @@ fn tools() -> Vec<Tool> {
         ],
         &["artifact_id"],
     );
-    source["properties"]["max_bytes"] = json!({"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES});
+    source["properties"]["max_bytes"] = json!({"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES,"description":"Indexed UTF-8 source bytes returned by this read; separate from the complete response_max_bytes envelope."});
     let mut context = references.clone();
     context.extend(["include_source", "max_bytes", "cursor"]);
     let mut context_schema = schema(&context, &["symbol_id"]);
     context_schema["properties"]["max_bytes"] = source["properties"]["max_bytes"].clone();
+    context_schema["properties"]["max_bytes"]["description"] = json!(
+        "Aggregate indexed UTF-8 source bytes across returned declarations and targets; separate from response_max_bytes."
+    );
     context_schema["properties"]["include_source"] = json!({"type":"boolean","default":true,"description":"Include bounded indexed source for compiler declaration contexts."});
-    let coverage_schema = schema(
+    let mut coverage_schema = schema(
         &[
             "generation",
             "snapshot",
@@ -333,6 +382,7 @@ fn tools() -> Vec<Tool> {
         ],
         &["snapshot"],
     );
+    coverage_schema["properties"]["max_bytes"] = json!({"type":"integer","minimum":1,"maximum":query::MAX_SOURCE_BYTES,"default":query::DEFAULT_SOURCE_BYTES,"description":"Expandable compiler options/diagnostics bytes; required provenance and counts remain visible when detail is clipped. Separate from response_max_bytes."});
     let mut result = vec![
         make(
             "symbol_context",

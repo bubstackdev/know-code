@@ -3,6 +3,7 @@
 Run after a matching build; this harness never builds, mutates live state or uses
 external corpora. Every subprocess response is retained in the isolated run.
 """
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,subprocess,time
@@ -37,7 +38,7 @@ def run(args,*,input=None,check=True):
  with EVENTS.open('a') as log:
   log.write(json.dumps({'args':list(map(str,args)),'input':input,
                        'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr})+'\n')
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,args,check)
  return p
 
 def cli(*args,**kwargs):return run([HOST,*args],**kwargs)

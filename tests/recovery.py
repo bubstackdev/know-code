@@ -4,6 +4,7 @@ This finite lane fixture checks real publication/rebuild/restart/retry behavior.
 It reads private SQLite facts only to verify saved-source bytes, not to implement
 another user query path. Every service/data/process is isolated from live state.
 """
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,sqlite3,subprocess,time
@@ -20,7 +21,7 @@ checks=[];passed=False;events=RUN/'commands.jsonl';databases={}
 def cli(*args,check=True):
  p=subprocess.run([str(HOST),*map(str,args)],cwd=ROOT,env=ENV,capture_output=True,text=True,timeout=120)
  with events.open('a') as log:log.write(json.dumps({'args':list(map(str,args)),'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr})+'\n')
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,[HOST,*args],check)
  return p
 
 def value(*args):return json.loads(cli(*args).stdout)

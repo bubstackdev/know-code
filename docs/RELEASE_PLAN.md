@@ -1,5 +1,15 @@
 # Release readiness: 0.0.1 and 0.0.2
 
+## Current release and stabilization direction — 2026-11-12
+
+[v0.0.1 is published](https://github.com/bubstackdev/know-code/releases/tag/v0.0.1) at `e20da5db9f359311b0bc6b2be30ff9db94ac99c3`. Matching full Debug and Release suites passed, along with installed native/CLI/MCP, compatibility, license/zero-telemetry, signing/notarization/stapling and macOS 15.7.7 ARM64 VM checks. All 12 public assets were downloaded anonymously and matched the verified candidate hashes. The 10 superseded releases and 11 old tags were removed; 24 older branches and the original repository protections were retained. Local operation evidence: `.artifacts/pretag-wave/publication/publish-01/final-result.json`.
+
+The user explicitly deferred the real video-encoding responsiveness/progress/interference benchmark and requested publication. It was not measured or certified; retain it as a stabilization follow-up when the workload is available.
+
+The user selected **0.0.2 as a stabilization-only “Snow Leopard” release**: correctness, performance, reliability and simplification. Previously assigned new features (including cross-repository queries, company onboarding, Angular template references and refactoring continuity) move to later releases with timing undecided. Experimental Swift/Rust work remains experimental. [The 0.0.2 review ledger](CODEBASE_REVIEW_0_0_2.md) records current findings, fixes, decisions and focused validation.
+
+The sections below retain earlier source-bound planning/checkpoints. Their pending-work and version statements are historical and do not override this release status, current constants, or the user's stabilization-only decision.
+
 ## Accepted feature freeze — 2026-11-11
 
 The user accepted freezing v0.0.1 feature scope after the current WAL-pressure slice, then working directly through release gates. Fix defects exposed by those gates; put new capabilities on the backlog. This does not waive existing accepted requirements or authorize publication/signing credentials access.

@@ -1,4 +1,5 @@
 """Assembled finding filters, target grouping, snapshots, cursors and recovery."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import hashlib,json,os,sqlite3,subprocess,time
@@ -26,7 +27,7 @@ CHECKS=[];DATABASE=None;passed=False
 def run(args,check=True):
  p=subprocess.run(list(map(str,args)),cwd=ROOT,env=ENV,capture_output=True,text=True,timeout=120)
  with (RUN/'commands.jsonl').open('a') as f:f.write(json.dumps({'args':list(map(str,args)),'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr})+'\n')
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,args,check)
  return p
 
 def cli(*args,check=True):return run([HOST,*args],check)

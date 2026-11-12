@@ -1,4 +1,5 @@
 """Shared CPU/memory ceilings and explicit indexing cancellation through real clients."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 from pathlib import Path
 import atexit,json,os,shutil,sqlite3,subprocess,time
@@ -43,7 +44,7 @@ for workspace in [A,B]:
 
 def cli(*args,check=True,timeout=60):
  p=subprocess.run([str(HOST),*map(str,args)],cwd=ROOT,env=ENV,text=True,capture_output=True,timeout=timeout)
- assert not check or p.returncode==0,(args,p.stdout,p.stderr)
+ check_exit(p,[HOST,*args],check)
  return p
 def cleanup():
  # Shutdown deliberately drains active work. Cancel our held fixture jobs first

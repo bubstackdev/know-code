@@ -1,4 +1,5 @@
 """Real Roslyn/MSBuild target negotiation without building dependency assemblies."""
+from cli_assertions import check_exit
 from fixture_trust import grant_fixture
 import atexit
 import json
@@ -20,7 +21,7 @@ ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 
 def run(args, check=True):
     p = subprocess.run([str(a) for a in args], cwd=ROOT, env=ENV, text=True, capture_output=True, timeout=120)
-    assert not check or p.returncode == 0, (args, p.stdout, p.stderr)
+    check_exit(p,args,check)
     return p
 
 

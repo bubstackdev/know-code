@@ -4,6 +4,7 @@ Run after one matching build. The sole downloaded compiler is an exact real
 unsupported TS version in this owned fixture. No SDK installation or builds run
 here; the coordinator performs its normal trusted compiler analysis.
 """
+from cli_assertions import check_exit
 from pathlib import Path
 from fixture_trust import grant_fixture
 import atexit,hashlib,json,os,shutil,subprocess,time,traceback
@@ -85,7 +86,7 @@ def run(argv,*,input=None,check=True,timeout=120,cwd=ROOT):
   with (RUN/'commands.jsonl').open('a') as out:out.write(json.dumps({'phase':PHASE,'argv':argv,'timeout':timeout,'stdout':str(error.stdout),'stderr':str(error.stderr)})+'\n')
   raise
  with (RUN/'commands.jsonl').open('a') as out:out.write(json.dumps({'phase':PHASE,'argv':argv,'cwd':str(cwd),'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr,'elapsed_ms':(time.monotonic()-started)*1000})+'\n')
- assert not check or p.returncode==0,(argv,p.stdout,p.stderr)
+ check_exit(p,argv,check)
  return p
 
 def cli(*args,**kwargs):return run([HOST,*args],**kwargs)
