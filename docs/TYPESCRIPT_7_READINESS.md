@@ -1,10 +1,10 @@
 # TypeScript 7 readiness — scope correction
 
-Checked 2026-11-12. The user identified omitted TypeScript 7 support and confirmed it as a required 0.0.3 release gate ahead of optional estate work. This records accepted release priority and initial findings, not implemented support or a proven native integration path.
+Checked 2026-11-12. The user identified omitted TypeScript 7 support and confirmed it as a required 0.0.3 release gate ahead of optional estate work. This records accepted release priority, dated findings and the implementation checkpoints below; it is not release certification.
 
 ## Shipped boundary
 
-Know Code 0.0.2 supports TypeScript **5.9.x**. The provider pins 5.9.3 for its own compiler fallback; configured repositories select their installed compiler. [worker.mjs](../providers/typescript/worker.mjs#L29) explicitly rejects other version families. TypeScript 6 and 7 are therefore not supported. Rejecting unsupported compilers is honest behavior; it does not make the compatibility gap acceptable indefinitely.
+Know Code 0.0.2 supports TypeScript **5.9.x**. The provider pins 5.9.3 for its own compiler fallback; configured repositories select their installed compiler. The shipped worker explicitly rejected other version families. TypeScript 6 and 7 are therefore not supported by 0.0.2. Rejecting unsupported compilers is honest behavior; it does not make the compatibility gap acceptable indefinitely.
 
 [analysis.mjs](../providers/typescript/analysis.mjs#L20) depends on the existing JavaScript compiler API, including configuration parsing, compiler-host/program creation and type-checker access. Graph extraction depends on those compiler objects. Relaxing the version check or changing the package pin is not evidence that TS7 semantics work.
 
@@ -28,7 +28,7 @@ The current provider has seven adaptation surfaces: compiler selection, configur
 - Prefer probing the exact 7.0.2 native compiler API first. Its snapshots, project ASTs and checker operations offer a plausible route for local semantic extraction, but batched IPC costs, lifetime cleanup and graph proof still need runtime measurement. [Pinned API](https://github.com/microsoft/typescript-go/blob/2bd066d87f5bafd315be9f40889d0a60b9e58e0b/_packages/native-preview/src/api/async/api.ts).
 - The inspected 7.1 beta transport defaults batch response pages to 300,000,000 bytes and permits an individual response to exceed a page limit; it also exposes external content-mapper and optional timing-collection settings. Do not inherit those settings blindly or treat the outer worker frame limit as a bound on inner compiler-client allocations. Preserve bounded extraction, existing trust rules and published-build zero-telemetry requirements. [Exact beta options source](https://raw.githubusercontent.com/microsoft/TypeScript/3e9236361fa97a9e6c685f4833ac457ae2d8c50a/packages/typescript/src/api/options.ts). Beta details must not be assumed to describe the 7.0.2 client without inspection.
 
-TS6 is a separate, likely smaller compatibility task: Microsoft states API compatibility with 5.9, while documenting changed compiler defaults and resolution behavior. Verify those actual selected-compiler semantics instead of imposing 5.9 defaults or rewriting repository configurations. [Official TS6 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-6-0/). The user subsequently accepted the 0.0.3 matrix of **5.9.x, 6.0.x and explicitly tested TS7 releases**; actual TS6 runtime compatibility is still unproven.
+TS6 is a separate, likely smaller compatibility task: Microsoft states API compatibility with 5.9, while documenting changed compiler defaults and resolution behavior. Verify those actual selected-compiler semantics instead of imposing 5.9 defaults or rewriting repository configurations. [Official TS6 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-6-0/). The user subsequently accepted the 0.0.3 matrix of **5.9.x, 6.0.x and explicitly tested TS7 releases**; that initial audit had not yet proven actual TS6 runtime compatibility.
 
 ## Proposed first work
 
@@ -56,3 +56,14 @@ Exact official TS6.0.2, TS7.0.2 JavaScript API and its matching Darwin ARM64 com
 The native probe did **not** emit Know Code facts, establish generic/multi-root identity parity, prove independently indexed project-body composition, benchmark indexing or certify product resource enforcement. Its outer deadline/log bounds and tiny fixture do not impose a hard limit on the native client's internal transport. `getResolvedProjectReferences` and source-redirect witness accessors were unavailable; independently indexed dependency linkage remains explicitly unproven. Representing compiler-consumed dependency bodies inside the caller's own context is a separate design candidate, not an adopted replacement for existing project-link guarantees.
 
 No production provider code changed during these probes. Shipped support remains 5.9.x until implementation and matching acceptance are completed.
+
+
+## Worker implementation checkpoint — 2026-11-12
+
+Integration source now selects repository TypeScript 5.9.x and 6.0.x through the legacy compiler API and exact native 7.0.2 through its unstable synchronous API. No other 7.x version is promised. Selected package `exports` are resolved within the actual package boundary; an unavailable/broken/unsupported selected compiler does not fall back to an ambient installation. Native extraction uses the same fact/relationship protocol and shared Rust storage/query path.
+
+The native worker checks configured/inferred saved sources, aliases/calls/value/type dependencies, Unicode local identities and UTF-8 ranges, generic declaration roots, distinct constructor parameter/property identities, saved compiler-error partial facts and changed fingerprints. Declaration handles resolve in the actual caller Program. Compiler-consumed dependency source remains in that caller's context; disabled redirects preserve the missing-source boundary. Independent project definition pointers, generic dispatch and full graph parity remain unavailable/partial. Synthetic views without a unique compiler-proven semantic root are omitted with diagnostics rather than guessed.
+
+Focused worker result: `.artifacts/implementation-0.0.3/wave-01/native-typescript-worker-03/` at `786b6e4`. Existing semantic identity/alias/generic/dispatch-key regressions passed against exact 5.9.3 and 6.0.2 on that same source: `typescript-59-semantic-02` and `typescript-60-semantic-02`. The selected-package resolver's eight pure boundary cases passed separately. Earlier failed native setup/canonicalization investigations remain retained.
+
+These are compiler-worker checks, not stored/native/installed acceptance or indexing performance certification. The native API's inner transport does not expose a hard per-response allocation cap in this exact version. Coordinator process-group resource enforcement, actual memory/cancellation behavior, full input ownership and installed workflow gates still need evidence. The assembled CLI/.NET/Node graph fixture has been extended for exact 7.0.2 and awaits a matching build/run.
