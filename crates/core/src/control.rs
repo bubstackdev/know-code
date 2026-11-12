@@ -363,14 +363,17 @@ pub fn request_installer(
     root: &Path,
     mut request: ControlRequest,
     lifecycle_version: u32,
+    settings_version: u32,
 ) -> Result<ControlResponse> {
     if !matches!(
         lifecycle_version,
         1 | 2 | 3 | protocol::INDEX_LIFECYCLE_VERSION
-    ) || !matches!(
-        request.operation.as_str(),
-        "status" | "maintenance" | "resume" | "shutdown"
-    ) {
+    ) || !matches!(settings_version, 1 | crate::settings::VERSION)
+        || !matches!(
+            request.operation.as_str(),
+            "status" | "maintenance" | "resume" | "shutdown"
+        )
+    {
         return Err(Error::UpdateRequired(
             "installer control supports only known lifecycle status/quiescence operations".into(),
         ));
@@ -384,7 +387,7 @@ pub fn request_installer(
     let response = exchange_raw(&mut socket, request)?;
     if response.index_lifecycle_version != lifecycle_version
         || response.resource_control_version != crate::resource::CONTROL_VERSION
-        || response.analysis_settings_version != crate::settings::VERSION
+        || response.analysis_settings_version != settings_version
     {
         return Err(Error::UpdateRequired("installed coordinator does not match its declared lifecycle/resource/settings contract".into()));
     }
@@ -460,6 +463,11 @@ pub(crate) fn exchange_raw(
 pub(crate) fn checked_response(response: ControlResponse) -> Result<ControlResponse> {
     if response.index_lifecycle_version != protocol::INDEX_LIFECYCLE_VERSION {
         return Err(Error::UpdateRequired("update the running coordinator and native libraries together; index lifecycle safety is unavailable or incompatible".into()));
+    }
+    if response.analysis_settings_version != crate::settings::VERSION
+        || response.resource_control_version != crate::resource::CONTROL_VERSION
+    {
+        return Err(Error::UpdateRequired("update the running coordinator and native libraries together; workspace settings/resource control is incompatible".into()));
     }
     checked_error(response)
 }
@@ -1579,7 +1587,7 @@ mod installer_bridge_tests {
     use super::*;
     #[test]
     fn prior_peer_bridge_preserves_strict_consumers_and_rejects_other_operations() {
-        for peer_version in [1, 2] {
+        for (peer_version, settings_version) in [(1, 2), (2, 2), (4, 1)] {
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../..")
                 .canonicalize()
@@ -1609,7 +1617,7 @@ mod installer_bridge_tests {
                         payload: Some(envelope::Payload::ControlResponse(ControlResponse {
                             index_lifecycle_version: peer_version,
                             resource_control_version: crate::resource::CONTROL_VERSION,
-                            analysis_settings_version: crate::settings::VERSION,
+                            analysis_settings_version: settings_version,
                             ..Default::default()
                         })),
                         ..Default::default()
@@ -1624,6 +1632,7 @@ mod installer_bridge_tests {
                     ..Default::default()
                 },
                 peer_version,
+                settings_version,
             )
             .unwrap();
             server.join().unwrap();
@@ -1631,6 +1640,20 @@ mod installer_bridge_tests {
                 checked_response(response),
                 Err(Error::UpdateRequired(_))
             ));
+            for unknown in [0, 3, u32::MAX] {
+                assert!(matches!(
+                    request_installer(
+                        &root,
+                        ControlRequest {
+                            operation: "status".into(),
+                            ..Default::default()
+                        },
+                        peer_version,
+                        unknown
+                    ),
+                    Err(Error::UpdateRequired(_))
+                ));
+            }
             for (operation, version) in [
                 ("refresh", 1),
                 ("index-corrupt", 1),
@@ -1644,7 +1667,8 @@ mod installer_bridge_tests {
                             operation: operation.into(),
                             ..Default::default()
                         },
-                        version
+                        version,
+                        settings_version
                     ),
                     Err(Error::UpdateRequired(_))
                 ));

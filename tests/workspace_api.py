@@ -112,11 +112,15 @@ assert node.send('settings')['requested_settings']['configuration_origin']=='rep
 # Personal settings use one resolver in both hosts; null persists a real reset,
 # while omission in a replacement inherits the checked-in choice.
 settings_file=WORKSPACE/'.know-code.json'
-settings_file.write_text(json.dumps({'csharp':{'configuration':'Release'}}))
+settings_file.write_text(json.dumps({'csharp':{'configuration':'Release'}, 'rust':{'targets':['aarch64-apple-darwin'],'features':['extra'],'default_features':False}}))
 current=ready(node,current['generation']+1)
 assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
-requested=dotnet.send('configure',settings={'csharp':{'configuration':None},'allow_install_scripts':True})
+requested=dotnet.send('configure',settings={'csharp':{'configuration':None},'rust':{'targets':None,'features':[],'default_features':None},'swift':{'scheme':None},'allow_install_scripts':True})
 assert requested['requested_settings']['configuration_origin']=='personal'
+assert requested['requested_settings']['rust']['targets']==[]
+assert requested['requested_settings']['rust']['features']==[]
+assert requested['requested_settings']['rust']['default_features'] is None
+assert requested['requested_settings']['swift']['scheme_path'] is None
 current=ready(node,current['generation']+1)
 assert node.send('settings')['requested_settings']['node']['allow_install_scripts']
 assert node.send('settings')['requested_settings']['csharp']['configuration'] is None
@@ -126,6 +130,10 @@ assert reset['requested_settings']['configuration_origin']=='project_file'
 current=ready(dotnet,current['generation']+1)
 assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
 assert not dotnet.send('settings')['requested_settings']['node']['allow_install_scripts']
+for client in (node,dotnet):
+ rust=client.send('settings')['requested_settings']['rust']
+ assert rust['targets']==['aarch64-apple-darwin'] and rust['features']==['extra'] and rust['default_features'] is False,rust
+ assert rust['execution_allowed'] is True and Path(rust['cache_directory']).is_absolute(),rust
 personal_file=Path(reset['requested_settings']['personal_file'])
 assert json.loads(personal_file.read_text())['allow_install_scripts'] is False
 error(node.send('configure',settings={'csharp':{'configuration':' '}}),'invalid_request')
