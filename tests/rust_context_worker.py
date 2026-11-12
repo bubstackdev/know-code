@@ -59,6 +59,7 @@ def validate(payload):
             declarations.setdefault(item['compilationId'], []).extend(occurrence for occurrence in item['occurrences'] if occurrence['role'] == 'declaration')
     for identity, compilation in compilations.items():
         options = json.loads(compilation['optionsJson'])
+        assert options['rustContextPolicy'] == 1
         context = options['context']
         assert len(compilation['inputFingerprint']) == 64
         assert options['sourceOwnership'].startswith('Selected compiler unit')

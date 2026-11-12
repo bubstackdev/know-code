@@ -121,10 +121,10 @@ function contextIdentity(manifest, root, plan) {
   return `rust:${relative(root, manifest)}:unit:${createHash('sha256').update(key).digest('hex')}`;
 }
 
-function unavailableContext(root, manifest, configuration, target, diagnostics) {
+function unavailableContext(root, manifest, configuration, target, diagnostics, context = 'unavailable') {
   const projectPath = relative(root, manifest), id = `rust:${projectPath}:unavailable:${encodeURIComponent(target ?? 'repository-default')}`;
   send('compilation', {id, language: 'rust', projectPath, target: target ?? 'repository-default', configuration,
-    inferred: false, optionsJson: JSON.stringify({provider: 'cargo-rust-analyzer', context: 'unavailable'}), inputPaths: [manifest], dependencies: []});
+    inferred: false, optionsJson: JSON.stringify({provider: 'cargo-rust-analyzer', rustContextPolicy: 1, context}), inputPaths: [manifest], dependencies: []});
   send('report', {compilationId: id, status: 'partial', diagnostics,
     capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
 }
@@ -170,7 +170,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     cargo: {...cargo, features: policy?.features ?? 'default', buildJobs: 1}, procMacros: trustedPreparation,
     requestedPolicy: policy ? {targets: policy.targets, defaultFeatures: policy.defaultFeatures, executionAllowed: policy.executionAllowed} : null,
     sourceOwnership: selected ? 'Selected compiler unit dep-info membership; dependency crates are lookup-only' : 'Cargo target roots and unique analyzer-selected module files',
-    ...(selected ? {context: {cargoPackageId: selected.unit.cargo.package_id, target: selected.unit.cargo.target,
+    ...(selected ? {rustContextPolicy: 1, context: {cargoPackageId: selected.unit.cargo.package_id, target: selected.unit.cargo.target,
       profile: selected.unit.cargo.profile, features: selected.unit.cargo.features, cfg: selected.unit.cfg.effective,
       compilerSha256: selected.unit.cfg.compilerSha256, captureAttempts: collection.captureAttempts}, generatedInputs,
       analyzerReplay: {cfg: selected.graph.analyzerCfg, cargoCfgs: selected.graph.cargoCfgs, buildScripts: false}} : {}),
@@ -188,7 +188,6 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     message: `Experimental compiler-backed Rust navigation: build scripts/procedural macros are ${trustedPreparation ? 'personally authorized for compiler preparation' : 'disabled'}; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not fully covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Watch-only inputs include evaluated dependency manifests and a bounded Rust-source superset below local dependency package roots, without following symlink directories. Arbitrary build-script rerun files, generated inputs and environment changes are not exhaustively tracked. Only unique analyzer-resolved references are published. This is a partial graph.`}];
   if (selected) {
     diagnostics[0].message = 'Captured compiler unit and saved dep-info inputs select this analyzer graph. Only this unit owns source facts; dependency crates remain lookup-only and cross-unit body links are not yet published. Implicit calls, deferred bodies, trait/dynamic candidates, expansion locations and arbitrary build-script rerun/environment inputs remain partial.';
-    diagnostics.push(...collection.diagnostics);
   }
   if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
@@ -470,9 +469,11 @@ try {
           [{code: 'rust_context_unavailable', severity: 'error', path: relative(root, manifest), message: error.message}]);
         continue;
       }
-      if (!collection.plans.length || collection.failed.length || collection.diagnostics.some(item => item.code === 'rust_context_unavailable'))
+      if (!collection.plans.length || collection.failed.length || collection.diagnostics.length || !collection.cargoSucceeded)
         unavailableContext(root, manifest, request.configuration || 'Debug', target, collection.diagnostics.length ? collection.diagnostics :
-          [{code: 'rust_context_unavailable', severity: 'error', path: relative(root, manifest), message: 'No proven first-party compiler context is available.'}]);
+          [{code: 'rust_context_unavailable', severity: 'error', path: relative(root, manifest), message: 'No proven first-party compiler context is available.'}],
+          collection.plans.length && collection.cargoSucceeded && !collection.failed.length && !collection.diagnostics.some(item => item.code === 'rust_context_unavailable') ?
+            'workspace-summary' : 'unavailable');
       for (const selected of collection.plans)
         await analyze(root, manifest, metadata, request.configuration || 'Debug', policy, target, request, prepared, selected, collection, tools);
     }
