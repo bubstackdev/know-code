@@ -378,7 +378,7 @@ fn contains(steps: &[Step], mut index: usize, node: i64) -> bool {
     }
 }
 pub(crate) fn symbol(connection: &Connection, key: i64) -> Result<SymbolResult> {
-    let mut result=connection.query_row("SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation FROM symbols s JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE s.rowid=?",[key],|r|Ok(SymbolResult{
+    let mut result=connection.prepare_cached("SELECT s.id,s.name,s.kind,s.signature,s.external,s.compilation_id,c.target,s.generation FROM symbols s JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id WHERE s.rowid=?")?.query_row([key],|r|Ok(SymbolResult{
         id:r.get(0)?,name:r.get(1)?,kind:r.get(2)?,signature:r.get(3)?,external:r.get(4)?,compilation_id:r.get(5)?,target:r.get(6)?,owner_generation:r.get(7)?,locations:vec![],test_classification:Default::default(),locations_limited:false,supporting_targets:vec![]
     }))?;
     let mut locations=connection.prepare_cached("SELECT artifact_id,path,content_hash,start_byte,end_byte,generated FROM occurrence_locations WHERE generation=? AND compilation_id=? AND symbol_id=? AND role='declaration' ORDER BY path,start_byte LIMIT 17")?;
@@ -397,11 +397,11 @@ fn external_boundary(view: &ReadView, key: i64) -> Result<&'static str> {
     if view.format_version < 5 {
         return Ok("external_or_other_compilation_body");
     }
-    let pointer: (String,String,String)=view.connection.query_row("SELECT definition_compilation_id,definition_symbol_id,definition_fingerprint FROM symbols WHERE rowid=?",[key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    let pointer: (String,String,String)=view.connection.prepare_cached("SELECT definition_compilation_id,definition_symbol_id,definition_fingerprint FROM symbols WHERE rowid=?")?.query_row([key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
     if pointer.0.is_empty() {
         return Ok("external_or_other_compilation_body");
     }
-    let fingerprint=view.connection.query_row("SELECT c.input_fingerprint FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.id=?",params![view.generation,pointer.0],|r|r.get::<_,String>(0)).optional()?;
+    let fingerprint=view.connection.prepare_cached("SELECT c.input_fingerprint FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.id=?")?.query_row(params![view.generation,pointer.0],|r|r.get::<_,String>(0)).optional()?;
     Ok(match fingerprint {
         None => "definition_compilation_unavailable",
         Some(current) if current != pointer.2 => "definition_snapshot_mismatch",

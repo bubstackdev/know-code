@@ -238,11 +238,10 @@ pub(crate) fn roots_bounded(
     Ok((result, limited))
 }
 pub(crate) fn key(c: &Connection, key: i64) -> Result<String> {
-    Ok(c.query_row(
-        "SELECT finding_key FROM grouped_symbols WHERE symbol_key=?",
-        [key],
-        |r| r.get(0),
-    )?)
+    Ok(
+        c.prepare_cached("SELECT finding_key FROM grouped_symbols WHERE symbol_key=?")?
+            .query_row([key], |r| r.get(0))?,
+    )
 }
 
 #[cfg(test)]

@@ -922,11 +922,11 @@ impl ReadView {
         let mut owners = BTreeSet::new();
         for key in &roots {
             self.check()?;
-            owners.insert(self.connection.query_row(
-                "SELECT compilation_id FROM symbols WHERE rowid=?",
-                [key],
-                |r| r.get::<_, String>(0),
-            )?);
+            owners.insert(
+                self.connection
+                    .prepare_cached("SELECT compilation_id FROM symbols WHERE rowid=?")?
+                    .query_row([key], |r| r.get::<_, String>(0))?,
+            );
         }
         let roots_json = serde_json::to_string(&roots)?;
         let predicate = request.tests.predicate("t.mask");
@@ -949,13 +949,13 @@ impl ReadView {
         let sql=format!("WITH uses AS NOT MATERIALIZED (
             SELECT s.id AS symbol_id,s.compilation_id,c.target,s.generation AS owner_generation,
                 {family} AS family,s.finding_key,a.id AS artifact_id,a.path,a.content_hash,
-                o.start_byte,o.end_byte,a.generated,t.mask
+                o.start_byte,o.end_byte,a.generated,t.mask,t.classification_json
             FROM grouped_symbols s {joins}
             JOIN compilations c ON c.generation=s.generation AND c.id=s.compilation_id
             JOIN test_origin_masks t ON t.owner_generation=s.generation AND t.compilation_id=s.compilation_id AND t.artifact_id=a.id
             WHERE s.symbol_key IN(SELECT value FROM json_each(?1)) AND o.role='reference' AND {predicate}
         ), selected AS MATERIALIZED (SELECT {key} FROM uses GROUP BY {key} ORDER BY {key} LIMIT ?2)
-        SELECT dense_rank() OVER (ORDER BY {key}),symbol_id,compilation_id,target,artifact_id,path,content_hash,start_byte,end_byte,generated,owner_generation
+        SELECT dense_rank() OVER (ORDER BY {key}),symbol_id,compilation_id,target,artifact_id,path,content_hash,start_byte,end_byte,generated,classification_json
         FROM uses JOIN selected USING({key}) ORDER BY {key},target,compilation_id,symbol_id");
         let mut q = self.connection.prepare(&sql)?;
         let mut rows = q.query(params![roots_json, request.limit + 1])?;
@@ -983,11 +983,9 @@ impl ReadView {
             };
             let mut support = support;
             support.test_classification = crate::testing::origin(
-                &self.connection,
-                r.get(10)?,
-                &support.compilation_id,
                 &support.location.artifact_id,
                 &support.location.path,
+                &r.get::<_, String>(10)?,
             )?;
             if rank > output.len() {
                 let occurrence = OccurrenceResult {
@@ -1745,6 +1743,21 @@ mod tests {
                     compilation_id: comp.into(),
                     utf8: text.as_bytes().into(),
                     sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+                    test_classification: Some(crate::protocol::TestClassification {
+                        policy_version: crate::testing::POLICY_VERSION,
+                        kind: match comp {
+                            "left" => "non_test",
+                            "right" => "test",
+                            _ => "unknown",
+                        }
+                        .into(),
+                        evidence: vec![crate::protocol::TestEvidence {
+                            basis: "fixture".into(),
+                            value: comp.into(),
+                            path: format!("{comp}.ts"),
+                            ..Default::default()
+                        }],
+                    }),
                     ..Default::default()
                 }))
                 .unwrap();
@@ -1771,6 +1784,13 @@ mod tests {
                             end_byte: text.len() as u64,
                             ..Default::default()
                         },
+                        Occurrence {
+                            symbol_id: "opaque".into(),
+                            artifact_id: "collision".into(),
+                            role: "reference".into(),
+                            end_byte: 1,
+                            ..Default::default()
+                        },
                     ],
                     ..Default::default()
                 }))
@@ -1785,6 +1805,51 @@ mod tests {
             generations[index] = writer.publish().unwrap();
         }
         (path, generations)
+    }
+    #[test]
+    fn references_project_joined_origin_evidence_without_point_queries() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let (path, _) = declaration_fixture();
+        let mut view = crate::query::fixture_view(path).unwrap();
+        view.connection
+            .authorizer(Some(|context: AuthContext<'_>| {
+                // The bounded reference stream already reads test_origins
+                // through test_origin_masks. A second top-level lookup for
+                // every projected reference would duplicate that SQL work.
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "test_origins",
+                        ..
+                    }
+                ) && context.accessor.is_none()
+                {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+        let result = view
+            .query(
+                serde_json::from_value(serde_json::json!({"op":"references","symbol_id":"opaque"}))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(result.occurrences.len(), 3);
+        for occurrence in result.occurrences {
+            let expected = match occurrence.compilation_id.as_str() {
+                "left" => "non_test",
+                "right" => "test",
+                _ => "unknown",
+            };
+            assert_eq!(occurrence.test_classification.kind, expected);
+            assert_eq!(occurrence.test_classification.evidence.len(), 1);
+            let evidence = &occurrence.test_classification.evidence[0];
+            assert_eq!(evidence.artifact_id, occurrence.location.artifact_id);
+            assert_eq!(evidence.source_path, occurrence.location.path);
+            assert_eq!(evidence.evidence[0].value, occurrence.compilation_id);
+        }
     }
     #[test]
     fn declaration_source_selects_exact_owner_origin_and_hash_before_limit() {

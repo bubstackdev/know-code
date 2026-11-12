@@ -22,6 +22,22 @@ Root validation requested:
 cargo test -p know-code-core --locked --lib store::cleanup_index_tests::cleanup_indexes_cover_owner_and_foreign_key_probes_and_preserve_retained_facts -- --exact
 ```
 
+**M24 — repeated point-query preparation and reference classification.** Shared
+symbol headers, finding keys, test masks and definition-boundary lookups now use
+the connection's bounded prepared-statement cache. Reference projection consumes
+the classification JSON already joined by its bounded SQL stream instead of
+issuing another query for each occurrence/support. The regression uses three
+compilation-owned origins with different classifications and rejects a direct
+origin-table point query while allowing the joined classification view. This
+preserves each origin's evidence, rather than synthesizing a symbol-wide class.
+
+Root validation requested:
+
+```sh
+cargo test -p know-code-core --locked --lib query::tests::references_project_joined_origin_evidence_without_point_queries -- --exact
+cargo test -p know-code-core --locked --test testing
+```
+
 ## Current-source baseline
 
 | IDs | Released-source disposition |
