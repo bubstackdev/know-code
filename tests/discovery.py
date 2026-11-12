@@ -1,5 +1,6 @@
 """Owned TS repositories: durable parent enrollment through the real coordinator."""
 from fixture_trust import grant_fixture
+from index_paths import physical_database
 from pathlib import Path
 import hashlib,json,os,shutil,subprocess,time
 
@@ -69,11 +70,20 @@ try:
     checks+=['invalid_exclusions_atomic','canonical_parent_alias_and_overlapping_registration_dedup']
     db=workspace(a)['database'];value('parents','remove',PARENT);assert workspace(a)['database']==db
     value('parents','add',PARENT,'--exclude','group/excluded');wait(settled)
+    # The public database is a logical handle. Retention concerns its selected
+    # physical index, resolved through the shared owned-fixture helper.
+    retained_index=physical_database(db);retained_stat=retained_index.stat()
+    retained_identity=(retained_stat.st_dev,retained_stat.st_ino)
     command('unwatch',a);value('parents','scan',PARENT);value('parents','scan',GROUP);wait(settled)
-    assert workspace(a) is None and Path(db).exists()
+    assert workspace(a) is None
+    assert all(p['enrolled']==0 and p['suppressed']==1 for p in parents()),'overlapping scans must preserve explicit suppression'
+    assert physical_database(db)==retained_index and (retained_index.stat().st_dev,retained_index.stat().st_ino)==retained_identity,'unwatch changed the retained index'
     command('coordinator','stop');wait(lambda:not (DATA/'c.sock').exists())
     assert len(parents())==2;wait(settled);assert workspace(a) is None
+    assert all(p['enrolled']==0 and p['suppressed']==1 for p in parents()),'suppression must survive restart'
+    assert physical_database(db)==retained_index and (retained_index.stat().st_dev,retained_index.stat().st_ino)==retained_identity,'restart changed the suppressed retained index'
     grant_fixture(HOST,a,ENV,Path(os.path.commonpath([RUN,DATA])),RUN/'fixture-trust.jsonl')
+    assert workspace(a) is None,'execution trust alone must not enroll a suppressed workspace'
     command('watch',a);assert query(a,'discoveredA')['symbols']
     checks+=['parent_removal_retains_children','explicit_unwatch_suppression_survives_overlap_and_restart','explicit_watch_clears_suppression']
     command('watch',outside);assert query(outside,'linkedExplicit')['symbols']
