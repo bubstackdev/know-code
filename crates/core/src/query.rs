@@ -236,7 +236,7 @@ pub struct QueryResult {
     // An explicit refresh prototype cannot claim it observes later saved files.
     pub freshness: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub coordination: Option<crate::protocol::WorkspaceStatus>,
+    pub coordination: Option<QueryCoordination>,
     pub workspace_coverage: WorkspaceCoverage,
     pub coverage_scope: &'static str,
     pub coverage: Vec<Coverage>,
@@ -251,6 +251,78 @@ pub struct QueryResult {
     pub graph: Option<crate::graph::GraphResult>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contexts: Vec<SymbolContext>,
+}
+
+/// Freshness evidence for ordinary queries. Full configuration, progress and
+/// error detail remain available through the workspace-status operation.
+#[derive(Clone, Debug, Serialize)]
+pub struct QueryCoordination {
+    pub workspace_root: String,
+    pub database: String,
+    pub phase: String,
+    pub observed_epoch: u64,
+    pub published_epoch: u64,
+    pub generation: u64,
+    pub available: bool,
+    pub has_error: bool,
+    pub outcome_code: String,
+    pub status_limited: bool,
+}
+impl From<&crate::protocol::WorkspaceStatus> for QueryCoordination {
+    fn from(status: &crate::protocol::WorkspaceStatus) -> Self {
+        let (phase, phase_limited) = Self::token(&status.phase);
+        let (outcome_code, outcome_limited) = Self::token(&status.outcome_code);
+        Self {
+            workspace_root: status.workspace_root.clone(),
+            database: status.database.clone(),
+            phase,
+            observed_epoch: status.observed_epoch,
+            published_epoch: status.published_epoch,
+            generation: status.generation,
+            available: status.available,
+            has_error: !status.error.is_empty(),
+            outcome_code,
+            status_limited: phase_limited || outcome_limited,
+        }
+    }
+}
+impl QueryCoordination {
+    const MAX_TOKEN_BYTES: usize = 32;
+    fn token(value: &str) -> (String, bool) {
+        if value.len() <= Self::MAX_TOKEN_BYTES
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        {
+            (value.into(), false)
+        } else {
+            ("unknown".into(), true)
+        }
+    }
+    pub(crate) fn bounded(mut self) -> Self {
+        for token in [&mut self.phase, &mut self.outcome_code] {
+            let (projected, limited) = Self::token(token);
+            *token = projected;
+            self.status_limited |= limited;
+        }
+        self
+    }
+    // The identities stay frozen with each saved page; only these finite
+    // status fields can grow. False is the longest JSON boolean spelling.
+    pub(crate) fn maximum_live(workspace_root: String, database: String) -> Self {
+        Self {
+            workspace_root,
+            database,
+            phase: "x".repeat(Self::MAX_TOKEN_BYTES),
+            observed_epoch: u64::MAX,
+            published_epoch: u64::MAX,
+            generation: u64::MAX,
+            available: false,
+            has_error: false,
+            outcome_code: "x".repeat(Self::MAX_TOKEN_BYTES),
+            status_limited: false,
+        }
+    }
 }
 
 struct SourceRead<'a> {
@@ -1556,6 +1628,53 @@ mod tests {
         protocol::{AnalysisReport, Compilation, envelope::Payload},
         store::Writer,
     };
+
+    #[test]
+    fn query_coordination_is_bounded_without_configuration_or_error_payloads() {
+        let mut status = crate::protocol::WorkspaceStatus {
+            workspace_root: "workspace/π".into(),
+            database: "state/index.db".into(),
+            phase: "resource_limited".into(),
+            outcome_code: "disk_pressure".into(),
+            generation: u64::MAX,
+            observed_epoch: u64::MAX,
+            published_epoch: u64::MAX,
+            error: "compiler detail".repeat(100_000),
+            progress: Some(crate::protocol::Progress {
+                message: "progress".repeat(100_000),
+                ..Default::default()
+            }),
+            requested_settings: Some(crate::protocol::WorkspaceAnalysisSettings {
+                configuration_origin: "configuration".repeat(100_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let projected = QueryCoordination::from(&status);
+        let bytes = serde_json::to_vec(&projected).unwrap();
+        let maximum =
+            QueryCoordination::maximum_live(status.workspace_root.clone(), status.database.clone());
+        assert!(bytes.len() <= serde_json::to_vec(&maximum).unwrap().len());
+        let value = serde_json::to_value(projected).unwrap();
+        assert_eq!(value["workspace_root"], status.workspace_root);
+        assert_eq!(value["database"], status.database);
+        assert_eq!(value["has_error"], true);
+        assert_eq!(value["outcome_code"], "disk_pressure");
+        assert_eq!(value["status_limited"], false);
+        for omitted in ["error", "progress", "requested_settings"] {
+            assert!(value.get(omitted).is_none());
+        }
+        status.phase = "\0".repeat(100_000);
+        status.outcome_code = "e".repeat(100_000);
+        let limited = QueryCoordination::from(&status);
+        assert!(limited.status_limited && limited.has_error);
+        assert_eq!(limited.phase, "unknown");
+        assert_eq!(limited.outcome_code, "unknown");
+        assert!(
+            serde_json::to_vec(&limited).unwrap().len()
+                <= serde_json::to_vec(&maximum).unwrap().len()
+        );
+    }
 
     #[test]
     fn cursor_materialization_has_one_bounded_aggregate_budget_before_page_packing() {

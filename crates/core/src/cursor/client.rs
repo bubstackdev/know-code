@@ -7,7 +7,7 @@ use crate::{
         ControlRequest, ControlResponse, CursorReply, CursorRequest, CursorSettings,
         WorkspaceStatus,
     },
-    query::{QueryRequest, QueryResult, ReadView},
+    query::{QueryCoordination, QueryRequest, QueryResult, ReadView},
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -39,6 +39,9 @@ fn rpc(
         },
     )?;
     execution.check()?;
+    checked_cursor_response(response)
+}
+fn checked_cursor_response(response: ControlResponse) -> Result<ControlResponse> {
     if response.cursor_control_version != CONTROL_VERSION {
         return Err(Error::UpdateRequired("update the coordinator and query libraries together; portable cursor control is unavailable or incompatible".into()));
     }
@@ -83,7 +86,7 @@ fn freshness(generation: u64, status: Option<&WorkspaceStatus>) -> &'static str 
 }
 fn status(result: &mut QueryResult, state: Option<&WorkspaceStatus>) {
     result.freshness = freshness(result.generation, state);
-    result.coordination = state.cloned();
+    result.coordination = state.map(QueryCoordination::from);
 }
 
 struct Lease<'a> {
@@ -232,6 +235,7 @@ impl<'a> Lease<'a> {
     ) -> Result<String> {
         let mut file = self.open_result(reply)?;
         let prefix = self.handle.prefix();
+        let coordination = state.map(QueryCoordination::from);
         let value = pages::read(
             &mut file,
             pages::ReadOptions {
@@ -240,7 +244,7 @@ impl<'a> Lease<'a> {
                 expected_generation: self.reply.generation,
                 response_max_bytes: maximum,
                 freshness: freshness(self.reply.generation, state),
-                coordination: state,
+                coordination: coordination.as_ref(),
             },
             self.execution.clone(),
         )?;
@@ -429,6 +433,26 @@ mod tests {
     use super::*;
     use crate::protocol::{self, Envelope, VERSION, envelope::Payload};
     use std::os::unix::net::UnixListener;
+    #[test]
+    fn incompatible_page_producer_peer_requires_update_before_reading_pages() {
+        for version in [0, 2, CONTROL_VERSION + 1] {
+            assert!(matches!(
+                checked_cursor_response(ControlResponse {
+                    cursor_control_version: version,
+                    ..Default::default()
+                }),
+                Err(Error::UpdateRequired(_))
+            ));
+        }
+        assert!(
+            checked_cursor_response(ControlResponse {
+                cursor_control_version: CONTROL_VERSION,
+                index_lifecycle_version: crate::protocol::INDEX_LIFECYCLE_VERSION,
+                ..Default::default()
+            })
+            .is_ok()
+        );
+    }
     #[test]
     fn cancelled_upload_discards_partial_file_and_pin_with_uncancelled_cleanup() {
         use crate::{cursor::CursorService, protocol::WorkspaceStatus};

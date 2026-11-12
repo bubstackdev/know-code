@@ -17,7 +17,7 @@ use std::{
     },
 };
 
-pub const CONTROL_VERSION: u32 = 2;
+pub const CONTROL_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

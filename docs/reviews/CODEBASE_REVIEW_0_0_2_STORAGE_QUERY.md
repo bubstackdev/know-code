@@ -165,7 +165,38 @@ fixes here. A typed operation rewrite (architecture 7) is not introduced without
 a concrete cross-entry validation defect; root owns the current MCP/CLI boundary
 changes. This avoids a second query engine or cross-lane source edits.
 
-## Validation handoff
+## Authorized compact query status and M20 follow-up
+
+The user approved compact query status with full configuration available through
+workspace status. `QueryCoordination` keeps exact workspace/database identities,
+generation and observed/published epochs, availability, phase/outcome and a
+`has_error` indication. It omits full error strings, progress and requested
+settings. Phase/outcome are at most 32 lowercase ASCII token bytes; other input
+projects to `unknown` with `status_limited: true`. This bounds live growth without
+truncating a compiler diagnostic, coverage report, graph path or proof.
+
+Page packing calculates the serialized maximum live status with 20-digit u64
+values, the longest allowed tokens and booleans, and the longest freshness label.
+Creation-time workspace/database identities remain frozen alongside source
+locations; if unavailable at creation they remain empty. Read-time status changes
+cannot enlarge these identities. This calculated reserve is included before
+partitioning complete atomic findings. A finding that cannot fit still fails
+explicitly; no item or required coverage is silently discarded. A replay using a
+smaller response cap can still fail honestly. Successful same-cap pages retain
+room for every allowed live metadata update, including at 2 MiB.
+
+Native query contract is 9. Saved page format is 2 and cursor control is 3:
+mixed old/new clients must receive `update_required` from cursor control before
+sharing the incompatible saved-page format. Old format-1 files require cursor
+restart. Store format and Protobuf framing do not change. Root validation:
+
+```sh
+cargo test -p know-code-core --locked --lib query::tests::query_coordination_is_bounded_without_configuration_or_error_payloads -- --exact
+cargo test -p know-code-core --locked --lib cursor::pages::tests
+cargo test -p know-code-core --locked --lib cursor::client::tests::incompatible_page_producer_peer_requires_update_before_reading_pages -- --exact
+```
+
+## Static checks and broader handoff
 
 All owned Rust files pass standalone `rustfmt --edition 2024 --check`; all diffs
 pass `git diff --check`. No cargo/build/native/runtime/VM command ran in this
