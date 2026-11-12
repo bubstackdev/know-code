@@ -972,6 +972,60 @@ mod checkpoint_tests {
         .unwrap()
         .text
     }
+    fn staged_document(number: usize, bytes: usize) -> envelope::Payload {
+        let text = format!("// saved document {number}\n{}", "a".repeat(bytes));
+        envelope::Payload::Source(SourceArtifact {
+            id: format!("stage-{number}"),
+            compilation_id: "comp".into(),
+            path: format!("stage-{number}.ts"),
+            sha256: format!("{:x}", Sha256::digest(text.as_bytes())),
+            utf8: text.into_bytes(),
+            ..Default::default()
+        })
+    }
+    #[test]
+    fn staging_checkpoint_bounds_wal_without_publishing_or_changing_busy_policy() {
+        let path = managed();
+        let scope =
+            crate::admission::AdmissionScope::at(path.parent().unwrap().join("scope")).unwrap();
+        let old = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        let generation = old.generation;
+        assert_eq!(source(&old), "old");
+        drop(old);
+        let mut writer = Writer::open(&path).unwrap();
+        populate(&mut writer, "next", true);
+        writer
+            .connection
+            .busy_timeout(Duration::from_millis(1777))
+            .unwrap();
+        let mut peak = 0;
+        for number in 0..256 {
+            writer
+                .stage(staged_document(number, 256 * 1024))
+                .unwrap();
+            peak = peak.max(wal_bytes(&path));
+        }
+        // This finite fixture stages over 64 MiB, without a pinned reader.
+        // Reusing its WAL before publication must not require a larger pool.
+        assert!(peak < 48 * 1024 * 1024, "staging WAL grew to {peak} bytes");
+        assert_eq!(
+            writer
+                .connection
+                .query_row("PRAGMA busy_timeout", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            1777
+        );
+        assert!(Writer::open(&path).is_err(), "checkpoint retired active writer");
+        let old = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        assert_eq!(old.generation, generation);
+        assert_eq!(source(&old), "old");
+        drop(old);
+        let published = writer.publish().unwrap();
+        assert!(published > generation);
+        let current = crate::query::ReadView::open_in_scope(&path, &scope).unwrap();
+        assert_eq!(current.generation, published);
+        assert_eq!(source(&current), "next");
+    }
     #[test]
     fn writer_retirement_unlocks_duplicated_fence_after_publish_and_abort() {
         for published in [true, false] {
