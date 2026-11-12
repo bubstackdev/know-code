@@ -158,8 +158,8 @@ static partial class Analysis
                 var selected = model.GetSymbolInfo(primary).Symbol as IMethodSymbol;
                 Edge(owner, selected is null ? null : output.Symbol(Normalize(selected)), "call", primary, dispatch: "direct");
                 foreach (var argument in primary.ArgumentList.Arguments)
-                    if ((model.GetOperation(argument) ?? model.GetOperation(argument.Expression)) is { } operation)
-                        new Calls(this, owner).Visit(operation);
+                    if ((model.GetOperation(argument) ?? model.GetOperation(argument.Expression)) is { } argumentOperation)
+                        new Calls(this, owner).Visit(argumentOperation);
                 return;
             }
             // Select executable roots, then walk each tree once. Nested function
