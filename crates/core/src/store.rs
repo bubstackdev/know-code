@@ -958,6 +958,38 @@ mod checkpoint_tests {
         .text
     }
     #[test]
+    fn writer_retirement_unlocks_duplicated_fence_after_publish_and_abort() {
+        for published in [true, false] {
+            let path = fixture();
+            let mut writer = Writer::open(&path).unwrap();
+            populate(&mut writer, "retained descriptor", true);
+            let duplicate = writer._ownership.try_clone().unwrap();
+            let identity = duplicate.metadata().unwrap();
+            assert!(Writer::open(&path).is_err(), "live writer lost exclusion");
+            if published {
+                writer.publish().unwrap();
+            } else {
+                drop(writer);
+            }
+            // A duplicate shares the original open-file description. It must
+            // not keep a retired Writer's lock alive until its eventual close.
+            let replacement = Writer::open(&path).unwrap();
+            let selected = replacement._ownership.metadata().unwrap();
+            assert_eq!(
+                (selected.dev(), selected.ino()),
+                (identity.dev(), identity.ino())
+            );
+            assert!(Writer::open(&path).is_err(), "replacement lost exclusion");
+            drop(duplicate);
+            assert!(
+                Writer::open(&path).is_err(),
+                "closing a retired duplicate released the replacement's lock"
+            );
+            drop(replacement);
+            drop(Writer::open(&path).unwrap());
+        }
+    }
+    #[test]
     fn managed_checkpoint_preserves_full_scope_raw_reader_then_truncates_and_reuses() {
         let path = managed();
         let old = "// old π😀\n".repeat(4096);
