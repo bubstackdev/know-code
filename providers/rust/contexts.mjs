@@ -208,7 +208,6 @@ export function selectedProject(units, selected, metadata) {
       owner.set(physical, index);
     }
   }
-  const directories = [...new Set(reachable.flatMap(index => units[index].inputs.files.map(filename => path.dirname(filename))))];
   const macroDylibs = [];
   const crates = reachable.map(index => {
     const unit = units[index], member = metadata.workspace_members.includes(unit.cargo.package_id);
@@ -228,8 +227,17 @@ export function selectedProject(units, selected, metadata) {
       ...(procMacro ? {is_proc_macro: true, proc_macro_dylib_path: dylib, proc_macro_cwd: unit.record.cwd} : {}),
       ...(unit.cfg.target ? {target: unit.cfg.target} : {}),
       deps: unit.dependencies.map(item => ({crate: reachable.indexOf(item.unit), name: item.name})),
-      source: {include_dirs: directories, exclude_dirs: []}};
+      source: {include_dirs: [...new Set(unit.inputs.files.filter(filename => filename.endsWith('.rs')).map(filename => path.dirname(filename)))], exclude_dirs: []}};
   });
+  if (macroDylibs.length) {
+    const foreignDirectories = crates.filter(crate => !crate.is_workspace_member).flatMap(crate => crate.source.include_dirs).map(directory => fs.realpathSync(directory));
+    foreignDirectories.push(fs.realpathSync(path.join(sysroot, 'lib/rustlib/src/rust/library')));
+    for (const filename of units[selected].inputs.files.filter(filename => filename.endsWith('.rs'))) {
+      const physical = fs.realpathSync(filename);
+      if (foreignDirectories.some(directory => { const relative = path.relative(directory, physical); return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative); }))
+        gap('macro diagnostic source is ambiguous between local and nonlocal roots');
+    }
+  }
   const removeAnalyzerCfg = reachable.some(index => metadata.workspace_members.includes(units[index].cargo.package_id) &&
     !units[index].cfg.effective.includes('rust_analyzer'));
   if (removeAnalyzerCfg && reachable.some(index => units[index].cfg.effective.includes('rust_analyzer')))

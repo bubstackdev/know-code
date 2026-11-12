@@ -207,6 +207,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
   const emitted = new Set();
   const externalSources = new ExternalSources();
   const declarationOrigins = new Map();
+  const canonicalCallables = new Map();
   let originAnchors = 0, omittedOrigins = 0;
   function rememberOrigins(target, syntax) {
     const key = `${target.uri}@${target.artifact.sha256}`, anchors = syntax.declarationAnchors();
@@ -235,6 +236,27 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     } else { declarationOrigins.delete(key); declarationOrigins.set(key, anchors); }
     return authoredDeclaration(anchors, start, end, kind);
   }
+  const callableIdentity = item => JSON.stringify([item.uri, item.kind, item.name, item.selectionRange,
+    item.range, item.detail ?? null, item.data ?? null]);
+  async function canonicalCallable(definition, target, start, end, fallback) {
+    if (!replayMacros) return true;
+    const name = target.artifact.utf8.subarray(start, end).toString('utf8').replace(/^r#/, '').normalize('NFC');
+    const matches = item => [6, 12].includes(item.kind) && item.uri === definition.uri &&
+      rangeKey(item.selectionRange) === rangeKey(definition.range) && item.name?.normalize('NFC') === name;
+    const use = fallback.compilerItem ? [fallback.compilerItem] : await analyzer.request('textDocument/prepareCallHierarchy',
+      {textDocument: {uri: fallback.uri}, position: fallback.position});
+    const candidates = (use ?? []).filter(matches);
+    if (candidates.length !== 1) return false;
+    const key = `${definition.uri}:${rangeKey(definition.range)}`;
+    if (!canonicalCallables.has(key)) {
+      const declaration = await analyzer.request('textDocument/prepareCallHierarchy',
+        {textDocument: {uri: definition.uri}, position: definition.range.start});
+      if (canonicalCallables.size >= 256) canonicalCallables.delete(canonicalCallables.keys().next().value);
+      canonicalCallables.set(key, (declaration ?? []).filter(matches));
+    }
+    const declared = canonicalCallables.get(key);
+    return declared.length === 1 && callableIdentity(declared[0]) === callableIdentity(candidates[0]);
+  }
   let batch = {compilationId, symbols: [], occurrences: [], relationships: []};
   const flush = () => {
     if (batch.symbols.length || batch.occurrences.length || batch.relationships.length) send('facts', batch);
@@ -256,6 +278,8 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     if (selected && ['function', 'method'].includes(kind) && macroSources.has(target.filename) &&
         !selected.unit.cargo.target.kind.includes('proc-macro')) { omittedOrigins++; return undefined; }
     if (!await authoredTarget(target, anchor, endAnchor, kind)) { omittedOrigins++; return undefined; }
+    if (selected && ['function', 'method'].includes(kind) && !await canonicalCallable(definition, target, anchor, endAnchor, fallback))
+      { omittedOrigins++; return undefined; }
     const id = `${compilationId}:${relative(root, target.filename)}:${anchor}`;
     if (!emitted.has(id)) {
       const selectedName = target.artifact.utf8.subarray(anchor, endAnchor).toString('utf8');
@@ -276,6 +300,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       workspaceFolders: [{uri: pathToFileURL(directory).href, name: path.basename(directory)}],
       capabilities: {general: {positionEncodings: ['utf-16']}, experimental: {serverStatusNotification: true},
         textDocument: {documentSymbol: {hierarchicalDocumentSymbolSupport: true}, definition: {linkSupport: true}, hover: {contentFormat: ['plaintext']},
+          ...(replayMacros ? {diagnostic: {dynamicRegistration: false, relatedDocumentSupport: false}} : {}),
           callHierarchy: {}, semanticTokens: {requests: {full: true}, tokenTypes: [...kinds, 'keyword'], tokenModifiers: ['declaration', 'definition'], formats: ['relative']}}},
       initializationOptions: {checkOnSave: false, check: {enable: false},
         cargo: selected ? {offline: true, cfgs: selected.graph.cargoCfgs, buildScripts: {enable: false, useRustcWrapper: false}} : cargo,
@@ -287,10 +312,11 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     if (!legend) throw new Error('rust-analyzer lacks semantic token support');
     analyzer.notify('initialized', {});
     const status = await analyzer.ready();
-    if (replayMacros && status.health !== 'ok') {
+    const pullDiagnostics = initialized.capabilities.diagnosticProvider;
+    if (replayMacros && (status.health !== 'ok' || !pullDiagnostics || typeof pullDiagnostics !== 'object' || pullDiagnostics.interFileDependencies !== true)) {
       send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
         {code: 'rust_macro_replay_unavailable', severity: 'error', path: projectPath,
-          message: status.message ?? 'Captured procedural macros could not be loaded; no macro-disabled binding fallback was published.'}],
+          message: status.message ?? 'Macro replay requires a ready analyzer with synchronous pull diagnostics; no macro-disabled binding fallback was published.'}],
         capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
       return;
     }
@@ -301,6 +327,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     // analyzer definition enrolls another file. No path/name convention does.
     const outlines = new Map();
     const macroTokens = new Map();
+    const macroDiagnostics = [];
     let cachedTokenValues = 0;
     for (const current of sources.values()) {
       analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
@@ -308,6 +335,9 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         await analyzer.request('textDocument/documentSymbol', {textDocument: {uri: current.uri}}) : [];
       outlines.set(current.uri, outline);
       if (replayMacros) {
+        const actual = await analyzer.request('rust-analyzer/viewFileText', {uri: current.uri});
+        if (actual !== current.text && actual !== current.text.replace(/\r\n/g, '\n'))
+          throw new Error('Macro diagnostic source differs from its saved compiler-context snapshot');
         const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
         cachedTokenValues += tokens?.data?.length ?? 0;
         if (cachedTokenValues > 1000000) {
@@ -318,6 +348,14 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
           return;
         }
         macroTokens.set(current.uri, tokens);
+        const pulled = await analyzer.request('textDocument/diagnostic', {textDocument: {uri: current.uri},
+          ...(typeof pullDiagnostics.identifier === 'string' ? {identifier: pullDiagnostics.identifier} : {})});
+        if (pulled?.kind !== 'full' || !Array.isArray(pulled.items))
+          throw new Error('Macro replay requires a complete synchronous diagnostic report');
+        for (const item of pulled.items) if (item.severity === 1 || String(item.code ?? '').includes('macro')) {
+          if (macroDiagnostics.length < 100) macroDiagnostics.push({code: String(item.code ?? 'rust_analyzer'),
+            severity: 'error', path: relative(root, current.filename), message: String(item.message).slice(-4096)});
+        }
       }
       const modules = [];
       const collectModules = items => { for (const item of items ?? []) {
@@ -342,13 +380,10 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       analyzer.notify('textDocument/didClose', {textDocument: {uri: current.uri}});
     }
     if (replayMacros) {
-      const errors = [...analyzer.diagnostics.entries()].filter(([uri]) => sources.has(uri))
-        .flatMap(([uri, items]) => items.filter(item => item.severity === 1).map(item => ({code: String(item.code ?? 'rust_analyzer'),
-          severity: 'error', path: relative(root, fileURLToPath(uri)), message: item.message.slice(-4096)}))).slice(0, 100);
-      if (errors.length) {
+      if (macroDiagnostics.length) {
         send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
           {code: 'rust_macro_replay_unavailable', severity: 'error', path: projectPath,
-            message: 'Macro-enabled analyzer reported errors before publication; no macro-disabled binding fallback was published.'}, ...errors],
+            message: 'Synchronous macro-enabled diagnostics reported errors before publication; no macro-disabled binding fallback was published.'}, ...macroDiagnostics],
           capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
         return;
       }
@@ -461,7 +496,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
           symbol: async item => {
             if (![6, 12].includes(item.kind)) return undefined;
             const selected = await definitionSymbol({uri: item.uri, range: item.selectionRange}, item.kind === 6 ? 'method' : 'function',
-              {name: item.name, uri: item.uri, position: item.selectionRange.start});
+              {name: item.name, uri: item.uri, position: item.selectionRange.start, compilerItem: item});
             return selected && {id: selected.id, method: item.kind === 6};
           }
         });
