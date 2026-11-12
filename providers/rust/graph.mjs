@@ -6,6 +6,17 @@ const TYPES = new Set(['PATH_TYPE', 'REF_TYPE', 'PTR_TYPE', 'ARRAY_TYPE', 'SLICE
 const POSITIONAL = new Set(['CALL_EXPR', 'METHOD_CALL_EXPR']);
 const callable = node => node.kind === 'FN' || node.kind === 'CONST' || node.kind === 'STATIC';
 const within = (outer, start, end) => outer.start <= start && end <= outer.end;
+const DECLARATIONS = {
+  function: ['FN'], method: ['FN'], const: ['CONST'], static: ['STATIC'],
+  struct: ['STRUCT'], enum: ['ENUM'], interface: ['TRAIT'], union: ['UNION'],
+  class: ['STRUCT', 'ENUM', 'UNION'], type: ['STRUCT', 'ENUM', 'TRAIT', 'TYPE_ALIAS', 'TYPE_PARAM', 'UNION'],
+  typeParameter: ['TYPE_PARAM'], constParameter: ['CONST_PARAM'], property: ['RECORD_FIELD'], enumMember: ['VARIANT'],
+  variable: ['IDENT_PAT'], parameter: ['IDENT_PAT', 'SELF_PARAM'], selfKeyword: ['SELF_PARAM'],
+  selfTypeKeyword: ['STRUCT', 'ENUM', 'TRAIT', 'TYPE_ALIAS', 'TYPE_PARAM', 'UNION'],
+  namespace: ['MOD', 'SOURCE_FILE'], macro: ['MACRO_RULES', 'MACRO_DEF', 'FN']
+};
+
+export const authoredDeclaration = (anchors, start, end, kind) => DECLARATIONS[kind]?.includes(anchors.get(`${start}:${end}`)) ?? false;
 
 export class RustGraph {
   constructor(source, encoded, compilerText = source.text) {
@@ -89,6 +100,18 @@ export class RustGraph {
     return this.pathAt(start, end).findLast(node => POSITIONAL.has(node.kind));
   }
   callableOwners() { return this.owners.filter(node => node.id && node.selection && callable(node)); }
+  declarationAnchors() {
+    const anchors = new Map([[`0:${this.source.artifact.utf8.length}`, 'SOURCE_FILE']]);
+    const stack = [{node: this.root, parent: undefined}];
+    while (stack.length) {
+      const {node, parent} = stack.pop();
+      const identifier = node.kind === 'NAME' ? node.children.find(child => child.kind === 'IDENT') :
+        node.kind === 'SELF_PARAM' ? node.children.find(child => child.kind === 'SELF_KW') : undefined;
+      if (identifier) anchors.set(`${identifier.start}:${identifier.end}`, node.kind === 'SELF_PARAM' ? node.kind : parent.kind);
+      for (const child of node.children) stack.push({node: child, parent: node});
+    }
+    return anchors;
+  }
 }
 
 export async function syntaxGraph(analyzer, source) {

@@ -7,9 +7,10 @@ import {readRequest, send} from '../shared/protocol.mjs';
 import {Analyzer, compilerEnvironment} from './lsp.mjs';
 import {relative,byteOffsets,sourceBoundary} from '../shared/source.mjs';
 import {orderedDefinitions,ExternalSources} from './navigation.mjs';
-import {syntaxGraph, outgoingCalls} from './graph.mjs';
+import {syntaxGraph, outgoingCalls, authoredDeclaration} from './graph.mjs';
 import {rustPolicy, cargoSelection, analyzerCargo} from './policy.mjs';
 import {prepareCargo} from './preparation.mjs';
+import {collectCargoContexts} from './cargo-contexts.mjs';
 
 const rangeKey = range => [range.start.line, range.start.character, range.end.line, range.end.character].join(':');
 const kinds = new Set(['namespace', 'type', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'parameter', 'variable', 'property', 'enumMember', 'function', 'method', 'macro', 'const', 'static', 'constParameter', 'selfKeyword', 'selfTypeKeyword', 'union']);
@@ -104,18 +105,39 @@ function inputPaths(metadata, manifest, policy) {
   return [...result].filter(p => fs.existsSync(p));
 }
 
-async function analyze(root, manifest, metadata, configuration, policy, selectedTarget, request, prepared) {
+function toolsFor(manifest) {
   const directory = path.dirname(manifest);
-  const projectPath = relative(root, manifest);
-  const compilationId = `rust:${projectPath}${selectedTarget ? `:target:${encodeURIComponent(selectedTarget)}` : ''}`;
-  const cargo = analyzerCargo(policy, manifest, selectedTarget);
   const compilerVersion = command('rustc', ['-Vv'], directory);
   const sysroot = command('rustc', ['--print', 'sysroot'], directory);
   const librarySources = path.join(sysroot, 'lib/rustlib/src/rust/library');
   if (!fs.existsSync(path.join(librarySources, 'Cargo.toml')) || !fs.existsSync(path.join(librarySources, 'core/src/lib.rs')))
     throw new Error(`missing rust-src prerequisite for repository-selected Rust sysroot ${sysroot}; install rust-src separately for that toolchain and refresh. Know Code does not install toolchains or components`);
-  const analyzerVersion = command('rust-analyzer', ['--version'], directory);
-  if (policy) {
+  return {compilerVersion, sysroot, analyzerVersion: command('rust-analyzer', ['--version'], directory)};
+}
+
+function contextIdentity(manifest, root, plan) {
+  const unit = plan.unit;
+  const key = JSON.stringify([unit.cargo.package_id, unit.cargo.target, unit.cargo.profile, unit.cargo.features, unit.cfg.target ?? null]);
+  return `rust:${relative(root, manifest)}:unit:${createHash('sha256').update(key).digest('hex')}`;
+}
+
+function unavailableContext(root, manifest, configuration, target, diagnostics) {
+  const projectPath = relative(root, manifest), id = `rust:${projectPath}:unavailable:${encodeURIComponent(target ?? 'repository-default')}`;
+  send('compilation', {id, language: 'rust', projectPath, target: target ?? 'repository-default', configuration,
+    inferred: false, optionsJson: JSON.stringify({provider: 'cargo-rust-analyzer', context: 'unavailable'}), inputPaths: [manifest], dependencies: []});
+  send('report', {compilationId: id, status: 'partial', diagnostics,
+    capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
+}
+
+async function analyze(root, manifest, metadata, configuration, policy, selectedTarget, request, prepared, selected, collection, tools) {
+  const directory = path.dirname(manifest);
+  const projectPath = relative(root, manifest);
+  const compilationId = selected ? contextIdentity(manifest, root, selected) : `rust:${projectPath}${selectedTarget ? `:target:${encodeURIComponent(selectedTarget)}` : ''}`;
+  const cargo = analyzerCargo(policy, manifest, selectedTarget);
+  tools ??= toolsFor(manifest);
+  const compilerVersion = selected?.unit.cfg.compilerVersion ?? tools.compilerVersion;
+  const {analyzerVersion} = tools;
+  if (policy && !selected) {
     if (!prepared.has(manifest)) prepared.set(manifest, prepareCargo({request, root, manifest, metadata, policy,
       identity: [compilerVersion, analyzerVersion, command('cargo', ['--version'], directory)], command, inputPaths, send}));
     metadata = prepared.get(manifest);
@@ -125,27 +147,83 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
   const files = new Set();
   // Cargo supplies crate roots. Additional module sources are enrolled only
   // from analyzer-resolved module declarations below, never a recursive scan.
-  for (const member of members) for (const target of member.targets ?? [])
-    if (typeof target.src_path === 'string' && fs.existsSync(target.src_path)) files.add(target.src_path);
+  if (selected) for (const filename of selected.graph.firstPartyFiles) files.add(filename);
+  else for (const member of members) for (const target of member.targets ?? [])
+      if (typeof target.src_path === 'string' && fs.existsSync(target.src_path)) files.add(target.src_path);
   const sources = new Map([...files].sort().map(filename => [pathToFileURL(filename).href, source(filename, root, compilationId)]));
+  if (selected) for (const current of sources.values())
+    if (selected.unit.inputHashes[current.filename] !== current.artifact.sha256)
+      throw new Error('Rust saved source changed after its compiler-context snapshot; refresh saved inputs');
+  const semanticInputs = new Map(selected ? selected.graph.reachable.flatMap(index => Object.entries(collection.units[index].inputHashes)) : []);
+  const generatedInputs = [];
+  if (selected) for (const current of sources.values()) for (const output of collection.buildScripts) {
+    if (typeof output.outDir !== 'string' || !path.isAbsolute(output.outDir)) continue;
+    const relativeOutput = path.relative(output.outDir, current.filename);
+    if (!path.isAbsolute(relativeOutput) && relativeOutput !== '..' && !relativeOutput.startsWith(`..${path.sep}`)) {
+      current.artifact.generated = true;
+      generatedInputs.push({path: current.artifact.path, packageId: output.packageId, outDir: output.outDir});
+    }
+  }
+  const inputFingerprint = selected ? createHash('sha256').update(JSON.stringify([selected.unit.cfg, selected.unit.inputHashes,
+    selected.unit.dependencyHashes, selected.unit.outputHashes])).digest('hex') : '';
   const options = {provider: 'rust-analyzer-lsp', analyzerVersion, positionEncoding: 'utf-16', configuration,
     cargo: {...cargo, features: policy?.features ?? 'default', buildJobs: 1}, procMacros: trustedPreparation,
     requestedPolicy: policy ? {targets: policy.targets, defaultFeatures: policy.defaultFeatures, executionAllowed: policy.executionAllowed} : null,
-    sourceOwnership: 'Cargo target roots and unique analyzer-selected module files',
+    sourceOwnership: selected ? 'Selected compiler unit dep-info membership; dependency crates are lookup-only' : 'Cargo target roots and unique analyzer-selected module files',
+    ...(selected ? {context: {cargoPackageId: selected.unit.cargo.package_id, target: selected.unit.cargo.target,
+      profile: selected.unit.cargo.profile, features: selected.unit.cargo.features, cfg: selected.unit.cfg.effective,
+      compilerSha256: selected.unit.cfg.compilerSha256, captureAttempts: collection.captureAttempts}, generatedInputs,
+      analyzerReplay: {cfg: selected.graph.analyzerCfg, cargoCfgs: selected.graph.cargoCfgs, buildScripts: false}} : {}),
     dependencyInputTracking: 'Cargo-selected local dependency package roots: bounded watch-only .rs superset, excluding artifact directories and symlink traversal',
-    coverage: 'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
-  send('compilation', {id: compilationId, language: 'rust', projectPath, target: selectedTarget ? `${selectedTarget}/rust-analyzer-workspace-view` : 'rust-analyzer-workspace-view', configuration,
-    inferred: false, compilerVersion, optionsJson: JSON.stringify(options), inputPaths: inputPaths(metadata, manifest, policy), dependencies: []});
+    coverage: selected ? 'Captured selected-root compiler context; compiler/analyzer graph capabilities remain partial.' :
+      'Semantic navigation in one rust-analyzer workspace view; not an exhaustive per-target/per-feature compiler index.'};
+  const targetLabel = selected ? `${selected.unit.cargo.target.kind.join('+')}:${selected.unit.cargo.target.name}:${selected.unit.cfg.test ? 'test' : 'normal'}@${selected.unit.cfg.target ?? 'host'}` :
+    selectedTarget ? `${selectedTarget}/rust-analyzer-workspace-view` : 'rust-analyzer-workspace-view';
+  send('compilation', {id: compilationId, language: 'rust', projectPath, target: targetLabel, configuration, inputFingerprint,
+    inferred: false, compilerVersion, optionsJson: JSON.stringify(options), inputPaths: [...new Set([...inputPaths(metadata, manifest, policy), ...(collection?.inputPaths ?? [])])], dependencies: []});
   send('progress', {stage: 'analysis', projectPath, message: trustedPreparation ?
     'Loading repository-selected Rust analyzer with trusted compiler-integrated build-script and procedural-macro preparation; product checks on save are disabled.' :
     'Loading repository-selected Rust analyzer; build scripts and procedural macro execution are disabled.'});
   const diagnostics = [{code: 'rust_coverage_limits', severity: 'warning', path: projectPath,
     message: `Experimental compiler-backed Rust navigation: build scripts/procedural macros are ${trustedPreparation ? 'personally authorized for compiler preparation' : 'disabled'}; generated inputs, cfg/feature/target variants and exhaustive unresolved-reference diagnostics are not fully covered. Only Cargo target roots and unique analyzer-selected module files are retained; include!/expanded sources and context-specific module ownership remain incomplete. Watch-only inputs include evaluated dependency manifests and a bounded Rust-source superset below local dependency package roots, without following symlink directories. Arbitrary build-script rerun files, generated inputs and environment changes are not exhaustively tracked. Only unique analyzer-resolved references are published. This is a partial graph.`}];
+  if (selected) {
+    diagnostics[0].message = 'Captured compiler unit and saved dep-info inputs select this analyzer graph. Only this unit owns source facts; dependency crates remain lookup-only and cross-unit body links are not yet published. Implicit calls, deferred bodies, trait/dynamic candidates, expansion locations and arbitrary build-script rerun/environment inputs remain partial.';
+    diagnostics.push(...collection.diagnostics);
+  }
   if (configuration !== 'Debug') diagnostics.push({code: 'rust_configuration_unmapped', severity: 'warning', path: projectPath,
     message: `Workspace configuration ${configuration} has no Rust cfg/profile mapping; analysis uses the analyzer default view.`});
   const analyzer = new Analyzer(directory);
   const emitted = new Set();
   const externalSources = new ExternalSources();
+  const declarationOrigins = new Map();
+  let originAnchors = 0, omittedOrigins = 0;
+  function rememberOrigins(target, syntax) {
+    const key = `${target.uri}@${target.artifact.sha256}`, anchors = syntax.declarationAnchors();
+    if (anchors.size > 65536) return undefined;
+    if (declarationOrigins.has(key)) { originAnchors -= declarationOrigins.get(key).size; declarationOrigins.delete(key); }
+    while (declarationOrigins.size && (declarationOrigins.size >= 64 || originAnchors + anchors.size > 65536)) {
+      const oldest = declarationOrigins.keys().next().value;
+      originAnchors -= declarationOrigins.get(oldest).size; declarationOrigins.delete(oldest);
+    }
+    declarationOrigins.set(key, anchors); originAnchors += anchors.size;
+    return anchors;
+  }
+  async function authoredTarget(target, start, end, kind) {
+    if (!selected) return true; // Historical experimental direct-worker boundary.
+    const key = `${target.uri}@${target.artifact.sha256}`;
+    let anchors = declarationOrigins.get(key);
+    if (!anchors) {
+      // Full syntax responses amplify source size. Large lookup-only files
+      // remain an explicit identity gap instead of threatening the bounded RPC
+      // connection needed to finish this unit's own source facts.
+      if (!sources.has(target.uri) && target.artifact.utf8.length > 64 * 1024) return false;
+      const syntax = await syntaxGraph(analyzer, target);
+      if (!syntax) return false;
+      anchors = rememberOrigins(target, syntax);
+      if (!anchors) return false;
+    } else { declarationOrigins.delete(key); declarationOrigins.set(key, anchors); }
+    return authoredDeclaration(anchors, start, end, kind);
+  }
   let batch = {compilationId, symbols: [], occurrences: [], relationships: []};
   const flush = () => {
     if (batch.symbols.length || batch.occurrences.length || batch.relationships.length) send('facts', batch);
@@ -160,8 +238,11 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       const filename = fileURLToPath(definition.uri);
       if (fs.existsSync(filename)) { target = source(filename, root, compilationId); externalSources.set(definition.uri, target); }
     }
-    if (!target) return undefined;
+    if (!target) { if (selected) omittedOrigins++; return undefined; }
+    if (selected && semanticInputs.has(target.filename) && semanticInputs.get(target.filename) !== target.artifact.sha256)
+      throw new Error('Rust dependency source changed after its compiler-context snapshot; refresh saved inputs');
     const anchor = target.byte(definition.range.start), endAnchor = target.byte(definition.range.end);
+    if (!await authoredTarget(target, anchor, endAnchor, kind)) { omittedOrigins++; return undefined; }
     const id = `${compilationId}:${relative(root, target.filename)}:${anchor}`;
     if (!emitted.has(id)) {
       const selectedName = target.artifact.utf8.subarray(anchor, endAnchor).toString('utf8');
@@ -183,7 +264,9 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       capabilities: {general: {positionEncodings: ['utf-16']}, experimental: {serverStatusNotification: true},
         textDocument: {documentSymbol: {hierarchicalDocumentSymbolSupport: true}, definition: {linkSupport: true}, hover: {contentFormat: ['plaintext']},
           callHierarchy: {}, semanticTokens: {requests: {full: true}, tokenTypes: [...kinds, 'keyword'], tokenModifiers: ['declaration', 'definition'], formats: ['relative']}}},
-      initializationOptions: {checkOnSave: false, check: {enable: false}, cargo,
+      initializationOptions: {checkOnSave: false, check: {enable: false},
+        cargo: selected ? {offline: true, cfgs: selected.graph.cargoCfgs, buildScripts: {enable: false, useRustcWrapper: false}} : cargo,
+        ...(selected ? {linkedProjects: [selected.graph.project], cfg: selected.graph.analyzerCfg} : {}),
         procMacro: {enable: trustedPreparation}, cachePriming: {enable: false}, numThreads: 1, diagnostics: {enable: true},
         hover: {documentation: {enable: false}, memoryLayout: {enable: false}}}});
     if (initialized.capabilities.positionEncoding && initialized.capabilities.positionEncoding !== 'utf-16') throw new Error('unsupported rust-analyzer position encoding');
@@ -211,13 +294,13 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       for await (const {definitions} of orderedDefinitions(modules,
         position => analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position}))) {
         const locations = definitions ? (Array.isArray(definitions) ? definitions : [definitions]) : [];
-        const selected = new Map(locations.map(item => {
+        const definitionsByLocation = new Map(locations.map(item => {
           const uri = item.targetUri ?? item.uri, range = item.targetSelectionRange ?? item.range;
           return [JSON.stringify([uri, range]), uri];
         }));
-        if (selected.size !== 1) continue;
-        const uri = [...selected.values()][0];
-        if (uri?.startsWith('file:') && !sources.has(uri)) {
+        if (definitionsByLocation.size !== 1) continue;
+        const uri = [...definitionsByLocation.values()][0];
+        if (!selected && uri?.startsWith('file:') && !sources.has(uri)) {
           const filename = fileURLToPath(uri);
           if (fs.existsSync(filename)) sources.set(uri, source(filename, root, compilationId));
         }
@@ -231,6 +314,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
       const graph = await syntaxGraph(analyzer, current);
       if (!graph) graphUnavailable++;
+      if (selected && graph) rememberOrigins(current, graph);
       const moduleId = `${compilationId}:module:${relative(root, current.filename)}`;
       if (graph) {
         graph.root.id = moduleId;
@@ -345,8 +429,10 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     }
     if (unresolved) diagnostics.push({code: 'rust_unresolved_navigation', severity: 'warning', path: projectPath,
       message: `${unresolved} semantic tokens had no unique supported definition; no exact reference was invented.`});
+    if (omittedOrigins) diagnostics.push({code: 'rust_unproven_definition_origin', severity: 'warning', path: projectPath,
+      message: `${omittedOrigins} targets lacked matching authored declaration ranges/kinds, including possible expansion origins or lookup-only source beyond the 64 KiB syntax-proof allowance; no invocation anchor was reused as a symbol identity.`});
     diagnostics.push({code: 'rust_graph_limits', severity: 'warning', path: projectPath,
-      message: `Analyzer-bound graph slice: ${graphCalls} direct/declared-target calls and ${graphDependencies} syntax-classified value/type/import dependencies. Closures/async blocks, implicit operations, trait/dynamic candidates and independently selected Cargo contexts remain partial; ${graphUnavailable} unavailable syntax/call-hierarchy operations.`});
+      message: `Analyzer-bound graph slice: ${graphCalls} direct/declared-target calls and ${graphDependencies} syntax-classified value/type/import dependencies. Closures/async blocks, implicit operations, trait/dynamic candidates and ${selected ? 'cross-unit body links' : 'independently selected Cargo contexts'} remain partial; ${graphUnavailable} unavailable syntax/call-hierarchy operations.`});
     send('report', {compilationId, status: 'partial', diagnostics,
       capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
   } finally { await analyzer.close(); }
@@ -368,8 +454,29 @@ try {
     workspaces.set(canonical, metadata);
   }
   const prepared = new Map();
-  for (const [manifest, metadata] of workspaces) for (const target of policy?.targets.length ? policy.targets : [undefined])
-    await analyze(root, manifest, metadata, request.configuration || 'Debug', policy, target, request, prepared);
+  for (const [manifest, discovered] of workspaces) {
+    if (!policy) {
+      await analyze(root, manifest, discovered, request.configuration || 'Debug', policy, undefined, request, prepared);
+      continue;
+    }
+    const tools = toolsFor(manifest);
+    const metadata = prepareCargo({request, root, manifest, metadata: discovered, policy,
+      identity: [tools.compilerVersion, tools.analyzerVersion, command('cargo', ['--version'], path.dirname(manifest))], command, inputPaths, send});
+    for (const target of policy.targets.length ? policy.targets : [undefined]) {
+      let collection;
+      try { collection = collectCargoContexts({manifest, metadata, policy, target, setupInputs: inputPaths(metadata, manifest, policy), command, send}); }
+      catch (error) {
+        unavailableContext(root, manifest, request.configuration || 'Debug', target,
+          [{code: 'rust_context_unavailable', severity: 'error', path: relative(root, manifest), message: error.message}]);
+        continue;
+      }
+      if (!collection.plans.length || collection.failed.length || collection.diagnostics.some(item => item.code === 'rust_context_unavailable'))
+        unavailableContext(root, manifest, request.configuration || 'Debug', target, collection.diagnostics.length ? collection.diagnostics :
+          [{code: 'rust_context_unavailable', severity: 'error', path: relative(root, manifest), message: 'No proven first-party compiler context is available.'}]);
+      for (const selected of collection.plans)
+        await analyze(root, manifest, metadata, request.configuration || 'Debug', policy, target, request, prepared, selected, collection, tools);
+    }
+  }
   if (!workspaces.size) throw new Error('Rust analysis requires a Cargo.toml project; standalone Rust files are not supported by this provider yet');
   send('complete', {success: true});
 } catch (e) {
