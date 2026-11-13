@@ -138,7 +138,7 @@ assert any(frame.get('progress', {}).get('stage') == 'restoring' for frame in fi
 names = {symbol['name'] for frame in first['messages'] if 'facts' in frame for symbol in frame['facts']['symbols']}
 assert 'compiler_prepared' in names and 'restored_value' in names, names
 all_options = [json.loads(frame['compilation']['optionsJson']) for frame in first['messages'] if 'compilation' in frame]
-assert all_options and all(item['rustContextPolicy'] == 1 for item in all_options), all_options
+assert all_options and all(item['rustContextPolicy'] == 2 for item in all_options), all_options
 options = [item for item in all_options if isinstance(item.get('context'), dict)]
 assert len(options) == 2 and {item['context']['profile']['test'] for item in options} == {False, True}, all_options
 assert all(item['cargo']['buildScripts']['enable'] and item['procMacros'] for item in options), options
