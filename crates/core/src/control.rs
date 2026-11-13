@@ -1599,7 +1599,12 @@ mod activity_tests {
             let result = protocol::write_frame(&mut stream, &response);
             if mode != "delayed" || accepted == 2 {
                 result.unwrap();
-                std::fs::write(root.join("startup-accepted"), accepted.to_string()).unwrap();
+                std::fs::write(root.join("startup-accepted.next"), accepted.to_string()).unwrap();
+                std::fs::rename(
+                    root.join("startup-accepted.next"),
+                    root.join("startup-accepted"),
+                )
+                .unwrap();
                 return;
             }
             // The timed-out first client has closed its stream. It must not
