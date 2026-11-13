@@ -131,9 +131,12 @@ current=ready(dotnet,current['generation']+1)
 assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
 assert not dotnet.send('settings')['requested_settings']['node']['allow_install_scripts']
 for client in (node,dotnet):
- rust=client.send('settings')['requested_settings']['rust']
+ requested=client.send('settings')['requested_settings']
+ rust=requested['rust']
  assert rust['targets']==['aarch64-apple-darwin'] and rust['features']==['extra'] and rust['default_features'] is False,rust
  assert rust['execution_allowed'] is True and Path(rust['cache_directory']).is_absolute(),rust
+ swift=requested['swift']
+ assert swift['execution_allowed'] is True and Path(swift['cache_directory'])==DATA/'workers/swift',swift
 personal_file=Path(reset['requested_settings']['personal_file'])
 assert json.loads(personal_file.read_text())['allow_install_scripts'] is False
 error(node.send('configure',settings={'csharp':{'configuration':' '}}),'invalid_request')
