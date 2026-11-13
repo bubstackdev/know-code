@@ -67,7 +67,7 @@ function prepareDependencies({request, root, project, swift, toolchain, work, st
   let error = '';
   try {
     const args = packageArguments(directory, state, configuration, sdk);
-    checked(swift, [...args, 'resolve'], directory, env);
+    checked(swift, [...args, 'resolve'], directory, env, {timeout: PREPARATION_TIMEOUT_MS});
     const graph = JSON.parse(checked(swift, [...args, 'show-dependencies', '--format', 'json'], directory, env));
     const nodes = dependencyNodes(graph);
     const inputs = {};

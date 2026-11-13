@@ -17,14 +17,14 @@ function toolStderr(stderr) {
   const bytes = Buffer.from(String(stderr ?? ''));
   return bytes.length <= 8000 ? bytes.toString('utf8') : `${bytes.subarray(0, 4000).toString('utf8')}\n[Swift tool stderr truncated]\n${bytes.subarray(-4000).toString('utf8')}`;
 }
-export function run(command, args, cwd, env = process.env) {
-  const result = spawnSync(command, args, {cwd, env, encoding: 'utf8', maxBuffer: MAX_FRAME, timeout: 120_000});
+export function run(command, args, cwd, env = process.env, {timeout = 120_000} = {}) {
+  const result = spawnSync(command, args, {cwd, env, encoding: 'utf8', maxBuffer: MAX_FRAME, timeout});
   if (result.error) throw new Error(`Swift tool failed: ${String(result.error.message).slice(0, 4096)}; stderr: ${toolStderr(result.stderr)}`);
   if (result.signal) throw new Error(`Swift tool interrupted by ${result.signal}; stderr: ${toolStderr(result.stderr)}`);
   return result;
 }
-export function checked(command, args, cwd, env = process.env) {
-  const result = run(command, args, cwd, env);
+export function checked(command, args, cwd, env = process.env, options) {
+  const result = run(command, args, cwd, env, options);
   if (result.status !== 0) throw new Error(`${command} failed: ${result.stderr.trim()}`);
   return result.stdout.trim();
 }

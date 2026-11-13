@@ -21,13 +21,18 @@ HARNESS = ROOT / 'tests/worker_harness.mjs'
 # otherwise healthy source analysis into a compiler-error report.
 diagnostic_check = subprocess.run(['node', '--input-type=module', '-e', '''
 import assert from 'node:assert/strict';
-import {compilerDiagnostics, run, compileSources} from './providers/swift/index.mjs';
+import {compilerDiagnostics, run, checked, compileSources} from './providers/swift/index.mjs';
 const root = process.cwd();
 const warnings = compilerDiagnostics('<unknown>:0: warning: ignoring -experimental-lazy-typecheck (requires -enable-library-evolution)\\nwarning: driver warning\\n', root);
 assert.deepEqual(warnings.map(d => [d.severity, d.path]), [['warning', ''], ['warning', '']]);
 const mixed = compilerDiagnostics(`${root}/Sample.swift:3:7: error: missing value\\n<unknown>:0: note: compiler context\\nremark: compiler remark\\n`, root);
 assert.deepEqual(mixed.map(d => [d.severity, d.path]), [['error', 'Sample.swift'], ['info', ''], ['info', '']]);
 assert.equal(compilerDiagnostics('unrecognized compiler failure', root)[0].severity, 'error');
+const delayed = ['-e', "setTimeout(() => process.stdout.write('finished'), 100)"];
+assert.throws(() => run(process.execPath, delayed, root, process.env, {timeout:25}), /ETIMEDOUT/);
+assert.throws(() => checked(process.execPath, delayed, root, process.env, {timeout:25}), /ETIMEDOUT/);
+assert.equal(checked(process.execPath, delayed, root, process.env, {timeout:1000}), 'finished');
+assert.equal(checked(process.execPath, ['-e', "process.stdout.write('default')"], root), 'default');
 assert.throws(() => run(process.execPath, ['-e', "process.stderr.write('owned start' + 'x'.repeat(20000) + 'owned end', () => process.kill(process.pid, 'SIGTERM'))"], root), error => {
   assert.match(error.message, /Swift tool interrupted by SIGTERM/);
   assert.ok(error.message.includes('owned start') && error.message.includes('owned end'));

@@ -296,7 +296,7 @@ function restoration({root, project, selection, state, work, cacheDirectory, bri
     // Match metadata's selected executable and inherited environment. xcrun
     // adds tool environment variables that invalidate SwiftPM manifest caches.
     const executable = fs.realpathSync(path.join(env.DEVELOPER_DIR, 'usr/bin/xcodebuild'));
-    const result = run(executable, args, path.dirname(container(project)), env);
+    const result = run(executable, args, path.dirname(container(project)), env, {timeout: PREPARATION_TIMEOUT_MS});
     if (result.status !== 0) throw Error(`${result.stdout}\n${result.stderr}`);
     const inputs = Object.fromEntries([...new Set([project, ...selection.inputs, ...toolchain.inputPaths])].filter(exists).map(file => [file, hash(fs.readFileSync(file))]));
     plan = {inputs, analysisInputs: retainedAnalysisInputs(plan, work, cacheDirectory), outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
