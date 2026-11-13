@@ -20,6 +20,7 @@ const captureEnvironmentKeys = new Set(['KNOW_CODE_RUST_CAPTURE_CONFIG', 'RUSTC_
   'CARGO_MAKEFLAGS', 'MAKEFLAGS', 'MFLAGS', 'CARGO_CACHE_RUSTC_INFO', 'CARGO_BUILD_BUILD_DIR', 'CARGO_BUILD_JOBS']);
 const environmentHash = value => createHash('sha256').update(value).digest('hex');
 const ownHash = (values, name) => Object.hasOwn(values, name) ? values[name] : null;
+const baselineDigest = values => environmentHash(JSON.stringify(Object.keys(values).sort().map(name => [name, values[name]])));
 export function environmentBaseline(environment) {
   const values = Object.fromEntries(Object.entries(environment).filter(([name]) => !captureEnvironmentKeys.has(name))
     .map(([name, value]) => [name, environmentHash(value)]));
@@ -44,10 +45,11 @@ export function capturedEnvironment(environment, baseline, required = []) {
     if (value !== null) Object.defineProperty(values, name, {value: environment[name], enumerable: true});
     else absent.push(name);
   }
-  return {environment: values, environmentOrigins: origins, absentEnvironment: absent, removedEnvironment: removed};
+  return {environment: values, environmentOrigins: origins, environmentBaselineSha256: baselineDigest(baseline),
+    absentEnvironment: absent, removedEnvironment: removed};
 }
 export function capturedEnvironmentCurrent(record, baseline) {
-  if (!record.environmentOrigins || !baseline) return false;
+  if (!record.environmentOrigins || !baseline || record.environmentBaselineSha256 !== baselineDigest(baseline)) return false;
   return Object.entries(record.environmentOrigins).every(([name, origin]) => origin &&
     (origin.baseline === null || /^[a-f0-9]{64}$/.test(origin.baseline)) &&
     ownHash(baseline, name) === origin.baseline &&

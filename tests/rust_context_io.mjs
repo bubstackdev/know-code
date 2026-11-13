@@ -45,6 +45,8 @@ assert.deepEqual(environmentRecord.environment, {CHANGED: 'after', ADDED: 'Cargo
 assert.deepEqual(environmentRecord.removedEnvironment, ['REMOVED']);
 assert(!Object.hasOwn(environmentRecord.environmentOrigins, 'MAKEFLAGS'));
 assert(capturedEnvironmentCurrent(environmentRecord, baselineEnvironment));
+assert(capturedEnvironmentCurrent(environmentRecord, Object.fromEntries(Object.entries(baselineEnvironment).reverse())));
+assert(!capturedEnvironmentCurrent(environmentRecord, environmentBaseline({...inheritedEnvironment, SAVED: 'changed untracked ambient value'})));
 assert(!capturedEnvironmentCurrent(environmentRecord, environmentBaseline({...inheritedEnvironment, CHANGED: 'different parent'})));
 assert(!capturedEnvironmentCurrent({...environmentRecord, environment: {...environmentRecord.environment, CHANGED: 'tampered'}}, baselineEnvironment));
 assert.throws(() => capturedEnvironment({}, {bad: 'raw inherited value'}), /hashed compiler environment/);
