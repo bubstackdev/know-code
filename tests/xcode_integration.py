@@ -190,8 +190,10 @@ def expanded_coverage():
     return expanded['coverage']
 
 
-def coverage():
+def coverage(expected_total=6):
     rows = expanded_coverage()
+    assert len(rows) == expected_total, rows
+    rows = [row for row in rows if row['language'] == 'swift']
     assert len(rows) == 6, rows
     assert all(row['language'] == 'swift' and row['project_path'] == 'Probe.xcodeproj/project.pbxproj'
                and row['configuration'] == 'Debug' and row['analysis_options']['swiftExtractionPolicy'] == 1
@@ -329,6 +331,43 @@ assert dependency_source.read_bytes() == saved_dependency
 graph_checks(contexts)
 guards()
 CHECKS.append('recreated_compiler_source_automatically_repairs_both_SDK_graphs')
+
+# A rejected Xcode configuration must not discard an unrelated provider's new
+# facts. The .7 bridge supplies the typed metadata-command rejection receipt;
+# unexpected crashes/transport failures remain a different failure path.
+sibling = WORKSPACE / 'sibling.ts'
+sibling.write_text('export function healthySibling() { return 7; }\n')
+generation = ready('healthy-sibling', generation)
+assert coverage(expected_total=7).keys() == contexts.keys()
+assert len(symbols('healthySibling')) == 1
+saved_project = pbx.read_bytes()
+try:
+    pbx.write_text('this is deliberately invalid saved Xcode project data\n')
+    generation = ready('rejected-xcode-project', generation)
+    mixed = expanded_coverage()
+    healthy = [row for row in mixed if row['language'] == 'typescript']
+    unavailable = [row for row in mixed if row['language'] == 'swift']
+    assert len(mixed) == 3 and len(healthy) == 1 and len(unavailable) == 2, mixed
+    assert healthy[0]['status'] == 'complete' and not healthy[0]['diagnostic_counts'].get('error', 0), healthy
+    assert {row['analysis_options']['platform'] for row in unavailable} == {'iphoneos', 'iphonesimulator'}
+    assert all(row['status'] == 'partial' and row['analysis_options']['supported'] is False
+               and row['analysis_options']['preparation'] == 'unavailable'
+               and any(item['code'] == 'xcode_metadata_unavailable'
+                       for item in row.get('diagnostics', [])) for row in unavailable), unavailable
+    assert len(symbols('healthySibling')) == 1
+    assert not symbols('contextEntry()') and not symbols('dependencyEntry()'), 'Rejected Xcode configuration retained old current bodies'
+    guards()
+    CHECKS.append('typed_Xcode_metadata_rejection_publishes_healthy_TypeScript_sibling')
+finally:
+    pbx.write_bytes(saved_project)
+generation = ready('rejected-xcode-project-repair', generation)
+restored = coverage(expected_total=7)
+assert restored.keys() == contexts.keys()
+assert all(not row['diagnostic_counts'].get('error', 0) for row in restored.values()), restored
+assert pbx.read_bytes() == saved_project and len(symbols('healthySibling')) == 1
+graph_checks(contexts)
+guards()
+CHECKS.append('saved_Xcode_project_repair_restores_both_SDK_graphs_beside_healthy_sibling')
 
 result = {'passed': True, 'profile': PROFILE, 'run': str(RUN), 'database': DATABASE,
           'bridge': str(BRIDGE), 'generation': generation, 'checks': CHECKS,
