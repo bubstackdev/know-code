@@ -288,6 +288,8 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
             const settings = await extensionRequest(client, 'textDocument/sourceKitOptions', {textDocument: {uri: item.uri}, target: target.id, language: 'swift', purpose: 'index'});
             if (!settings?.compilerArguments?.length) { targetDiagnostics.push(diagnostic('xcode_compiler_options_missing', `No compiler options for ${file}`, relative(root, project))); continue; }
             const args = semanticArguments(settings.compilerArguments), sdkIndex = args.indexOf('-sdk'), targetIndex = args.indexOf('-target'), triple = args[targetIndex + 1];
+            const moduleIndex = args.indexOf('-module-name');
+            if (moduleIndex < 0 || !args[moduleIndex + 1]) throw problem('xcode_module_name_unavailable', `The compiler context for ${target.displayName} supplied no Swift module name; correct/select valid project build settings and refresh. No name was guessed from the target label.`);
             if (sdkIndex < 0 || fs.realpathSync(args[sdkIndex + 1]) !== sdkPath || targetIndex < 0 || !triple?.startsWith('arm64-apple-ios') || triple.endsWith('-simulator') !== (platform === 'iphonesimulator')) throw problem('xcode_platform_mismatch', 'Compiler options did not preserve the selected arm64 device/simulator SDK context; no arguments were relabeled.');
             let source;
             try { source = sourceFile(file, root); } catch (error) { throw problem('xcode_source_encoding_unavailable', error.message); }
