@@ -7,8 +7,8 @@ fetch/build dependencies during ordinary queries.
 
 `recipe.json` pins upstream sourcekit-xcode-bsp, all eight Swift dependencies,
 SwiftBuild, the dependency lock and the seven-file patch. `know-code.patch`
-contains the reviewed wired08 behavior plus one modification-notice comment per
-changed file. `MODIFICATIONS.md` identifies those changes. The earlier tested
+contains the reviewed wired08 behavior, per-file modification notices and the
+`.7` bound metadata-command rejection boundary. `MODIFICATIONS.md` identifies those changes. The earlier tested
 binary remains a reference, not a substitute for building this source.
 
 The bridge's runtime layout is intentionally flat: `sourcekit-xcode-bsp`,
@@ -64,7 +64,7 @@ After a separately reviewed successful build and relevant validation, copy the
 entire `runtime/` directory to:
 
 ```text
-~/.local/share/know-code/tools/xcode-bridge/index-only.6-notice1/
+~/.local/share/know-code/tools/xcode-bridge/index-only.7-notice1/
 ```
 
 Place a symlink named `sourcekit-xcode-bsp` in `~/.local/bin` pointing directly
@@ -87,8 +87,6 @@ The wired08 research runtime used macOS 27.2/Xcode 27.2 on Apple Silicon. Its
 185 files occupied about 90.44 MiB before this recipe's additional source/license
 provenance files. Source preparation, signing/notarization, installation, older
 macOS/Xcode compatibility and whole-workspace performance are distinct checks.
-The deployment target `15.0` does not certify operation on macOS 15. The
-notice-comment source variant has no new binary/platform receipt until built
-and tested. See [the adoption decision](../../docs/XCODE_BRIDGE_DECISION.md),
+The deployment target `15.0` does not certify operation on macOS 15. The `.7` source has no new binary/platform receipt until built and tested. See [the adoption decision](../../docs/XCODE_BRIDGE_DECISION.md),
 [Atelier qualification](../../docs/XCODE_ATELIER_QUALIFICATION.md) and
 [package-cache qualification](../../docs/XCODE_PACKAGE_CACHE_QUALIFICATION.md).

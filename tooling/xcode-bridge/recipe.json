@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
-  "recipe_id": "index-only.6-notice1",
+  "recipe_id": "index-only.7-notice1",
   "executable_name": "sourcekit-xcode-bsp",
-  "cli_identity": "0.1.0-know-code-index-only.6",
+  "cli_identity": "0.1.0-know-code-index-only.7",
   "upstream": {
     "url": "https://github.com/slime-studio/sourcekit-xcode-bsp.git",
     "revision": "726ce706cf18ffb7ed402bb44b2e47c0960076eb"
   },
-  "patch_sha256": "bd7ccbaa61fd4e9ecd43bb67dc8490c2af105ce3dbc260ba4f080d40ab076c52",
+  "patch_sha256": "6173939abd4e8c199d2ac8646a730ebc71be4f4231225092143071cd9cebe51a",
   "package_manifest_sha256": "7647a53b17f8b9c1d9495b224b7c1fc151cf3a79d0675bee172b84c71cb1853a",
   "package_resolved_sha256": "a6ba85378f3ea34b3cd720e70c052f65f9bd40bddfea21d27c56a301ca10d6b4",
   "changed_files": {
     "Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift": {
       "upstream_sha256": "bb9b69a5375e7a2fd8f64f89bf92456630f389aa73a1e65ce0cc032ec3218986",
       "qualified_sha256": "3bdc7faae656c71458f5ac044ae6f96efbea1aeac064ee42830fc331c86d9df4",
-      "distributed_sha256": "0777ed452b5982197197515c28d86ff9924ffb1d3e164ba9857fe17ac6c47907"
+      "distributed_sha256": "79f72f0be3f7d4ea5d659ed1a189141226e8c1246aa32e1ad0d0bdb9d29e05e0"
     },
     "Sources/SourceKitXcodeBSP/Bootstrap/KnowCodeBuildServer.swift": {
       "upstream_sha256": null,
@@ -24,17 +24,17 @@
     "Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift": {
       "upstream_sha256": "3aa6b9b3068da72ebe678727abcd5b266bfacc127d5524e828e22a866aa97348",
       "qualified_sha256": "296740fa2e4ac8744ad7c9ce025d7e6075174ac694819bcd1b20c3af28db5256",
-      "distributed_sha256": "ca1e706fbce3a47c6941a561acd9c9c2a9fcd8974bf20f2e2fdfc45d7d4cacf3"
+      "distributed_sha256": "9c3a561294d5ca51583c248b2197d4e3f0ac1c4fc2345681fb12f94ac5c2703e"
     },
     "Sources/SourceKitXcodeBSP/Xcode/PIFExport.swift": {
       "upstream_sha256": null,
       "qualified_sha256": "6b3bcb579862ea84f79e61ae6c792611aea3a7d697484d588fbfefe25c022985",
-      "distributed_sha256": "919c97592e333d6ea3e907835e142d9561b79a819215e58c1f73bec9a8ff7289"
+      "distributed_sha256": "829759679ecde2e92a43b3a094fa1e16ac8f928c693fcced7219f21e1f221266"
     },
     "Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift": {
       "upstream_sha256": "6400119b273985960caec7d8f1657d0cd5921dd20c289d2edf2d53a24aaba24d",
       "qualified_sha256": "85f7a19e1aaba6d3a1fbe663dc9d013f0668c949355fb1a0053647c633d47c36",
-      "distributed_sha256": "98d6ebf7434986cc9e2afc22997238b43b81642e4a85a14298aa389f512f0d85"
+      "distributed_sha256": "83b447897700d263fb43c2610b6012aecee36ad07d30b13137317b0df4d8b7b6"
     },
     "Sources/SourceKitXcodeBSP/Xcode/SchemeSelection.swift": {
       "upstream_sha256": null,
@@ -44,7 +44,7 @@
     "Sources/sourcekit-xcode-bsp/SourcekitXcodeBspCommand.swift": {
       "upstream_sha256": "1a5cedaa05a24e812e20a63c9fe670b23926d047f9ff54cb5423b84c40b3d533",
       "qualified_sha256": "fc15cd5bc1d246f600b299e40782c8f5aada5b05ce5d11ba789b6c6e5ceaec80",
-      "distributed_sha256": "318985db290c090a9b14f00bdffd00d6931847b0617a7aed0591fb4d7298b640"
+      "distributed_sha256": "f952e79c9e3081e1ef08e69e5af6fb40fd5ee63227159dab92c15fce7d77acdb"
     }
   },
   "dependencies": {
@@ -95,7 +95,9 @@
     "packet_manifest_sha256": "47fc04197ef57f8d55d059fc34aeb50fbb4ce9c87c18275c8eb6f8537a3a3582",
     "bridge_sha256": "f22c0ae8fbc0ce85ac9481fbdfe8f4377e454251d8055f7b80b81809dabdbfc1",
     "service_sha256": "f266304adbb8df5b226324315dd7dc9967e8e2465c3f8690d440f008ebee0884",
-    "difference": "The distributed source adds one prominent modification-notice comment to each of the seven qualified changed Swift files. It requires a new source-bound build and relevant validation; the old binary receipt is not reused."
+    "difference": "The .7 source adds bound natural metadata-command rejection receipts, direct selected xcodebuild termination proof and clean finalization; all seven changed Swift files retain modification notices. Earlier .6 binary evidence is not .7 validation; a new matching build and focused gates are required.",
+    "previous_recipe_id": "index-only.6-notice1",
+    "previous_recipe_sha256": "1a24167714616c54e385d52fb10222c4af158cb9fb6dee3c52d70e1b71a4c731"
   },
   "qualified_environment": {
     "macos": "27.2",

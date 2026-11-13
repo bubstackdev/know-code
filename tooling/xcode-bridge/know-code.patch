@@ -8,7 +8,7 @@ diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift b/So
  import Foundation
  import LanguageServerProtocol
  import LanguageServerProtocolTransport
-@@ -57,21 +59,27 @@
+@@ -57,21 +59,28 @@
                  platform: config.platform
              )
  
@@ -22,7 +22,8 @@ diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift b/So
 -                workspacePath: workspacePath
 +            let exported = try await OwnedPIFExport.create(
 +                workspacePath: workspacePath, schemePath: config.schemePath, buildRoot: buildRoot,
-+                clonedSourcePackagesDirPath: config.clonedSourcePackagesDirPath, packageCachePath: config.packageCachePath
++                clonedSourcePackagesDirPath: config.clonedSourcePackagesDirPath, packageCachePath: config.packageCachePath,
++                binding: try MetadataRejectionBinding.make(config: config)
 +            )
 +            buildRequest.parameters.configurationName = exported.selection.configuration
 +            buildRequest.containerPath = workspacePath
@@ -45,7 +46,28 @@ diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift b/So
                  connection: connection
              )
          } catch {
-@@ -137,30 +145,89 @@
+@@ -82,7 +91,7 @@
+             try await session.close()
+         } catch {
+             logger.error("Failed to close build service session: \(error)")
+-            if runError == nil {
++            if runError == nil || runError.map({ $0 is MetadataCommandRejected }) == true {
+                 runError = error
+             }
+         }
+@@ -90,6 +99,11 @@
+         await serviceProvider.close()
+ 
+         if let runError {
++            if let rejected = runError as? MetadataCommandRejected {
++                try Task.checkCancellation()
++                try rejected.writeTerminalOutcome()
++                throw MetadataCommandRejectedExit()
++            }
+             throw runError
+         }
+     }
+@@ -137,30 +151,89 @@
              buildRequest.parameters.activeRunDestination = Self.makeRunDestination(for: platform)
          }
  
@@ -146,7 +168,7 @@ diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift b/So
          connection: JSONRPCConnection
      ) async throws {
          guard let realSession = session as? RealBuildServiceSession else {
-@@ -170,28 +237,10 @@
+@@ -170,28 +243,10 @@
          try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
              // Guard against double-resume: exitHandler and closeHandler can both fire
              let resumed = OSAllocatedUnfairLock(initialState: false)
@@ -175,7 +197,7 @@ diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift b/So
                  let alreadyResumed = resumed.withLock { val -> Bool in
                      if val { return true }
                      val = true
-@@ -226,59 +275,13 @@
+@@ -226,59 +281,13 @@
                  }
              )
  
@@ -391,12 +413,19 @@ diff --git a/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift b/Sources/Sourc
  import Foundation
  
  /// Configuration loaded from buildServer.json.
-@@ -15,6 +16,13 @@
+@@ -15,6 +16,20 @@
      /// If not specified, SwiftBuild uses priority order (macOS > iPhone Simulator > etc.).
      public let platform: String?
  
 +    /// Know Code's selected saved shared scheme; nil selects the sole shared scheme.
 +    public let schemePath: String?
++
++    /// Optional per-open failure-proof binding; absent preserves ordinary BSP use.
++    public let metadataJobNonce: String?
++    public let metadataInputSha256: [String: String]?
++    public let metadataMissingInputs: [String]?
++    public let metadataToolchainIdentity: String?
++    public let metadataCompilerPath: String?
 +
 +    /// Existing centrally owned outputs from common dependency preparation.
 +    public let clonedSourcePackagesDirPath: String?
@@ -405,11 +434,16 @@ diff --git a/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift b/Sources/Sourc
      /// Whether to synchronously serialize generated build descriptions before notifying clients.
      /// When omitted, the server defaults to true.
      public let synchronousBuildDescriptionSerialization: Bool?
-@@ -28,12 +36,18 @@
+@@ -28,12 +43,28 @@
          workspace: String,
          buildRoot: String? = nil,
          platform: String? = nil,
 +        schemePath: String? = nil,
++        metadataJobNonce: String? = nil,
++        metadataInputSha256: [String: String]? = nil,
++        metadataMissingInputs: [String]? = nil,
++        metadataToolchainIdentity: String? = nil,
++        metadataCompilerPath: String? = nil,
 +        clonedSourcePackagesDirPath: String? = nil,
 +        packageCachePath: String? = nil,
          synchronousBuildDescriptionSerialization: Bool? = nil,
@@ -419,6 +453,11 @@ diff --git a/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift b/Sources/Sourc
          self.buildRoot = buildRoot
          self.platform = platform
 +        self.schemePath = schemePath
++        self.metadataJobNonce = metadataJobNonce
++        self.metadataInputSha256 = metadataInputSha256
++        self.metadataMissingInputs = metadataMissingInputs
++        self.metadataToolchainIdentity = metadataToolchainIdentity
++        self.metadataCompilerPath = metadataCompilerPath
 +        self.clonedSourcePackagesDirPath = clonedSourcePackagesDirPath
 +        self.packageCachePath = packageCachePath
          self.synchronousBuildDescriptionSerialization = synchronousBuildDescriptionSerialization
@@ -428,7 +467,7 @@ diff --git a/Sources/SourceKitXcodeBSP/Xcode/PIFExport.swift b/Sources/SourceKit
 new file mode 100644
 --- /dev/null
 +++ b/Sources/SourceKitXcodeBSP/Xcode/PIFExport.swift
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,219 @@
 +// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
 +import Foundation
 +import CryptoKit
@@ -439,7 +478,7 @@ new file mode 100644
 +    let selection: XcodeSchemeSelection
 +
 +    static func create(workspacePath: String, schemePath: String?, buildRoot: String,
-+        clonedSourcePackagesDirPath: String?, packageCachePath: String?) async throws -> Self {
++        clonedSourcePackagesDirPath: String?, packageCachePath: String?, binding: MetadataRejectionBinding? = nil) async throws -> Self {
 +        let clones = try preparedDirectory(clonedSourcePackagesDirPath, field: "clonedSourcePackagesDirPath")
 +        let cache = try preparedDirectory(packageCachePath, field: "packageCachePath")
 +        let context = try XcodeSchemeSelection.metadataContext(workspacePath: workspacePath, selectedPath: schemePath)
@@ -452,6 +491,18 @@ new file mode 100644
 +        guard ["xcodeproj", "xcworkspace"].contains(kind) else {
 +            throw NSError(domain: "KnowCodeXcodeSelection", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expected an Xcode project or workspace container"])
 +        }
++        try binding?.verify(workspacePath: workspacePath, context: context)
++        // Observe xcodebuild itself, not a proxy process that could translate
++        // the actual child's signal into an ordinary wrapper exit status.
++        let lookup = try await ProcessRunner().run(executableURL: URL(fileURLWithPath: "/usr/bin/xcrun"), arguments: ["--find", "xcodebuild"])
++        let executablePath = String(decoding: lookup.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
++        guard let developer = ProcessInfo.processInfo.environment["DEVELOPER_DIR"], developer.hasPrefix("/"),
++              executablePath.hasPrefix("/"), !executablePath.contains("\n"),
++              URL(fileURLWithPath: executablePath).resolvingSymlinksInPath().path ==
++                URL(fileURLWithPath: developer).appendingPathComponent("usr/bin/xcodebuild").resolvingSymlinksInPath().path else {
++            throw metadataProofError("Metadata requires the selected Xcode's direct xcodebuild executable")
++        }
++        let executableSha256 = try metadataDigest(executablePath, maximumBytes: 64 * 1024 * 1024)
 +        let arguments = ["xcodebuild", "-dumpPIF", output.path, kind == "xcodeproj" ? "-project" : "-workspace", workspacePath,
 +            "-scheme", context.schemeName, "-configuration", context.configuration, "-derivedDataPath", metadataDerivedData,
 +            "-clonedSourcePackagesDirPath", clones, "-packageCachePath", cache,
@@ -459,15 +510,32 @@ new file mode 100644
 +        // Retain the exact attempted metadata command even when the selected
 +        // tool rejects an absent/incomplete prepared cache. This is not a
 +        // preparation or successful-export checkpoint.
-+        let attempt = ["arguments": arguments, "clonedSourcePackagesDirPath": clones,
++        var attempt = ["arguments": arguments, "clonedSourcePackagesDirPath": clones,
 +            "packageCachePath": cache, "packageVersionPolicy": "saved_lock_versions_no_updates",
 +            "metadataDerivedDataPath": metadataDerivedData, "metadataSchemePath": context.schemePath,
 +            "metadataSchemeName": context.schemeName, "metadataConfiguration": context.configuration,
 +            "metadataSchemeSha256": context.schemeSha256,
 +            "cliFlagsGuaranteeOfflineExecution": false] as [String: Any]
-+        try JSONSerialization.data(withJSONObject: attempt, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-+            .write(to: root.appendingPathComponent("know-code-project-export-request.json"), options: .atomic)
-+        let capture = try await ProcessRunner().run(executableURL: URL(fileURLWithPath: "/usr/bin/xcrun"), arguments: arguments, monitoredFile: output)
++        attempt["executablePath"] = executablePath
++        attempt["executableSha256"] = executableSha256
++        attempt["platform"] = binding?.platform
++        if let binding { for (key, value) in binding.fields { attempt[key] = value } }
++        let attemptPath = root.appendingPathComponent("know-code-project-export-request.json")
++        let attempted = try JSONSerialization.data(withJSONObject: attempt, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
++        guard attempted.count <= 2 * 1024 * 1024 else { throw metadataProofError("Metadata attempt exceeds bounded proof allowance") }
++        try attempted.write(to: attemptPath, options: .atomic)
++        let capture: ProcessRunner.Output
++        do {
++            capture = try await ProcessRunner().run(executableURL: URL(fileURLWithPath: executablePath), arguments: Array(arguments.dropFirst()), monitoredFile: output)
++        } catch let failure as ProcessRunner.RunError {
++            guard case .nonZeroExit(let status, let captured) = failure, let binding else { throw failure }
++            try Task.checkCancellation()
++            try binding.verify(workspacePath: workspacePath, context: context)
++            throw MetadataCommandRejected(binding: binding, workspacePath: workspacePath, context: context,
++                buildRoot: root, attemptPath: attemptPath, attemptSha256: metadataHash(attempted),
++                executablePath: executablePath, executableSha256: executableSha256,
++                arguments: Array(arguments.dropFirst()), exitStatus: status, output: captured)
++        }
 +        let bytes = try boundedXcodeData(output.path, maximumBytes: 64 * 1024 * 1024)
 +        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
 +        let selected = try XcodeSchemeSelection.resolve(workspacePath: workspacePath, selectedPath: schemePath, pif: bytes)
@@ -476,6 +544,7 @@ new file mode 100644
 +            throw NSError(domain: "KnowCodeXcodeSelection", code: 2,
 +                userInfo: [NSLocalizedDescriptionKey: "Saved scheme changed during metadata export; refresh from a coherent saved snapshot"])
 +        }
++        try binding?.verify(workspacePath: workspacePath, context: context)
 +        struct Proof: Encodable {
 +            let arguments: [String]
 +            let pifPath: String
@@ -517,10 +586,111 @@ new file mode 100644
 +        return URL(fileURLWithPath: value).resolvingSymlinksInPath().path
 +    }
 +}
++
++/// Deliberate CLI exit is allowed only after a bound terminal proof is durable.
++public struct MetadataCommandRejectedExit: Error {}
++
++struct MetadataRejectionBinding: Sendable {
++    let nonce: String
++    let inputSha256: [String: String]
++    let missingInputs: [String]
++    let toolchainIdentity: String
++    let compilerPath: String
++    let platform: String
++
++    static func make(config: BuildServerConfig) throws -> Self? {
++        let supplied = config.metadataJobNonce != nil || config.metadataInputSha256 != nil ||
++            config.metadataMissingInputs != nil || config.metadataToolchainIdentity != nil || config.metadataCompilerPath != nil
++        guard supplied else { return nil } // Existing ordinary BSP clients do not gain failure-proof authority.
++        guard let nonce = config.metadataJobNonce, validMetadataHash(nonce),
++              let inputs = config.metadataInputSha256, !inputs.isEmpty, inputs.count <= 4096,
++              let missing = config.metadataMissingInputs, missing.count <= 4096,
++              let identity = config.metadataToolchainIdentity, validMetadataHash(identity),
++              let compiler = config.metadataCompilerPath, compiler.hasPrefix("/"),
++              let platform = config.platform, ["iphoneos", "iphonesimulator"].contains(platform),
++              inputs.allSatisfy({ $0.key.hasPrefix("/") && validMetadataHash($0.value) }),
++              missing.allSatisfy({ $0.hasPrefix("/") && inputs[$0] == nil }), Set(missing).count == missing.count else {
++            throw metadataProofError("Incomplete or invalid per-open metadata rejection binding")
++        }
++        let value = Self(nonce: nonce, inputSha256: inputs, missingInputs: missing,
++            toolchainIdentity: identity, compilerPath: compiler, platform: platform)
++        guard try JSONSerialization.data(withJSONObject: value.fields).count <= 1024 * 1024 else {
++            throw metadataProofError("Metadata input binding exceeds bounded proof allowance")
++        }
++        return value
++    }
++    var fields: [String: Any] {
++        ["metadataJobNonce": nonce, "metadataInputSha256": inputSha256, "metadataMissingInputs": missingInputs,
++         "metadataToolchainIdentity": toolchainIdentity, "metadataCompilerPath": compilerPath]
++    }
++    func verify(workspacePath: String, context: XcodeSchemeSelection.MetadataContext) throws {
++        let workspace = URL(fileURLWithPath: workspacePath)
++        let required = workspace.appendingPathComponent(workspace.pathExtension == "xcodeproj" ? "project.pbxproj" : "contents.xcworkspacedata").path
++        guard inputSha256[required] != nil, inputSha256[context.schemePath] == context.schemeSha256 else {
++            throw metadataProofError("Metadata binding omits the exact project or saved scheme")
++        }
++        for (filename, expected) in inputSha256 {
++            guard try metadataDigest(filename) == expected else { throw metadataProofError("Saved metadata input changed: \(filename)") }
++        }
++        for filename in missingInputs where FileManager.default.fileExists(atPath: filename) {
++            throw metadataProofError("Previously missing metadata input appeared: \(filename)")
++        }
++    }
++}
++
++struct MetadataCommandRejected: Error, Sendable {
++    let binding: MetadataRejectionBinding
++    let workspacePath: String
++    let context: XcodeSchemeSelection.MetadataContext
++    let buildRoot: URL
++    let attemptPath: URL
++    let attemptSha256: String
++    let executablePath: String
++    let executableSha256: String
++    let arguments: [String]
++    let exitStatus: Int32
++    let output: ProcessRunner.Output
++
++    func writeTerminalOutcome() throws {
++        try Task.checkCancellation()
++        try binding.verify(workspacePath: workspacePath, context: context)
++        guard exitStatus != 0,
++              try metadataDigest(attemptPath.path, maximumBytes: 2 * 1024 * 1024) == attemptSha256,
++              try metadataDigest(executablePath, maximumBytes: 64 * 1024 * 1024) == executableSha256 else {
++            throw metadataProofError("Metadata terminal proof does not match the completed attempt")
++        }
++        var receipt = binding.fields
++        receipt.merge(["version": 1, "phase": "metadata_command", "outcome": "rejected",
++            "workspacePath": workspacePath, "schemePath": context.schemePath, "configuration": context.configuration,
++            "platform": binding.platform, "attemptSha256": attemptSha256,
++            "executablePath": executablePath, "executableSha256": executableSha256, "arguments": arguments,
++            "terminationReason": "exit", "exitStatus": exitStatus, "stdoutEOF": true, "stderrEOF": true,
++            "bridgeCleanupSucceeded": true, "expectedBridgeExit": 65,
++            "stdout": String(decoding: output.stdout.suffix(16384), as: UTF8.self),
++            "stderr": String(decoding: output.stderr.suffix(16384), as: UTF8.self)]) { _, current in current }
++        let bytes = try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
++        guard bytes.count <= 2 * 1024 * 1024 else { throw metadataProofError("Metadata terminal receipt exceeds bounded allowance") }
++        try Task.checkCancellation()
++        try bytes.write(to: buildRoot.appendingPathComponent("know-code-metadata-outcome.json"), options: .atomic)
++    }
++}
++
++private func validMetadataHash(_ value: String) -> Bool {
++    value.utf8.count == 64 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
++}
++private func metadataHash(_ bytes: Data) -> String {
++    SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
++}
++private func metadataDigest(_ filename: String, maximumBytes: Int = 8 * 1024 * 1024) throws -> String {
++    metadataHash(try boundedXcodeData(filename, maximumBytes: maximumBytes))
++}
++private func metadataProofError(_ message: String) -> NSError {
++    NSError(domain: "KnowCodeMetadataProof", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
++}
 diff --git a/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift b/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift
 --- a/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift
 +++ b/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift
-@@ -1,72 +1,117 @@
+@@ -1,72 +1,126 @@
 +// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
  import Foundation
 -import SWBUtil
@@ -542,12 +712,14 @@ diff --git a/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift b/Sources/Sourc
          case launchFailed(underlying: any Error)
 -        /// The process launched and ran to completion but exited with a non-zero status.
          case nonZeroExit(terminationStatus: Int32, output: Output)
++        case signalled(signal: Int32, output: Output)
 +        case resourceLimited(String)
 +        case captureFailed(String)
 +
 +        public var errorDescription: String? {
 +            switch self {
 +            case .launchFailed(let error): "Metadata process could not start: \(error.localizedDescription)"
++            case .signalled(let signal, _): "Metadata process terminated by signal \(signal)"
 +            case .nonZeroExit(let status, let output): "Metadata process exited \(status): \(String(decoding: output.stderr.suffix(16384), as: UTF8.self))"
 +            case .resourceLimited(let reason), .captureFailed(let reason): reason
 +            }
@@ -669,11 +841,17 @@ diff --git a/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift b/Sources/Sourc
 -            try await process.run(interruptible: true)
 -        } catch {
 -            throw RunError.launchFailed(underlying: error)
--        }
++        try Task.checkCancellation()
++        guard ContinuousClock.now < deadline else { throw RunError.resourceLimited("Metadata deadline expired at process completion") }
++        let finalSize = monitoredFile.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber }?.uint64Value ?? 0
++        guard finalSize <= 64 * 1024 * 1024 else { throw RunError.resourceLimited("Metadata PIF exceeded 64 MiB allowance at process completion") }
++        let output = Output(stdout: stdout, stderr: stderr)
++        guard process.terminationReason == .exit else {
++            throw RunError.signalled(signal: process.terminationStatus, output: output)
+         }
 -
 -        let output = await Output(stdout: stdoutTask.value, stderr: stderrTask.value)
 -
-+        let output = Output(stdout: stdout, stderr: stderr)
          guard process.terminationStatus == 0 else {
              throw RunError.nonZeroExit(terminationStatus: process.terminationStatus, output: output)
          }
@@ -909,7 +1087,31 @@ diff --git a/Sources/sourcekit-xcode-bsp/SourcekitXcodeBspCommand.swift b/Source
      static let configuration = CommandConfiguration(
          abstract: "A Build Server Protocol server for Xcode projects, for usage with SourceKit-LSP.",
 -        version: "0.1.0",
-+        version: "0.1.0-know-code-index-only.6",
++        version: "0.1.0-know-code-index-only.7",
          subcommands: [Serve.self, InitCommand.self],
          // The LSP client launches the bare binary (no subcommand) per buildServer.json's
          // `argv`, so running the server must remain the default behavior.
+@@ -51,12 +52,16 @@
+ 
+         // Start server
+         let bootstrap = BuildServerBootstrap()
+-        try await bootstrap.start(
+-            config: config,
+-            workspacePath: workspacePath,
+-            buildRoot: buildRoot,
+-            connection: connection,
+-            serviceProvider: serviceProvider
+-        )
++        do {
++            try await bootstrap.start(
++                config: config,
++                workspacePath: workspacePath,
++                buildRoot: buildRoot,
++                connection: connection,
++                serviceProvider: serviceProvider
++            )
++        } catch is MetadataCommandRejectedExit {
++            throw ExitCode(65)
++        }
+     }
+ }
