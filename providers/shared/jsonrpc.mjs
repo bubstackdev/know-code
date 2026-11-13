@@ -112,8 +112,8 @@ export class JsonRpcProcess {
     const id = this.nextId++;
     return new Promise((resolve,reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`${this.program} timed out: ${method}`)); this.terminate();
+        this.fail(new Error(`${this.program} timed out: ${method}`));
+        this.terminate();
       },this.timeout);
       this.pending.set(id,{resolve,reject,timer,method});
       try { this.write({id,method,params}); }

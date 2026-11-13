@@ -135,14 +135,20 @@ for (const [mode,pattern] of [['exit',/exited \(7\)/], ['truncated',/exited/],
 }
 
 await withChild('hang', async (rpc, exit) => {
-  await assert.rejects(rpc.request('never', {}), error => {
-    assert.match(error.message, /timed out: never/);
-    assert.equal(error.processExit, undefined);
-    return true;
-  });
+  const results = await Promise.allSettled([rpc.request('never', {}), rpc.request('concurrent', {})]);
+  assert.ok(results.every(result => result.status === 'rejected'));
+  const error = results[0].reason;
+  assert.match(error.message, /timed out: never/);
+  assert.equal(error.processExit, undefined);
+  assert.equal(results[1].reason, error);
+  assert.equal(rpc.pending.size, 0);
+  assert.equal(rpc.failure, error);
   await exit;
+  assert.equal(rpc.failure, error);
+  assert.equal(error.processExit, undefined);
+  await assert.rejects(rpc.request('after-exit', {}), rejected => rejected === error);
 }, {timeout:100});
-checks.push('request timeout terminates child');
+checks.push('request timeout fails all pending and preserves its cause after child exit');
 
 await withChild('hang', async rpc => {
   await assert.rejects(rpc.request('too-large', {text:'x'.repeat(8*1024*1024)}), /outgoing JSON-RPC frame exceeds/);
