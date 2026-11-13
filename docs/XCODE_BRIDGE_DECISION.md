@@ -73,3 +73,36 @@ The alternative is further planner research while retaining the Xcode release
 gate. The installed indexing-settings CLI already failed reliable SDK-context
 selection; owned-fixture success alone must not silently replace the accepted
 device/simulator requirement.
+
+## Packaging audit proposal — 2026-11-13
+
+This source audit proposes the remaining packaging work; it does **not**
+implement, qualify or select an archive/DMG layout or signing identifiers.
+The current pinned recipe is [index-only.7-notice1](../tooling/xcode-bridge/recipe.json);
+the earlier `.6` adoption evidence above retains its historical boundary.
+
+- Extend [the existing signing tool](../scripts/sign_packages.py) with a
+  separate bridge operation, preserving its exact three-archive common-runtime,
+  npm and NuGet contract. The [bridge builder](../tooling/xcode-bridge/build.py)
+  stages two native executables, `sourcekit-xcode-bsp` and
+  `SWBBuildServiceBundle`; both would require Developer ID hardened-runtime
+  signatures and timestamps.
+- Validate an exact two-entry native-payload signing transform. Regenerate
+  `know-code-xcode-bridge.json` inventory hashes/sizes from the **signed bytes**
+  while retaining the unsigned input inventory, recipe/source/dependency pins
+  and signing provenance. Preserve every other payload/resource, mode and
+  license. [Provider discovery](../providers/swift/xcode.mjs) verifies those
+  exact executable hashes; signing must not weaken that contract. The builder's
+  `staged_build_only` record is tool-build evidence, not the common runtime's
+  producer schema or release certification.
+- Extend the existing DMG/index/notarization and
+  [installed-package workflow](../tests/package_install.py) for optional tool
+  assets and actual installed device/simulator cases, following
+  [distribution provenance](PACKAGING.md) and the
+  [notarization operator workflow](reviews/NOTARIZATION_OPERATOR.md).
+  Whole-tool resources must work outside the checkout under normal security;
+  installing Xcode is not part of this proposal or current tooling.
+
+Archive/DMG layout, signing identifiers, final signed-tool installation and
+platform qualification remain separate decisions/checkpoints. No new product
+code, build, signing, installation or runtime check accompanies this section.
