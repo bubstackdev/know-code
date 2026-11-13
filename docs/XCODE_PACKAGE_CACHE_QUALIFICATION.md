@@ -96,3 +96,68 @@ These owned-fixture passes do not establish real-project completeness,
 production integration, native queries, installed behavior or bridge adoption.
 The protected Atelier snapshot and subsequent body-graph integration remain
 separate gates.
+
+## `.7` direct-launch environment regression and repair
+
+The `.7` metadata rejection boundary observes the selected `xcodebuild`
+executable directly, allowing a natural metadata-command exit to remain distinct
+from a signal. Initial normal dependency preparation still launched
+`/usr/bin/xcrun xcodebuild`. These two routes do not necessarily supply the same
+process environment to SwiftPM's environment-sensitive manifest cache.
+
+Both fresh hostile-plugin04 probes passed normal dependency resolve but failed
+strict metadata with `sandbox_apply: Operation not permitted` while attempting
+nested SwiftPM manifest evaluation. No plugin callback/prebuild/generated-source
+marker appeared. This remains a failed analysis result; marker absence does not
+turn metadata failure into a safety or readiness pass. Receipts remain at
+`.artifacts/implementation-0.0.3/xcode-plugin-probe-{device,simulator}-04/`.
+
+Packet05 changes **one orchestration line**: normal dependency resolve invokes
+`DEVELOPER_DIR/usr/bin/xcodebuild` directly, matching metadata. It preserves the
+inherited environment and existing analysis policy, lock handling, plugin
+fixture, scanners and typed module checks. Each run uses a fresh owned prefix;
+its path-dependent values naturally differ. No normal metadata/dumpPIF warm-up,
+SwiftPM sandbox disable, cache purge or permission expansion was introduced.
+
+Both SDK contexts pass the resulting finite hostile-plugin absence and typed
+package-module readiness gates:
+
+| Phase | Device05 | Simulator05 |
+| --- | --- | --- |
+| After normal dependency resolve | No execution/compilation evidence | No execution/compilation evidence |
+| After strict actual BSP metadata/dumpPIF | No execution/compilation evidence | No execution/compilation evidence |
+| After typed module preparation | No execution/compilation evidence; three proven empty auxiliary bookkeeping files retained separately | Same |
+
+Exact receipts:
+`.artifacts/implementation-0.0.3/xcode-plugin-probe-{device,simulator}-05/result.json`,
+per-stage `plugin-scan-*.json`, and each `actual/result.json`. The unchanged `.7`
+executable SHA-256 is
+`433a75674d8941d4a3b0585f283d18b72833dfb859833ec325cda716692e9758`;
+the same runtime manifest binds the04 and05 probes. The actual package-module
+result is `passed_wired_cache_metadata_and_typed_package_module_readiness` in
+both05 cases. This is a finite fixture result, not exhaustive plugin safety,
+whole-workspace performance or release certification.
+
+Production repair `9806ec8` uses the same selected direct executable for normal
+restoration and metadata, preserving repository/user environment semantics. It
+advances the existing preparation fingerprint to `xcode-preparation-2`, so old
+setup evidence does not silently certify the changed launch contract. No tool
+rebuild was required for this adapter/setup correction; the external `.7`
+source and binary remained frozen.
+
+The exact installed `xcodebuild` child-environment delta remains **unproven**.
+Light `xcrun`→owned-environment-helper probes establish changes to `CPATH`,
+`LIBRARY_PATH`, `MANPATH` and, for an ordinary helper tool, `SDKROOT`; only key
+hashes and selected nonsecret tool paths were recorded. The installed
+`xcrun(1)` documentation explicitly exempts build tools such as `xcodebuild`
+from the ordinary-tool SDKROOT injection, so the helper's SDKROOT result cannot
+be applied to `xcodebuild`. An attempted direct process-environment read was
+unavailable; an owned exact-tool-name fixture was rejected as an invalid
+developer directory. Those attempts are not actual-build-tool environment
+witnesses. Retained evidence is under the tooling worktree's
+`.artifacts/xcrun-buildtool-env-01/`.
+
+The supported conclusion is the observed launch-contract mismatch and its
+repair by using the same executable/environment route for both phases. Do not
+claim a particular variable caused the installed manifest-cache miss or
+reimplement undocumented `xcrun` environment mutations to force a cache hit.
