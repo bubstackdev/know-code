@@ -98,3 +98,21 @@ Notify 8.2.1's macOS backend stops and restarts its shared FSEvents stream when 
 The coordinator plans mutations first, batches additions/removals into one restart, holds the common input gate across that restart, then queues ordinary saved-input reconciliation for every registered available workspace before releasing the gate. Rescans do not force dependency restoration or bypass unchanged failed/cancelled baselines. Removing a root replans remaining workspaces' watches in the same batch because a root may also be another project's compiler-input parent. Individual path errors stay visible; failure to restart the shared stream stops the coordinator and retires its live owner rather than certifying unwatched data as current.
 
 The immediate nested atomic-save assertion in tests/coordinator.py deliberately runs without a sleep or explicit refresh. A failed combined upgrade regression retained a saved Welcome on disk while the index/manifest still held Hello; source review identified the unprotected restart gap. That failed run has no raw OS-event trace, so its exact callback timing is not asserted. Matching-candidate validation records the post-fix outcome separately.
+
+
+### Cursor enrollment and control responsiveness
+
+Cursor enrollment's disabled-database fence has a separate, memory-only mutex.
+WATCH/register still serializes enrollment with unregister under workspace
+entries, but clearing that fence does not wait for cursor retention/cache I/O.
+Cursor result files, pins, quotas and maintenance remain in the existing cursor
+state; the enrollment guard never spans I/O or acquisition of that state.
+Unregister still retires prior tokens, and re-registration does not revive them.
+
+This fixes a source-proven cross-lock risk, not an established cause for the
+failed `saved-xcode-qualification-09` control calls. The subsequent isolated
+`coordinator-admission-trace-01` did not reproduce the stall: all calls passed.
+The deterministic regression holds the actual cursor-state publication callback
+with channel barriers and exercises framed WATCH plus unrelated status, cancel
+and resource control using unchanged RPC budgets. Its execution remains pending
+with the shared validation owner; no query deadline or generic retry is added.
