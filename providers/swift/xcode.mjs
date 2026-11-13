@@ -264,7 +264,14 @@ function inspectManifests({projects, state, toolchain, previous, retry, onInputs
   return {version: 1, toolchain: toolchain.identity, inputs, unsupported};
 }
 
-function restoration({root, project, selection, state, bridge, toolchain, request, context, previous, key, fingerprint, onDiagnostic}) {
+export function retainedAnalysisInputs(plan, work, cacheDirectory) {
+  // Old plans can contain either spelling of central outputs. Do not realpath
+  // saved inputs: missing authored linked files must remain watched for repair.
+  return Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)
+    && !within(file, work) && !within(file, cacheDirectory)) : [];
+}
+
+function restoration({root, project, selection, state, work, cacheDirectory, bridge, toolchain, request, context, previous, key, fingerprint, onDiagnostic}) {
   const planFile = path.join(state, 'dependency-plan.json');
   let plan; try { plan = json(planFile); } catch { /* Explicit preparation will replace absent derived state. */ }
   if (previous?.fingerprint === fingerprint && !request.retryPreparation) {
@@ -292,7 +299,7 @@ function restoration({root, project, selection, state, bridge, toolchain, reques
     const result = run(executable, args, path.dirname(container(project)), env);
     if (result.status !== 0) throw Error(`${result.stdout}\n${result.stderr}`);
     const inputs = Object.fromEntries([...new Set([project, ...selection.inputs, ...toolchain.inputPaths])].filter(exists).map(file => [file, hash(fs.readFileSync(file))]));
-    plan = {inputs, analysisInputs: Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
+    plan = {inputs, analysisInputs: retainedAnalysisInputs(plan, work, cacheDirectory), outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
     put(planFile, plan);
   } catch (cause) { error = String(cause.message).slice(-16000); onDiagnostic(diagnostic('dependency_restore_failed', error, relative(root, project))); }
   send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
@@ -314,8 +321,9 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
   const key = `xcode:${project}`, fingerprint = hash(`${request.preparationFingerprint}:${toolchain.identity}:${bridge.manifestSha256}:${selection.schemePath}:xcode-preparation-2`);
   let previous = request.preparations.find(item => item.key === key);
   let plan; try { plan = json(path.join(state, 'dependency-plan.json')); } catch { /* First preparation is explicit below. */ }
+  const previousAnalysisInputs = retainedAnalysisInputs(plan, work, policy.cacheDirectory), jobAnalysisInputs = new Set();
   if (previous?.fingerprint === fingerprint && !previous.succeeded && !request.retryPreparation) return gap({root, project, toolchain, selection,
-    inputs: Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], error: problem('dependency_restore_failed', previous.error)});
+    inputs: previousAnalysisInputs, error: problem('dependency_restore_failed', previous.error)});
   // The fixed bridge's factory sets these same service keys. Supply one
   // coherent child environment to normal preparation and metadata as well.
   const env = {...toolchain.env, TMPDIR: path.join(state, 'tmp'), SWBBUILDSERVICE_PATH: bridge.service,
@@ -325,7 +333,6 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
   if (!Number.isSafeInteger(gitCount) || gitCount < 0 || gitCount > 1024) throw problem('xcode_preparation_environment', 'Invalid inherited Git configuration count');
   env.GIT_CONFIG_COUNT = String(gitCount + 2); env[`GIT_CONFIG_KEY_${gitCount}`] = 'core.hooksPath'; env[`GIT_CONFIG_VALUE_${gitCount}`] = '/dev/null';
   env[`GIT_CONFIG_KEY_${gitCount + 1}`] = 'protocol.ext.allow'; env[`GIT_CONFIG_VALUE_${gitCount + 1}`] = 'never';
-  const previousAnalysisInputs = Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], jobAnalysisInputs = new Set();
   let preparationFailed, preparationAttempted = false, unobservedContext = false;
   for (const platform of ['iphoneos', 'iphonesimulator']) {
     if (preparationFailed) { unobservedContext = true; gap({root, project, toolchain, selection, platform, inputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs])], error: preparationFailed}); continue; }
@@ -343,7 +350,7 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
         if (session) await close(session.client);
         const preparationRequest = {...request, retryPreparation: request.retryPreparation && !preparationAttempted};
         preparationAttempted = true;
-        const prepared = restoration({root, project, selection, state, bridge, toolchain: {...toolchain, env}, request: preparationRequest, context: attempt, previous, key, fingerprint, onDiagnostic: addDiagnostic});
+        const prepared = restoration({root, project, selection, state, work, cacheDirectory: policy.cacheDirectory, bridge, toolchain: {...toolchain, env}, request: preparationRequest, context: attempt, previous, key, fingerprint, onDiagnostic: addDiagnostic});
         plan = prepared.plan; previous = {key, fingerprint, succeeded: true, error: '', outputs: plan.outputs};
         session = await openBridge({root, bridge, project, selection, state, scratch, platform, env, toolchain, knownInputs: plan?.inputs && typeof plan.inputs === 'object' && !Array.isArray(plan.inputs) ? Object.keys(plan.inputs) : [], onDiagnostic: addDiagnostic});
         if (initialError) {

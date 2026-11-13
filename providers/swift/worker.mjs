@@ -73,8 +73,9 @@ try {
     groups.get(group).push(source);
   }
   const data = process.env.KNOW_CODE_DATA_DIR || path.join(os.homedir(), 'Library', 'Application Support', 'Know Code');
-  const work = policy?.cacheDirectory ?? path.join(data, 'workers', 'swift');
-  fs.mkdirSync(work, {recursive: true});
+  const cacheDirectory = policy?.cacheDirectory ?? path.join(data, 'workers', 'swift');
+  fs.mkdirSync(cacheDirectory, {recursive: true});
+  const work = fs.realpathSync(cacheDirectory);
   const scratch = fs.mkdtempSync(path.join(work, 'job-'));
   try {
     for (const project of projects) {

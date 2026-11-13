@@ -4,13 +4,16 @@ The validation owner supplies KNOW_CODE_TEST_XCODE_BRIDGE (executable or its
 runtime directory). This never installs a tool or touches the live coordinator.
 """
 from fixture_trust import grant_fixture
+from index_paths import physical_database
 from xcode_fixture import create
+from contextlib import closing
 import atexit
 import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
+import sqlite3
 import subprocess
 import time
 
@@ -28,7 +31,11 @@ assert BRIDGE.is_file(), BRIDGE
 BIN = RUN / 'bin'
 BIN.mkdir()
 (BIN / 'sourcekit-xcode-bsp').symlink_to(BRIDGE)
-ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'),
+DATA = RUN / 'physical-data'
+DATA.mkdir()
+DATA_ALIAS = RUN / 'data'
+DATA_ALIAS.symlink_to(DATA, target_is_directory=True)
+ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(DATA_ALIAS),
            KNOW_CODE_QUERY_SCOPE=str(RUN / 'query-admission'),
            PATH=str(BIN) + os.pathsep + os.environ['PATH'],
            DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
@@ -265,6 +272,8 @@ CHECKS += ['six_app_dependency_UI_contexts', 'saved_Test_configuration', 'native
 
 generated = [origin for row in contexts.values() for origin in row['analysis_options']['sourceOrigins'] if origin['generated']]
 assert generated, 'The owned asset catalog did not produce compiler-enrolled generated source'
+assert {row['analysis_options']['platform'] for row in contexts.values()
+        if any(origin['generated'] for origin in row['analysis_options']['sourceOrigins'])} == {'iphoneos', 'iphonesimulator'}
 for origin in generated:
     source = query({'op': 'source', 'artifact_id': origin['artifactId'], 'max_bytes': 65536}, equivalent=True)['source']
     assert source['artifact_id'] == origin['artifactId'] and source['text'], source
@@ -273,6 +282,16 @@ asset_symbols = query({'op': 'symbols', 'query': 'fixtureTint', 'limit': 100}, e
 assert any(location['artifact_id'] in generated_ids and location['generated']
            for symbol in asset_symbols for location in symbol.get('locations', [])), asset_symbols
 CHECKS.append('compiler_generated_asset_source_retained_and_labeled')
+with closing(sqlite3.connect(f'file:{physical_database(DATABASE)}?mode=ro', uri=True)) as connection:
+    input_rows = connection.execute('SELECT c.id,c.input_paths_json FROM generation_units u JOIN compilations c '
+        'ON c.generation=u.owner_generation AND c.id=u.compilation_id '
+        "WHERE u.generation=(SELECT current_generation FROM state) AND c.language='swift'").fetchall()
+assert len(input_rows) == 6, input_rows
+saved_inputs = {compilation: json.loads(encoded) for compilation, encoded in input_rows}
+assert all(not any(Path(file).is_relative_to(boundary) for boundary in (DATA, DATA_ALIAS))
+           for inputs in saved_inputs.values() for file in inputs), saved_inputs
+(RUN / 'saved-compilation-inputs.json').write_text(json.dumps(saved_inputs, indent=2))
+CHECKS.append('data_alias_generated_sources_excluded_from_saved_compilation_inputs')
 
 checkpoint = Path(DATABASE).with_suffix('.preparation.json')
 preparation = (checkpoint.stat().st_mtime_ns, hashlib.sha256(checkpoint.read_bytes()).hexdigest())

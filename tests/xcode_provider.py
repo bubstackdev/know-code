@@ -114,7 +114,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {xcodeSelection, findXcodeBridge, readMetadataRejection, contextProof} from './providers/swift/xcode.mjs';
+import {xcodeSelection, findXcodeBridge, readMetadataRejection, contextProof, retainedAnalysisInputs} from './providers/swift/xcode.mjs';
 import {swiftAnalysisPolicy} from './providers/swift/policy.mjs';
 const [root, first, second, scheme, cache, empty, invalid] = process.argv.slice(1);
 const configuredProjects = [first, second];
@@ -190,6 +190,10 @@ const finalValid = freshProof(); publish(finalValid); assert.equal(read().code, 
 const contextRoot = path.join(path.dirname(empty), 'context-proof'), realRoot = path.join(contextRoot, 'real');
 const aliasRoot = path.join(contextRoot, 'alias');
 fs.mkdirSync(realRoot, {recursive: true}); fs.symlinkSync(realRoot, aliasRoot, 'dir');
+const missingAuthored = path.join(contextRoot, 'linked', 'NotCreated.swift');
+const cachedInputs = {analysisInputs: [path.join(realRoot, 'Generated.swift'), path.join(aliasRoot, 'Generated.swift'), schemePath, missingAuthored, 'relative.swift', null]};
+assert.deepEqual(retainedAnalysisInputs(cachedInputs, realRoot, aliasRoot), [schemePath, missingAuthored]);
+assert.equal(fs.existsSync(missingAuthored), false);
 const pifPath = path.join(realRoot, 'know-code-project.pif.json');
 fs.writeFileSync(pifPath, JSON.stringify([{type: 'project', contents: {path: workspacePath}}]));
 const parameters = {action: 'indexbuild', configurationName: 'Debug', activeRunDestination: {platform: 'iphoneos', sdk: 'iphoneos', targetArchitecture: 'arm64'},
@@ -210,7 +214,8 @@ const outsidePif = path.join(contextRoot, 'outside.pif.json'), escapedPif = path
 fs.copyFileSync(pifPath, outsidePif); fs.symlinkSync(outsidePif, escapedPif);
 selectedContext.pifPath = closureContext.loadedPIFPath = escapedPif; putContext();
 assert.throws(() => contextProof(aliasRoot, 'iphoneos', {schemePath}), error => error.code === 'xcode_context_proof_invalid');
-console.log(JSON.stringify({validMetadataRejection: true, rejectedMetadataFaults: receiptFaults, canonicalJobRoot: true, pifSymlinkEscapeRejected: true}));
+console.log(JSON.stringify({validMetadataRejection: true, rejectedMetadataFaults: receiptFaults, canonicalJobRoot: true, pifSymlinkEscapeRejected: true,
+  cachedCentralOutputsRemovedAndMissingLinkedInputsPreserved: true}));
 '''
 checks = subprocess.run(['node', '--input-type=module', '-e', source_checks, str(WORKSPACE), str(PROJECT / 'project.pbxproj'), str(SECOND / 'project.pbxproj'), str(scheme), str(RUN / 'state'), str(empty_tools), str(invalid_tools)], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=15)
 assert checks.returncode == 0, (checks.stdout, checks.stderr)

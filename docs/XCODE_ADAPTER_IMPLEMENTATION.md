@@ -110,6 +110,21 @@ cause. Existing shared preparation may still attempt the ordinary authorized
 resolve, whose actual failure reports `dependency_restore_failed`. No extra
 per-SDK retry path or core/protocol/settings contract is introduced.
 
+## Central cache aliases and saved inputs
+
+The Swift worker resolves its central work directory once after creation, before
+passing it to either adapter. Compiler-selected canonical output paths therefore
+share the same boundary even when the coordinator uses a short data-directory
+symlink for its Unix socket. Generated sources remain indexed and labeled in
+both SDK contexts; central compiler/cache outputs do not become saved inputs.
+Retained Xcode analysis inputs filter both the physical work directory and the
+policy's original alias before failed-context fallback or reuse. Authored linked
+paths are preserved without resolving them, including missing files that must
+remain watched for later repair. The integration fixture uses a data symlink
+and checks actual stored compilation inputs alongside generated-source facts.
+This source correction still needs matching runtime validation; the interrupted
+full Atelier run's stale generation does not establish current convergence.
+
 ## Gates before promoting this checkpoint
 
 - Run the updated focused policy/ambiguity/prerequisite/invalidation fixture and
