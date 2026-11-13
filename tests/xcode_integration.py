@@ -183,7 +183,11 @@ def query(request, equivalent=False):
 
 
 def coverage():
-    rows = query({'op': 'coverage', 'max_bytes': 262144}, equivalent=True)['coverage']
+    anchor = query({'op': 'symbols', 'limit': 1}, equivalent=True)
+    expanded = query({'op': 'coverage', 'generation': anchor['generation'],
+                      'snapshot': anchor['snapshot'], 'max_bytes': 262144}, equivalent=True)
+    assert expanded['generation'] == anchor['generation'] and expanded['snapshot'] == anchor['snapshot']
+    rows = expanded['coverage']
     assert len(rows) == 6, rows
     assert all(row['language'] == 'swift' and row['project_path'] == 'Probe.xcodeproj/project.pbxproj'
                and row['configuration'] == 'Debug' and row['analysis_options']['swiftExtractionPolicy'] == 1
@@ -220,11 +224,14 @@ def graph_checks(contexts):
                                        for path in finding['paths'] for edge in path), finding
         impact = query({'op': 'impact', 'symbol_id': leaf['id']}, equivalent=True)['graph']
         assert entry['id'] in {finding['symbol']['id'] for finding in impact['findings']}
-        occurrences = query({'op': 'references', 'symbol_id': leaf['id']}, equivalent=True)['occurrences']
+        references = query({'op': 'references', 'symbol_id': leaf['id']}, equivalent=True)
+        occurrences = references['occurrences']
         assert any(item['role'] == 'reference' for item in occurrences), occurrences
         for occurrence in occurrences:
             location = occurrence['location']
-            source = query({'op': 'source', 'artifact_id': location['artifact_id'], 'max_bytes': 65536}, equivalent=True)['source']
+            source = query({'op': 'source', 'artifact_id': location['artifact_id'],
+                            'snapshot': references['snapshot'], 'content_hash': location['content_hash'],
+                            'max_bytes': 65536}, equivalent=True)['source']
             assert 'café 🦀' in source['text'], source
             token = source['text'].encode()[location['start_byte']:location['end_byte']].decode()
             assert token == expected.split('(')[0], (token, occurrence)
