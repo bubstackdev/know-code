@@ -6,7 +6,7 @@ import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {writeDerivedFile} from '../providers/rust/preparation.mjs';
 import {removeCapturedOutput} from '../providers/rust/cargo-contexts.mjs';
-import {externArguments} from '../providers/rust/contexts.mjs';
+import {externArguments, environmentBaseline, capturedEnvironment, capturedEnvironmentCurrent, selectedProject} from '../providers/rust/contexts.mjs';
 import {syntaxGraph} from '../providers/rust/graph.mjs';
 
 const macroCommand = {cwd: process.cwd(), args: ['--crate-type', 'proc-macro', '-L', 'dependency=/owned/deps', '--extern', 'proc_macro']};
@@ -36,6 +36,25 @@ await assert.rejects(syntaxGraph({request: async method => {
   if (method === 'rust-analyzer/viewFileText') return proofSource.text;
   throw new Error('owned synthetic transport failure');
 }}, proofSource, {onPresentationUnavailable: () => assert.fail('transport errors must remain fatal')}), /transport failure/);
+
+const inheritedEnvironment = {SAVED: 'owned ambient must not be dumped', CHANGED: 'before', REMOVED: 'before', MAKEFLAGS: 'private descriptor'};
+const baselineEnvironment = environmentBaseline(inheritedEnvironment);
+const environmentRecord = capturedEnvironment({SAVED: inheritedEnvironment.SAVED, CHANGED: 'after', ADDED: 'Cargo injection', MAKEFLAGS: 'different descriptor'}, baselineEnvironment);
+assert(!JSON.stringify(baselineEnvironment).includes(inheritedEnvironment.SAVED));
+assert.deepEqual(environmentRecord.environment, {CHANGED: 'after', ADDED: 'Cargo injection'});
+assert.deepEqual(environmentRecord.removedEnvironment, ['REMOVED']);
+assert(!Object.hasOwn(environmentRecord.environmentOrigins, 'MAKEFLAGS'));
+assert(capturedEnvironmentCurrent(environmentRecord, baselineEnvironment));
+assert(!capturedEnvironmentCurrent(environmentRecord, environmentBaseline({...inheritedEnvironment, CHANGED: 'different parent'})));
+assert(!capturedEnvironmentCurrent({...environmentRecord, environment: {...environmentRecord.environment, CHANGED: 'tampered'}}, baselineEnvironment));
+assert.throws(() => capturedEnvironment({}, {bad: 'raw inherited value'}), /hashed compiler environment/);
+const removedMacroUnit = {cfg: {name: 'owned_macro', root: '/owned/macro.rs', edition: '2024', effective: [], removals: [],
+  sysroot: '/owned/sysroot', compilerVersion: 'owned', compilerSha256: 'owned'}, inputs: {files: []}, dependencies: [],
+  cargo: {package_id: 'owned', target: {kind: ['proc-macro']}, filenames: ['/owned/macro.dylib']},
+  record: {cwd: '/owned', artifacts: [{emit: 'link', artifact: '/owned/macro.dylib'}], environment: {}, removedEnvironment: ['REMOVED']},
+  outputHashes: {'/owned/macro.dylib': 'owned'}};
+assert.throws(() => selectedProject([removedMacroUnit], 0, {workspace_members: []}), /cannot represent deletion/);
+
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const directory = path.join(repository, '.artifacts/rust-context-io', `${Date.now()}-${process.pid}`);
@@ -103,6 +122,7 @@ fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify({passed: t
   'partial-write ENOSPC simulation cleans the owned temporary file', 'unsupported jobserver format refused before tool execution',
   'bare Cargo proc_macro requires a proc-macro unit and sysroot-only direct lookup; unknown/conflicting search forms rejected',
   'only an explicitly allowed syntax-presentation RPC failure omits proof; owned source-read and transport failures remain fatal',
+  'Cargo environment sets/overrides and removals bind hashed parent origins without dumping unchanged ambient values',
   'fake artifact cleanup preserves foreign/state/symlink sentinels and removes only owned target/build files'],
   simulatedWriteFailure: {ownedFilesBeforeFailure: ownedBeforeFailure, retainedFilesAfterCleanup: 0}}, null, 2));
 process.stdout.write(`${directory}\n`);

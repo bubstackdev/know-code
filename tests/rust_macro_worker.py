@@ -17,7 +17,10 @@ WORKSPACE, MACROS = ARTIFACTS / 'fixture', ARTIFACTS / 'macro-api'
                                     '[lib]\nproc-macro=true\n[workspace]\n')
 (MACROS / 'src/lib.rs').write_text('extern crate proc_macro;\n// 🦀 owned compiler tool source\n'
     '#[proc_macro] pub fn choose(_: proc_macro::TokenStream) -> proc_macro::TokenStream {\n'
-    ' "use crate::macro_selected as selected; fn generated_one() -> usize { 3 } fn generated_two() -> usize { 4 }".parse().unwrap()\n}\n'
+    ' let body = if std::env::var("KNOW_CODE_OWNED_MACRO_ENV").as_deref() == Ok("cargo-selected") {\n'
+    ' "use crate::macro_selected as selected; fn generated_one() -> usize { 3 } fn generated_two() -> usize { 4 }"\n'
+    ' } else { "use crate::selected as selected; fn generated_one() -> usize { 3 } fn generated_two() -> usize { 4 }" };\n'
+    ' body.parse().unwrap()\n}\n'
     '#[proc_macro_attribute] pub fn passthrough(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream { item }\n'
     '#[proc_macro_derive(Made)] pub fn made(_: proc_macro::TokenStream) -> proc_macro::TokenStream {\n'
     ' "impl Derived { pub fn generated_method(&self) -> usize { 9 } }".parse().unwrap()\n}\n'
@@ -41,7 +44,7 @@ assert compiler.is_file()
 real_analyzer = Path(sysroot) / 'bin/rust-analyzer'
 assert real_analyzer.is_file(), 'repository-selected rust-analyzer component is required'
 (WORKSPACE / '.cargo').mkdir()
-(WORKSPACE / '.cargo/config.toml').write_text('[build]\nrustc=' + json.dumps(str(compiler)) + '\n')
+(WORKSPACE / '.cargo/config.toml').write_text('[build]\nrustc=' + json.dumps(str(compiler)) + '\n[env]\nKNOW_CODE_OWNED_MACRO_ENV={value="cargo-selected",force=true}\n')
 
 
 def analyzer_proxy(label, invalid=''):
@@ -53,7 +56,7 @@ def analyzer_proxy(label, invalid=''):
         f'os.execv({NODE!r}, [{NODE!r}, {str(ROOT / "tests/rust_macro_analyzer_proxy.mjs")!r}, '
         f'{str(real_analyzer)!r}, {str(log)!r}, {str(invalid)!r}, *sys.argv[1:]])\n')
     executable.chmod(0o755)
-    return dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH']), log
+    return dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH'], KNOW_CODE_OWNED_MACRO_ENV='inherited-wrong-binding'), log
 
 
 def analyze(label, env=None, previous=()):
@@ -149,7 +152,7 @@ assert any(item.get('method') == 'textDocument/diagnostic' and item.get('result'
            and any(diagnostic.get('severity') == 1 or 'macro' in str(diagnostic.get('code', ''))
                    for diagnostic in item['result'].get('items', [])) for item in negative), negative
 (ARTIFACTS / 'summary.json').write_text(json.dumps({'passed': True, 'assertions': [
-    'exact captured macro dylib replay in both library contexts', 'macro-induced binding/shadowing change',
+    'exact captured macro dylib replay in both library contexts', 'Cargo-injected macro environment selects the correct valid authored binding', 'macro-induced binding/shadowing change',
     'ordinary and attribute-preserved body calls', 'same-kind attribute rename omitted without breaking aliases', 'unproven generated declarations omitted',
     'macro implementation is not a runtime call target', 'dependency source remains lookup-only',
     'Cargo-selected compiler/sysroot independent of unrelated PATH rustc',

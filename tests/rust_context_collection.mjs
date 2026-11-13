@@ -20,6 +20,13 @@ const manifest = path.join(workspace, 'Cargo.toml'), library = path.join(workspa
 const data = path.join(workspace, 'src/input.txt');
 fs.writeFileSync(data, 'saved 🦀 data\n');
 fs.appendFileSync(library, '\npub const INCLUDED: &str = include_str!("input.txt");\n');
+const configInput = path.join(workspace, '.cargo/config.toml');
+fs.mkdirSync(path.dirname(configInput), {recursive: true});
+fs.writeFileSync(configInput, '[env]\nKNOW_CODE_OWNED_CONTEXT_ENV={value="cargo-selected",force=true}\n');
+process.env.KNOW_CODE_OWNED_CONTEXT_ENV = 'owned inherited value';
+process.env.KNOW_CODE_OWNED_AMBIENT_SENTINEL = 'owned ambient value must not be retained';
+fs.appendFileSync(library, 'pub const FROM_CARGO_ENV: &str = env!("KNOW_CODE_OWNED_CONTEXT_ENV");\n');
+
 function command(tool, args, cwd) {
   const result = spawnSync(tool, args, {cwd, env: compilerEnvironment(), encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024});
   assert.equal(result.status, 0, result.stderr);
@@ -41,6 +48,10 @@ assert.equal(cold.plans.length, 2, JSON.stringify(cold.diagnostics));
 assert(cold.cargoSucceeded && fs.existsSync(path.join(workspace, 'know-code-build-ran')));
 assert(cold.plans.every(plan => plan.unit.inputs.files.includes(data)));
 assert(cold.plans.every(plan => plan.unit.cfg.effective.includes('know_code_generated')));
+assert(cold.plans.every(plan => plan.unit.record.environment.KNOW_CODE_OWNED_CONTEXT_ENV === 'cargo-selected'));
+assert(cold.plans.every(plan => plan.unit.inputs.environment.KNOW_CODE_OWNED_CONTEXT_ENV === 'cargo-selected'));
+assert(!JSON.stringify(cold.units).includes('owned ambient value must not be retained'), 'unchanged ambient value was dumped');
+
 assert(cold.plans.every(plan => plan.graph.firstPartyFiles.includes(library)));
 assert(cold.plans.every(plan => !plan.graph.firstPartyFiles.includes(path.join(workspace, 'build.rs'))), 'tooling source was duplicated inside ordinary library units');
 
@@ -70,7 +81,7 @@ assert(partial.failed.some(record => record.args.includes('--test')));
 assert(partial.diagnostics.some(item => item.severity === 'error' && item.message.includes('owned failing test context')));
 
 const configDirectory = path.join(workspace, '.cargo');
-fs.mkdirSync(configDirectory);
+fs.mkdirSync(configDirectory, {recursive: true});
 const wrapper = path.join(state, 'never-execute-wrapper.sh'), marker = path.join(state, 'wrapper-executed');
 fs.writeFileSync(wrapper, `#!/bin/sh\ntouch '${marker}'\nexit 99\n`); fs.chmodSync(wrapper, 0o755);
 fs.writeFileSync(path.join(configDirectory, 'config.toml'), `[build]\nrustc-wrapper=${JSON.stringify(wrapper)}\n`);
@@ -81,7 +92,8 @@ const captureDirectories = fs.readdirSync(path.join(policy.cacheDirectory, 'cont
   fs.readdirSync(path.join(policy.cacheDirectory, 'contexts', name)).filter(item => item.startsWith('capture-')));
 assert.equal(captureDirectories.length, 0, 'scratch captures retained after successful cleanup');
 fs.writeFileSync(path.join(state, 'summary.json'), JSON.stringify({passed: true, assertions: [
-  'bounded package snapshots and one include-discovery recapture', 'unchanged cache avoids compilation',
+  'bounded package snapshots and one include-discovery recapture', 'unchanged cache avoids compilation including Cargo-injected env! input',
+  'actual Cargo env overrides replay while unrelated ambient values are not retained',
   'known include save refreshes directly', 'artifact replacement recaptures', 'compiler failure preserves healthy proven units',
   'configured wrapper stops before capture', 'scratch capture cleanup'],
   limits: ['worker routing not integrated', 'proc-macro graph replay and general escaped dep-info forms remain gaps']}, null, 2));

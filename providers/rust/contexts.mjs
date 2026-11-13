@@ -14,6 +14,46 @@ export const flagValues = (args, name) => args.flatMap((value, index) =>
   value === name ? [args[index + 1]] : value.startsWith(`${name}=`) ? [value.slice(name.length + 1)] : []);
 const flag = (args, name) => flagValues(args, name)[0];
 
+// These exist only to coordinate this analysis process; replaying descriptors,
+// wrappers or private capture paths into a macro would be misleading.
+const captureEnvironmentKeys = new Set(['KNOW_CODE_RUST_CAPTURE_CONFIG', 'RUSTC_WRAPPER',
+  'CARGO_MAKEFLAGS', 'MAKEFLAGS', 'MFLAGS', 'CARGO_CACHE_RUSTC_INFO', 'CARGO_BUILD_BUILD_DIR', 'CARGO_BUILD_JOBS']);
+const environmentHash = value => createHash('sha256').update(value).digest('hex');
+const ownHash = (values, name) => Object.hasOwn(values, name) ? values[name] : null;
+export function environmentBaseline(environment) {
+  const values = Object.fromEntries(Object.entries(environment).filter(([name]) => !captureEnvironmentKeys.has(name))
+    .map(([name, value]) => [name, environmentHash(value)]));
+  if (Object.keys(values).length > 4096 || Buffer.byteLength(JSON.stringify(values)) > 512 * 1024)
+    gap('compiler environment baseline exceeds its bounded allowance');
+  return values;
+}
+export function capturedEnvironment(environment, baseline, required = []) {
+  if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline) || Object.keys(baseline).length > 4096 ||
+      Buffer.byteLength(JSON.stringify(baseline)) > 512 * 1024 ||
+      Object.values(baseline).some(value => typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)))
+    gap('invalid hashed compiler environment baseline');
+  const current = environmentBaseline(environment), values = {}, origins = {}, absent = [];
+  const names = new Set([...Object.keys(current).filter(name => ownHash(current, name) !== ownHash(baseline, name)),
+    ...Object.keys(environment).filter(name => name.startsWith('CARGO_PKG_') ||
+      ['CARGO_CRATE_NAME', 'CARGO_MANIFEST_DIR', 'CARGO_MANIFEST_PATH', 'OUT_DIR'].includes(name)), ...required]);
+  const removed = Object.keys(baseline).filter(name => !Object.hasOwn(current, name));
+  for (const name of new Set([...names, ...removed])) {
+    if (captureEnvironmentKeys.has(name)) continue;
+    const value = ownHash(current, name);
+    Object.defineProperty(origins, name, {value: {baseline: ownHash(baseline, name), value}, enumerable: true});
+    if (value !== null) Object.defineProperty(values, name, {value: environment[name], enumerable: true});
+    else absent.push(name);
+  }
+  return {environment: values, environmentOrigins: origins, absentEnvironment: absent, removedEnvironment: removed};
+}
+export function capturedEnvironmentCurrent(record, baseline) {
+  if (!record.environmentOrigins || !baseline) return false;
+  return Object.entries(record.environmentOrigins).every(([name, origin]) => origin &&
+    (origin.baseline === null || /^[a-f0-9]{64}$/.test(origin.baseline)) &&
+    ownHash(baseline, name) === origin.baseline &&
+    (Object.hasOwn(record.environment, name) ? environmentHash(record.environment[name]) : null) === origin.value);
+}
+
 // Bare proc_macro is Cargo's sysroot prelude injection, not an artifact join.
 // Direct extern lookup uses crate/all search paths; Cargo's typed dependency
 // paths cannot replace this sysroot crate. Refuse broader paths rather than
@@ -180,16 +220,17 @@ export function capturedUnit(record, artifact, command, setupInputs = []) {
     inputHashes, dependencyHashes, outputHashes: fileEvidence(outputs, {artifact: true})};
 }
 
-export function capturedUnitCurrent(unit, artifact) {
+export function capturedUnitCurrent(unit, artifact, baseline) {
   try {
     return unit.record.status === 0 && unit.artifactIdentity === cargoArtifactIdentity(artifact) &&
       Object.entries(unit.inputHashes).every(([filename, expected]) => fileDigest(filename, MAX_INPUT).digest === expected) &&
       Object.entries(unit.cfg.sysrootExternHashes ?? {}).every(([filename, expected]) => fileDigest(filename, MAX_INPUT).digest === expected) &&
       Object.entries(unit.outputHashes).every(([filename, expected]) => fileDigest(filename, MAX_ARTIFACT).digest === expected) &&
       Object.entries(unit.dependencyHashes).every(([filename, expected]) => fileDigest(filename, MAX_ARTIFACT).digest === expected) &&
-      Object.entries(unit.inputs.environment).every(([name, expected]) =>
-        name.startsWith('CARGO_PKG_') || ['CARGO_CRATE_NAME', 'CARGO_MANIFEST_DIR', 'CARGO_MANIFEST_PATH', 'OUT_DIR'].includes(name) ||
-        (process.env[name] ?? null) === expected);
+      (unit.record.environmentOrigins ? capturedEnvironmentCurrent(unit.record, baseline) :
+        Object.entries(unit.inputs.environment).every(([name, expected]) =>
+          name.startsWith('CARGO_PKG_') || ['CARGO_CRATE_NAME', 'CARGO_MANIFEST_DIR', 'CARGO_MANIFEST_PATH', 'OUT_DIR'].includes(name) ||
+          (process.env[name] ?? null) === expected));
   } catch { return false; }
 }
 
@@ -255,6 +296,8 @@ export function selectedProject(units, selected, metadata) {
       source: {include_dirs: [...new Set(unit.inputs.files.filter(filename => filename.endsWith('.rs')).map(filename => path.dirname(filename)))], exclude_dirs: []}};
   });
   if (macroDylibs.length) {
+    if (reachable.some(index => units[index].record.removedEnvironment?.length))
+      gap('Cargo removed inherited environment values; public per-crate macro replay cannot represent deletion');
     const foreignDirectories = crates.filter(crate => !crate.is_workspace_member).flatMap(crate => crate.source.include_dirs).map(directory => fs.realpathSync(directory));
     foreignDirectories.push(fs.realpathSync(path.join(sysroot, 'lib/rustlib/src/rust/library')));
     for (const filename of units[selected].inputs.files.filter(filename => filename.endsWith('.rs'))) {

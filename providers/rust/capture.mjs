@@ -5,7 +5,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {boundedRead, writeDerivedFile} from './preparation.mjs';
-import {contextArguments, externArguments, fileEvidence, flagValues} from './contexts.mjs';
+import {contextArguments, externArguments, fileEvidence, flagValues, capturedEnvironment} from './contexts.mjs';
 
 const LIMIT = 8 * 1024 * 1024;
 const [compiler, ...args] = process.argv.slice(2);
@@ -56,18 +56,22 @@ try {
     catch { /* Preserve original compiler output; non-JSON is not graph evidence. */ }
   }
   Object.assign(record, {status: result.status, signal: result.signal, error: result.error?.message});
-  record.environment = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-    name.startsWith('CARGO_PKG_') || ['CARGO_CRATE_NAME', 'CARGO_MANIFEST_DIR', 'CARGO_MANIFEST_PATH', 'OUT_DIR'].includes(name)));
-  // Retain only environment values actually named by compiler dep-info, in
-  // addition to Cargo's required project environment. Never collect all env.
+  const requiredEnvironment = [];
   for (const item of record.artifacts.filter(item => item.emit === 'dep-info')) {
     const text = boundedRead(path.resolve(record.cwd, item.artifact), LIMIT).toString('utf8');
     for (const line of text.split(/\r?\n/)) {
       const match = /^# env-dep:([A-Za-z_][A-Za-z_0-9]*)(?:=.*)?$/.exec(line);
-      if (!match) continue;
-      if (Object.hasOwn(process.env, match[1])) record.environment[match[1]] = process.env[match[1]];
-      else record.absentEnvironment.push(match[1]);
+      if (match) requiredEnvironment.push(match[1]);
     }
+  }
+  if (configuration.environmentBaseline) Object.assign(record,
+    capturedEnvironment(process.env, configuration.environmentBaseline, requiredEnvironment));
+  else {
+    // Historical direct capture fixtures have no managed baseline. Keep their
+    // narrow Cargo/dep-info contract, never collect an ambient environment dump.
+    record.environment = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+      name.startsWith('CARGO_PKG_') || ['CARGO_CRATE_NAME', 'CARGO_MANIFEST_DIR', 'CARGO_MANIFEST_PATH', 'OUT_DIR'].includes(name) || requiredEnvironment.includes(name)));
+    record.absentEnvironment = requiredEnvironment.filter(name => !Object.hasOwn(process.env, name));
   }
 } catch (error) {
   record.error = error.message;

@@ -8,7 +8,7 @@ import {boundedRead, writeDerivedFile} from './preparation.mjs';
 import {compilerEnvironment} from './lsp.mjs';
 import {cargoSelection} from './policy.mjs';
 import {cargoArtifactIdentity, capturedUnit, capturedUnitCurrent, compilerCfg, compilerInputs,
-  connectCapturedUnits, selectedProject, fileEvidence} from './contexts.mjs';
+  connectCapturedUnits, selectedProject, fileEvidence, environmentBaseline} from './contexts.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const LIMIT = 8 * 1024 * 1024, CACHE_LIMIT = 32 * 1024 * 1024;
@@ -166,18 +166,18 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       captureAttempts++;
       const directory = path.join(scratch, String(attempt)); fs.mkdirSync(directory);
       const snapshots = snapshotPackages(directory, packages), configuration = path.join(directory, 'configuration.json');
-      jsonFile(configuration, {directory, snapshots, toolRoots});
+      const cargoEnvironment = {...compilerEnvironment(), CARGO_CACHE_RUSTC_INFO: '0',
+        CARGO_BUILD_BUILD_DIR: path.join(state, 'build'), RUSTC_WRAPPER: wrapper, KNOW_CODE_RUST_CAPTURE_CONFIG: configuration};
+      const baseline = environmentBaseline(cargoEnvironment);
+      jsonFile(configuration, {directory, snapshots, toolRoots, environmentBaseline: baseline});
       send('progress', {stage: 'analysis', projectPath: manifest,
         message: attempt ? 'Recapturing unproven Cargo metadata once with discovered saved inputs.' : 'Evaluating actual Cargo library, binary and test compiler contexts.'});
       const args = ['check', '--offline', '--workspace', '--all-targets', '--keep-going', '--jobs', '1', '--message-format=json', '--manifest-path', manifest,
         '--target-dir', targetDirectory, ...cargoSelection(policy)];
       if (target) args.push('--target', target);
-      const result = spawnSync('cargo', args, {cwd: path.dirname(manifest), env: {...compilerEnvironment(),
-        // Public Cargo control: ask the currently selected compiler for its
-        // identity even when compilation artifacts are fresh. This does not
-        // disable metadata/incremental reuse or force source compilation.
-        CARGO_CACHE_RUSTC_INFO: '0', CARGO_BUILD_BUILD_DIR: path.join(state, 'build'),
-        RUSTC_WRAPPER: wrapper, KNOW_CODE_RUST_CAPTURE_CONFIG: configuration},
+      // Public CARGO_CACHE_RUSTC_INFO=0 asks the current compiler for its
+      // identity without disabling Cargo's metadata/incremental artifact reuse.
+      const result = spawnSync('cargo', args, {cwd: path.dirname(manifest), env: cargoEnvironment,
         encoding: 'utf8', timeout: 120000, maxBuffer: LIMIT});
       if (result.error || result.signal) throw new Error(`Cargo context preparation failed: ${result.error?.message ?? result.signal}`);
       cargoSucceeded = result.status === 0;
@@ -207,7 +207,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
           if (candidates.length === 1) unit = capturedUnit(candidates[0], artifact, query, [...setupInputs.filter(item => !item.endsWith('.rs')), ...configurationInputs]);
           else if (candidates.length > 1) unavailable('multiple compiler captures match one Cargo artifact');
           else if (artifact.fresh) {
-            const saved = previous.filter(item => capturedUnitCurrent(item, artifact));
+            const saved = previous.filter(item => capturedUnitCurrent(item, artifact, baseline));
             if (saved.length === 1 && selectedCompilers.size === 1 && selectedCompilers.has(fs.realpathSync(saved[0].record.compiler)) &&
                 JSON.stringify(compilerCfg(saved[0].record, query)) === JSON.stringify(saved[0].cfg)) unit = saved[0];
           }
