@@ -135,8 +135,9 @@ async function openBridge({root, bridge, project, selection, state, scratch, pla
     if (!Array.isArray(inventory.targets)) throw Error('Bridge target inventory is unavailable');
     return {client, buildRoot, targets: inventory.targets};
   } catch (error) {
-    const metadataFailed = exists(path.join(buildRoot, 'know-code-project-export-request.json')) && !exists(path.join(buildRoot, 'know-code-selected-scheme.json'));
-    error.fatal ||= Boolean(client.failure && !metadataFailed);
+    // A request sidecar is context, never proof that a process exit was an
+    // ordinary compiler failure. Unexpected EOF/kill must preserve prior facts.
+    error.fatal ||= Boolean(client.failure);
     await close(client); error.buildRoot = buildRoot; throw error;
   }
 }
@@ -240,7 +241,10 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
         const prepared = restoration({root, project, selection, state, bridge, toolchain: {...toolchain, env}, request: preparationRequest, context: attempt, previous, key, fingerprint, onDiagnostic: addDiagnostic});
         plan = prepared.plan; previous = {key, fingerprint, succeeded: true, error: '', outputs: plan.outputs};
         session = await openBridge({root, bridge, project, selection, state, scratch, platform, env, onDiagnostic: addDiagnostic});
-        if (initialError) for (const item of diagnostics) { item.code = 'xcode_recovered_initialization'; item.severity = 'info'; item.message = `Recovered after successful dependency preparation: ${item.message}`; }
+        if (initialError) {
+          addDiagnostic({code: 'xcode_recovered_initialization', severity: 'info', path: relative(root, project), message: String(initialError.message).slice(-16000)});
+          for (const item of diagnostics) { item.code = 'xcode_recovered_initialization'; item.severity = 'info'; item.message = `Recovered after successful dependency preparation: ${item.message}`; }
+        }
       } else if (initialError) throw initialError;
       client = session.client;
       const {buildRoot, targets} = session;
