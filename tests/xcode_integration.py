@@ -216,9 +216,16 @@ if INSTALLED:
         for name, expected in inventories[kind].items():
             if expected['kind'] == 'file':
                 mapped.append((installed / Path(name).relative_to(archive_root), expected))
-    for name, target in [('lib/net10.0/KnowCode.dll', managed / 'KnowCode.dll'),
-                         ('runtimes/osx-arm64/native/libknow_code_ffi.dylib', managed / 'runtimes/osx-arm64/native/libknow_code_ffi.dylib')]:
-        mapped.append((target, inventories['nuget'][name]))
+    mapped.append((managed / 'KnowCode.dll', inventories['nuget']['lib/net10.0/KnowCode.dll']))
+    native_candidates = [managed / 'libknow_code_ffi.dylib',
+                         managed / 'runtimes/osx-arm64/native/libknow_code_ffi.dylib']
+    native_candidates = [file for file in native_candidates if file.exists() or file.is_symlink()]
+    assert native_candidates, 'installed .NET consumer has no owned flat or RID-specific native asset'
+    # NuGet may retain the RID directory or copy the native asset beside the
+    # consumer. Authenticate every present candidate; neither layout permits a
+    # source/global substitute or an unverified second native image.
+    for file in native_candidates:
+        mapped.append((file, inventories['nuget']['runtimes/osx-arm64/native/libknow_code_ffi.dylib']))
     for file, expected in mapped:
         assert file.resolve(strict=True).is_relative_to(INSTALLED) and not file.is_symlink(), ('foreign installed payload', file)
         assert file.stat().st_size == expected['bytes'] and hashlib.sha256(file.read_bytes()).hexdigest() == expected['sha256'], file
