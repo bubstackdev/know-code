@@ -1,18 +1,57 @@
-# Xcode provider investigation and guarded prototype
+# Xcode provider: candidate and investigation history
 
-Status: experimental v0.0.3 work. SwiftPM remains supported by the earlier
-adapter. **Xcode's required device-plus-simulator project support is not
-complete.** The installed command-line indexing-settings interface is not a
-reliable context selector; this is a measured blocker, not a missing compiler.
+Status: **unshipped v0.0.3 candidate**. The user approved the separately installed
+pinned SwiftBuild/BSP bridge on 2026-11-13. The current adapter integrates it
+through the existing Swift compiler/IndexStore path and common core; the
+shipped v0.0.2 Xcode path remains an experimental explicit-gap reporter.
+Required device-and-simulator release acceptance remains unfinished. The failed
+indexing-settings prototype below is history, not the current planner.
 
-Accepted 0.0.3 release policy: working device-and-simulator indexing is required.
-Use one selected shared scheme per workspace, including its dependencies and
-tests. Select the sole shared scheme automatically; require a workspace choice
-when several exist. The prototype boundaries below remain implementation
-history, not evidence that this policy or production Xcode support is complete.
-Optional SwiftBuild/BSP bridge adoption remains undecided.
+| Candidate behavior | Evidence/limit |
+| --- | --- |
+| One selected shared scheme per repository/worktree | Select the globally sole scheme automatically; otherwise require `swift.scheme`. Use its saved **Test** action configuration for app, dependencies and tests. Ambiguous workspace associations remain explicit gaps. |
+| Distinct device/simulator contexts | Validate compiler-returned SDK/triple/toolchain and retained saved-scheme/PIF evidence; namespace opaque target identities by their actual context. Never relabel or join contexts by names. |
+| Dependency/module preparation and saved updates | Reuse central preparation checkpoints and exact saved inputs; keep generated source facts while excluding central outputs from saved-file watching. Missing external codegen, build-tool plugins and custom macro tools remain explicit gaps. |
+| Partial call/dependency graph | Full-body compiler/IndexStore evidence feeds shared callers/callees/impact and native bindings. Advanced dispatch, unsupported initializer ownership and cross-project body links are not claimed complete. |
+| Failure handling | Ordinary compiler/configuration gaps can accompany healthy fresh facts; transport/compiler crashes, interruption or invalid context proof abort publication. A bounded, context-bound `.7` metadata rejection proof is distinct from an unexpected bridge exit. |
 
-## Smallest integration and its limit
+The prerequisite is recipe `index-only.7-notice1`, CLI
+`0.1.0-know-code-index-only.7`, with its matching adjacent service, resource
+bundles and component manifest. Discovery uses the versioned user tool location
+or PATH and verifies the real executable/service inventory and CLI identity.
+Missing/incompatible tooling produces an actionable separate-prerequisite
+diagnostic; Know Code does not install it or change Xcode selection. The accepted
+distribution is a **separate bridge download and separate DMG**; the common
+runtime and thin SDKs do not automatically install it. See [the source recipe
+and layout](../tooling/xcode-bridge/README.md), [adoption/packaging decision](XCODE_BRIDGE_DECISION.md)
+and [operator workflow](reviews/NOTARIZATION_OPERATOR.md#separate-xcode-bridge-image--source-recipe-not-executed).
+
+Finite bridge development qualification uses Apple Swift 6.4.2, Xcode 27.2 and
+macOS 27.2 on Apple Silicon. The common runtime's macOS 15 minimum and tool
+deployment target do **not** certify bridge compatibility on macOS 15 or other
+Xcode versions. Focused production-path fixtures exercise both SDKs, body/source
+evidence, saved repair and common CLI/Node/.NET graphs. Retained whole-Atelier
+failures and its stale generation are not a current-convergence or performance
+pass. Exact matching results, remaining corpus, signed installed/offline and
+platform gates belong to [the implementation ledger](IMPLEMENTATION_0_0_3.md);
+no 0.0.3 release pass is claimed here.
+
+Dependency resolution and heavy `buildTarget/prepare` have separate accepted
+ten-minute request budgets. Metadata/initialization/source-options/shutdown
+retain two minutes, as do the per-file compiler and reader commands. Query
+deadlines and shared two-core/2 GiB automatic defaults remain unchanged; sampled
+memory enforcement is not a hard ceiling. See [Swift provider boundaries](SWIFT_PROVIDER.md)
+and [the adapter source checkpoint](XCODE_ADAPTER_IMPLEMENTATION.md).
+
+## Historical investigation and pre-adoption checkpoints
+
+The sections below retain the rejected prototype, shipped experimental gap
+behavior and research measurements in their original order. Statements about
+an undecided bridge or unwired adapter describe those earlier checkpoints;
+the candidate summary above supersedes them. None of the old receipts is
+reclassified as a current release, corpus or installed-security pass.
+
+### Smallest integration and its limit
 
 The rejected experiment used the installed, documented
 `xcodebuild -showBuildSettingsForIndex -json` operation. It returns actual
@@ -42,19 +81,19 @@ each for device and simulator), using actual compiler arguments. A saved-source
 repeat exposed the blocker below. The successful first run is not acceptance
 of reliable Xcode support.
 
-The current production module is a small explicit-gap reporter. It deduplicates
+The shipped v0.0.2 module is a small explicit-gap reporter. It deduplicates
 the internal project workspace, records saved scheme inputs, emits one partial
 compilation with `xcode_reliable_planner_required`, and runs no planner/compiler,
 project build, script, restoration, or source inference. The rejected adapter
 and its original full-support test are retained with source hashes in
 [the evidence manifest](../.artifacts/xcode-owned/rejected-adapter/manifest.json).
-[The current passing worker regression](../.artifacts/xcode-provider/latest.json)
+[The retained gap-reporter regression](../.artifacts/xcode-provider/latest.json)
 checks that boundary and stable compilation identity after a saved scheme change;
 it is not a claim of Swift semantic support for Xcode projects.
 
-The same regression now exercises the real coordinator: a saved scheme and a newly created, changed and removed `.xcconfig` each publish another coherent partial generation. No source facts or build/script execution are invented to make these updates look complete.
+That historical regression also exercises the real coordinator: a saved scheme and a newly created, changed and removed `.xcconfig` each publish another coherent partial generation. No source facts or build/script execution are invented to make these updates look complete.
 
-## Reproducible wrong-context behavior
+### Reproducible wrong-context behavior
 
 On installed Xcode 27.2 / Apple Swift 6.4.2, exactly the same settings-only
 command can return different contexts for the same saved file. Six identical
@@ -85,7 +124,7 @@ configured-target/indexing APIs retain this context explicitly. This source
 does not prove the closed Xcode CLI's exact implementation, but the observed
 CLI output cannot safely satisfy the requested context contract.
 
-## Execution boundary
+### Execution boundary
 
 The owned fixture has both a shell build phase that would create
 `PHASE_EXECUTED` and a scheme pre-action that would create `SCHEME_EXECUTED`.
@@ -110,7 +149,7 @@ could perform a full project build. It was not retried. The safer target-only
 settings query subsequently supplied UI-test metadata without a build action.
 That permitted path still has the independent context-selection blocker.
 
-## Supplied repository evaluation
+### Supplied repository evaluation
 
 All project tooling used a new durable copy under
 `.artifacts/xcode-real/snapshot/`, derived from the previously preserved Swift
@@ -126,7 +165,7 @@ remained byte- and metadata-identical before/after:
 [snapshot run evidence](../.artifacts/xcode-real/1794010339823707000/summary.json).
 This is not a successful dual-context graph or dependency-preparation claim.
 
-## Next viable planner boundary
+### Next viable planner boundary
 
 The public Swift Build session API offers configured targets and
 `generateIndexingFileSettings`; its BSP server exposes those configured
@@ -159,7 +198,7 @@ Recommendation for the next experiment: make a pinned BSP bridge an optional
 separate prerequisite, detect its executable/service pair and compatibility,
 and prove explicit configured-target selection before considering distribution.
 
-## v0.0.3 guarded preparation checkpoint (2026-11-12)
+### v0.0.3 guarded preparation checkpoint (2026-11-12)
 
 The integrator built a separately owned copy of the same pinned bridge with a
 small mandatory request patch, leaving reference source and the earlier runtime
@@ -222,13 +261,13 @@ Primary sources: [Xcode BSP bridge](https://github.com/slime-studio/sourcekit-xc
 [official BSP implementation](https://github.com/swiftlang/swift-build/blob/main/Sources/SwiftBuild/SWBBuildServer.swift),
 [preferred indexing context selection](https://github.com/swiftlang/swift-build/blob/main/Sources/SWBCore/BuildRequestContext.swift).
 
-## Approved optional BSP experiment
+### Approved optional BSP experiment
 
 The user subsequently approved testing an optional bridge. This section
 supersedes the earlier statement that the research build was stopped and no
-BSP experiment had run. Production remains the explicit-gap reporter; no bridge
-has been installed into a user directory, added as a product dependency, or
-wired into the worker.
+BSP experiment had run. At that checkpoint production remained the explicit-gap
+reporter; no bridge had been installed into a user directory, adopted as a
+product prerequisite, or wired into the worker.
 
 The existing exact source graph was frozen in
 [source-graph.json](../.artifacts/xcode-bsp/source-graph.json) and
