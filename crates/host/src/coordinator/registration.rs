@@ -227,7 +227,9 @@ mod tests {
         std::fs::create_dir_all(&data).unwrap();
         std::fs::create_dir_all(&workspace).unwrap();
         let workspace = workspace.canonicalize().unwrap();
-        let shared = super::super::test_support::shared(Control::default());
+        let governor = Governor::new(Limits::default()).unwrap();
+        let session = governor.start().unwrap();
+        let shared = super::super::test_support::shared(session.control());
         let limits = shared.resources.limits();
         let socket = control::socket_path(&data);
         let listener = UnixListener::bind(&socket).unwrap();
