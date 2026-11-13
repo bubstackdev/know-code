@@ -62,10 +62,12 @@ assert len(compilations) == 1 and compilations[0]['projectPath'] == '$swift-infe
 assert reports[0]['status'] == 'complete', reports
 assert compilations[0]['inferred'] and 'Swift version 6.' in compilations[0]['compilerVersion']
 assert json.loads(compilations[0]['optionsJson'])['signatures'] == 'compiler_index_names_only'
-# An actual invalid store must preserve the helper's stage/path and process exit
+# An actual corrupt unit must preserve the helper's unit and process exit
 # details. This uses the selected compiler's library, never a replacement reader.
 invalid_store = RUN / 'invalid-index-store'
-invalid_store.write_text('not a directory')
+invalid_unit = invalid_store / 'v5/units/know-code-owned-corrupt-unit'
+invalid_unit.parent.mkdir(parents=True)
+invalid_unit.write_bytes(b'not an IndexStore unit\n')
 reader_scratch = RUN / 'reader-failure'
 reader_scratch.mkdir()
 compiler = Path(json.loads(compilations[0]['optionsJson'])['compilerPath'])
@@ -74,8 +76,8 @@ import assert from 'node:assert/strict';
 import {ingestStore} from './providers/swift/index.mjs';
 const [root, store, scratch, library] = process.argv.slice(1);
 assert.throws(() => ingestStore({id:'invalid-store', root, store, scratch, library, sources:new Map()}), error => {
-  assert.match(error.message, /Swift IndexStore reader failed: status=1, signal=none, error=none, stderr=Swift IndexStore store create failed/);
-  assert.ok(error.message.includes(`path=${store}`));
+  assert.match(error.message, /Swift IndexStore reader failed: status=1, signal=none, error=none, stderr=Swift IndexStore unit create failed/);
+  assert.ok(error.message.includes('unit=know-code-owned-corrupt-unit;'));
   console.log(JSON.stringify({message:error.message}));
   return true;
 });
