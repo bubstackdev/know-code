@@ -39,14 +39,18 @@ export function xcodeSelection({root, configuredProjects, schemePath}) {
   const projects = [...new Set(configuredProjects.map(file => canonicalXcodeProject(path.resolve(root, file)))
     .filter(file => ['project.pbxproj', 'contents.xcworkspacedata'].includes(path.basename(file))))];
   const schemes = new Map();
-  for (const project of projects) {
-    const shared = path.join(container(project), 'xcshareddata/xcschemes');
-    if (!exists(shared)) continue;
-    for (const file of fs.readdirSync(shared, {withFileTypes: true})) if (file.isFile() && file.name.endsWith('.xcscheme')) {
-      const filename = fs.realpathSync(path.join(shared, file.name));
-      if (!schemes.has(filename)) schemes.set(filename, []);
-      schemes.get(filename).push(project);
+  try {
+    for (const project of projects) {
+      const shared = path.join(container(project), 'xcshareddata/xcschemes');
+      if (!exists(shared)) continue;
+      for (const file of fs.readdirSync(shared, {withFileTypes: true})) if (file.isFile() && file.name.endsWith('.xcscheme')) {
+        const filename = fs.realpathSync(path.join(shared, file.name));
+        if (!schemes.has(filename)) schemes.set(filename, []);
+        schemes.get(filename).push(project);
+      }
     }
+  } catch (error) {
+    return {inputs: [...projects, ...schemes.keys()], error: problem('xcode_scheme_inventory_unavailable', `Cannot read the configured shared-scheme inventory: ${error.message}`)};
   }
   const inputs = [...projects, ...schemes.keys()];
   const fail = message => ({inputs, error: problem('xcode_scheme_selection_required', message)});
