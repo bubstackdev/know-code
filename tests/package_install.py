@@ -383,7 +383,9 @@ if args.experimental:
   language_graph(language,entry_name,leaf_name,reference_name,filename)
   previous=ready(node)['generation'];filename.write_text(text+broken)
   MIN_GENERATION=ready(node,previous+1)['generation']
-  status=query({'op':'symbols','limit':1})
+  anchor=query({'op':'symbols','limit':1})
+  status=query({'op':'coverage','generation':anchor['generation'],'snapshot':anchor['snapshot'],'max_bytes':16384})
+  assert status['coverage_scope']=='workspace',status
   reports=[row for row in status['coverage'] if row['language']==language]
   assert reports and any(row['status']=='partial' and row['diagnostic_counts'].get('error',0) for row in reports),status
   previous=ready(node)['generation'];filename.write_text(text)
