@@ -335,3 +335,46 @@ Formatting and strict workspace/all-targets Clippy also pass at `e1d1f12`
 follow-up is now being implemented for the remaining metadata command-rejection
 boundary; it has no runtime evidence yet and does not replace these `.6`
 receipts.
+
+
+## Integrated .7 metadata rejection and cache repair
+
+The narrow bridge follow-up is integrated at `e9306e4`, with adapter `abe1581`
+and typed exit evidence in the shared JSON-RPC client. No worker/core/storage
+protocol or graph engine was added. The separately built `index-only.7-notice1`
+tool passes source/patch and component-inventory checks, both-SDK typed success
+and true unavailable-input failure probes. Its 200 inventoried files occupy
+95,015,745 logical bytes; it remains an optional separately staged prerequisite,
+not a new common-core dependency or installed/public artifact.
+
+A protected plugin probe first failed before initialization because its reused
+driver still expected `.6`. New retained packet04 reached metadata but failed
+on nested manifest sandboxing for both SDKs. Normal preparation used `xcrun`
+while `.7` metadata used the selected direct executable. Changing preparation
+to that same direct executable restores both protected SDK checks without
+changing the inherited environment, analysis policy or plugin/scanner rules.
+The production fix is `9806ec8`, with preparation fingerprint2 so old setup is
+not reused silently. Exact variable-level causality remains unproven; the tested
+fix matches the launch routes instead of emulating environment magic. Evidence:
+`wave-01/xcode-plugin-probe-{device,simulator}-05/` and the
+[cache qualification ledger](XCODE_PACKAGE_CACHE_QUALIFICATION.md).
+
+Matching Debug producer `1d2fcd1df0d34b37bab70964c94f8b27`, built at `bea7b4f`,
+passes all 14 production Xcode checks at the final cache fix, including fresh
+healthy TypeScript results beside a malformed Xcode project and automatic saved
+repair of both SDK graphs. The existing Xcode policy fixture additionally
+passes 23 rejection-proof faults plus its valid receipt; all 15 shared JSON-RPC
+checks pass. Evidence:
+`wave-01/{assembled-swift-build-11,assembled-xcode-integration-05,xcode-rejection-contract-01}/`.
+The [metadata boundary document](XCODE_METADATA_FAILURE_BOUNDARY.md) distinguishes
+proof-reader negatives from untested actual OS/backend failure paths.
+
+The existing `package_install.py --experimental` section now has source for
+meaningful dependency-free SwiftPM/Cargo call/value-impact, retained-source,
+native parity and saved compiler-error repair checks. This extension is **not
+run or certified** yet; normal SwiftPM manifest sandboxing inside its outer
+installed/offline policy remains an explicit runtime question. No packaging
+manifest promotion or new installed test harness was introduced. Optimized,
+installed, broader interruption/cleanup and platform gates remain ahead; the
+real video-encoding performance gate stays deferred. Required languages retain
+priority over optional estate work.

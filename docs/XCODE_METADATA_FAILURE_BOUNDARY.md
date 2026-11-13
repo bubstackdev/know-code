@@ -6,7 +6,7 @@ now implemented in frozen `.7` source (`8e37434`), independently reviewed and
 awaiting root-owned build/runtime qualification. No `.7` runtime pass is claimed
 here.
 
-## Current behavior and release gap
+## Historical .6 failure boundary
 
 The `.6` bridge has **no typed terminal metadata-failure receipt**. An ordinary
 broken project can terminate initialization in the same observable way as a
@@ -88,7 +88,7 @@ truncated capture, stale/wrong nonce, changed argv/input, failed cleanup and
 receipt-replay negatives. A new build/provenance and relevant provider/native
 checks are required; existing `.6` receipts do not certify this follow-up.
 
-## Frozen source contract (runtime pending)
+## Frozen .7 source contract
 
 All five optional config fields must be absent for ordinary unbound BSP use,
 or supplied together: `metadataJobNonce` (fresh 64 lowercase hexadecimal
@@ -114,3 +114,35 @@ receipt is finalized for that cleanup failure.
 Independent read-only source review found no additional blocker at `8e37434`.
 Patch/hash preparation and runtime/adversarial tests remain separate root-owned
 gates. The `.7` source adds no worker/core/query engine or new dependency.
+
+
+## Focused runtime checkpoint — 2026-11-13
+
+The `.7` tool build passes with all 200 staged manifest entries verified.
+Both SDKs pass typed module-success and true missing-input-failure checks.
+Matching Debug producer `1d2fcd1df0d34b37bab70964c94f8b27`, built at `bea7b4f`,
+passes the 14-check production Xcode fixture: healthy TypeScript sibling facts
+publish while the Xcode project is malformed, and saved project repair restores
+both SDK graphs automatically. The existing preparation path may report an
+honest `dependency_restore_failed` gap after the bound metadata rejection;
+no extra per-SDK retry machinery was introduced to force a diagnostic label.
+Evidence: `wave-01/assembled-xcode-integration-05/` and
+`.artifacts/xcode-integration/1794588603510642000/summary.json`.
+
+The existing Xcode policy fixture passes one valid receipt and 23 fault cases:
+nonce/replay, digest, consistently changed argv/input, saved input/executable
+replacement, a newly appeared input, terminal/signal/close/stdout disagreement,
+cleanup/EOF/status, malformed, oversized and missing proof. Shared JSON-RPC
+framing, natural-exit, timeout and backpressure checks also pass. Evidence:
+`wave-01/xcode-rejection-contract-01/` and
+`.artifacts/xcode-provider/1794588727285522000/source-boundaries.json`.
+These proof-reader fault cases do not claim every actual OS signal, backend
+crash, interrupted cleanup or resource-limit path has been exercised end to end.
+
+A real protected-cache regression from changing only metadata to direct launch
+was found and fixed by using the same selected direct executable for normal
+preparation. Both SDK plugin/cache checks now pass under the unchanged analysis
+policy; see [the exact failures and repair](XCODE_PACKAGE_CACHE_QUALIFICATION.md).
+Installed/optimized/platform and broader cleanup/cancellation qualification
+remain separate. No release, live installation or encoding-performance pass is
+claimed.
