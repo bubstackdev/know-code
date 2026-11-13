@@ -1,8 +1,10 @@
 # Xcode metadata failure boundary
 
 Read-only audit, 2026-11-13. The pinned `0.1.0-know-code-index-only.6`
-bridge remains unchanged. The follow-up below is a design outline, not an
-implemented or qualified `.7` capability.
+bridge remains the qualified baseline for this audit. The narrow follow-up is
+now implemented in frozen `.7` source (`8e37434`), independently reviewed and
+awaiting root-owned build/runtime qualification. No `.7` runtime pass is claimed
+here.
 
 ## Current behavior and release gap
 
@@ -14,9 +16,10 @@ project data. This can prevent healthy sibling project results in the affected
 update from publishing. It is a remaining reliability limitation, not proof
 that the broken project has a usable partial compiler graph.
 
-The [pinned seven-file patch](../tooling/xcode-bridge/know-code.patch) and
-[source recipe](../tooling/xcode-bridge/recipe.json) preserve the audited source.
-The matching packaged-source copy is retained under
+The [source recipe](../tooling/xcode-bridge/recipe.json) retains the `.6`
+reference hashes and the current [seven-file patch](../tooling/xcode-bridge/know-code.patch)
+implements the `.7` follow-up. The audited `.6` packaged-source copy remains
+unchanged under
 `.artifacts/xcode-tooling/build-01/source/Sources/`:
 
 | Source boundary | What it proves |
@@ -38,8 +41,9 @@ healthy; it cannot establish what happened during initial metadata export.
 
 ## Minimal follow-up outline
 
-Reuse the current attempt/context sidecars and `ProcessRunner`; add one bounded
-terminal receipt, with a new pinned CLI/recipe capability if implemented. No
+Frozen `.7` source reuses the current attempt/context sidecars and
+`ProcessRunner`, adding one bounded terminal receipt under CLI
+`0.1.0-know-code-index-only.7` and recipe `index-only.7-notice1`. No
 common-core, worker Protobuf or query-engine redesign is required.
 
 1. **Observe the actual metadata process.** Resolve the selected Xcode's real
@@ -83,3 +87,30 @@ publication, both SDK contexts, plus crash/signal, interruption, timeout,
 truncated capture, stale/wrong nonce, changed argv/input, failed cleanup and
 receipt-replay negatives. A new build/provenance and relevant provider/native
 checks are required; existing `.6` receipts do not certify this follow-up.
+
+## Frozen source contract (runtime pending)
+
+All five optional config fields must be absent for ordinary unbound BSP use,
+or supplied together: `metadataJobNonce` (fresh 64 lowercase hexadecimal
+characters), `metadataInputSha256`, `metadataMissingInputs`,
+`metadataToolchainIdentity` (opaque provider identity hash) and
+`metadataCompilerPath`. Project and saved scheme witnesses are mandatory for
+a bound request. The map/missing-input collections are bounded; the encoded
+binding is at most 1 MiB. Unbound successful initialization remains supported,
+but an unbound failure cannot generate accepted rejection proof.
+
+The attempt sidecar preserves logical `arguments` beginning with `xcodebuild`.
+It additionally records the selected direct executable path/hash and per-open
+binding. The terminal `know-code-metadata-outcome.json` is at most 2 MiB and
+echoes those same flat binding fields, with `version: 1`,
+`phase: "metadata_command"`, `outcome: "rejected"`, workspace/scheme/Test
+configuration/platform, `attemptSha256`, direct executable identity and actual
+arguments (the logical argv without its first element). It records natural
+termination, nonzero command status, complete stdout/stderr EOF,
+`bridgeCleanupSucceeded: true`, `expectedBridgeExit: 65` and bounded diagnostic
+tails. Session-close failure replaces a pending command rejection; no terminal
+receipt is finalized for that cleanup failure.
+
+Independent read-only source review found no additional blocker at `8e37434`.
+Patch/hash preparation and runtime/adversarial tests remain separate root-owned
+gates. The `.7` source adds no worker/core/query engine or new dependency.
