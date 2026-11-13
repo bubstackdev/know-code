@@ -2,32 +2,58 @@
 
 The validation owner supplies KNOW_CODE_TEST_XCODE_BRIDGE (executable or its
 runtime directory). This never installs a tool or touches the live coordinator.
+
+Installed mode: --installed-prefix COMPLETED_SIGNED_PACKAGE_TEST --run-directory
+NEW_SHORT_OWNED_ARTIFACTS_PATH. Also supply KNOW_CODE_TEST_XCODE_BRIDGE_PACKAGES
+for the authenticated separate bridge stage. Product children cannot read any
+source checkout; controller-only signing verification reuses sign_packages.py.
 """
 from fixture_trust import grant_fixture
 from index_paths import physical_database
 from xcode_fixture import create
 from contextlib import closing
 import atexit
+import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import plistlib
 import sqlite3
 import subprocess
+import sys
 import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN = ROOT / '.artifacts/xcode-integration' / str(time.time_ns())
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--installed-prefix', type=Path, help='Completed signed package_install.py prefix outside checkouts')
+parser.add_argument('--run-directory', type=Path, help='New short durable owned directory containing .artifacts')
+args = parser.parse_args()
+assert bool(args.installed_prefix) == bool(args.run_directory), 'installed mode requires both paths'
+INSTALLED = args.installed_prefix.resolve(strict=True) if args.installed_prefix else None
+PACKAGE_RESULT = json.loads((INSTALLED / 'result.json').read_text()) if INSTALLED else None
+CHECKOUTS = sorted({ROOT.resolve(), *[Path(value).resolve(strict=True) for value in
+                                   (PACKAGE_RESULT.get('denied_checkouts', []) if INSTALLED else [])]})
+RUN = args.run_directory.resolve() if INSTALLED else ROOT / '.artifacts/xcode-integration' / str(time.time_ns())
+if INSTALLED:
+    assert PACKAGE_RESULT.get('passed') and (PACKAGE_RESULT.get('signing_verification') or {}).get('verified'), 'a completed signed installed-package pass is required'
+    assert INSTALLED == Path(PACKAGE_RESULT['prefix']).resolve()
+    assert '.artifacts' in RUN.parts and not RUN.exists(), 'use a new durable owned .artifacts run directory'
+    assert all(not directory.is_relative_to(checkout) for directory in [INSTALLED, RUN] for checkout in CHECKOUTS)
+RUN.mkdir(parents=True, exist_ok=False)
 PROJECT = create(RUN / 'workspace')
 WORKSPACE = PROJECT.parent
-PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
-HOST = ROOT / f'target/{PROFILE}/know-code'
+PROFILE = 'release' if INSTALLED else os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
+HOST = INSTALLED / 'bin/know-code' if INSTALLED else ROOT / f'target/{PROFILE}/know-code'
 BRIDGE = Path(os.environ['KNOW_CODE_TEST_XCODE_BRIDGE']).expanduser().resolve(strict=True)
 if BRIDGE.is_dir():
     BRIDGE = BRIDGE / 'sourcekit-xcode-bsp'
+BRIDGE = BRIDGE.resolve(strict=True)
 assert BRIDGE.is_file(), BRIDGE
+if INSTALLED:
+    assert all(not BRIDGE.is_relative_to(checkout) for checkout in CHECKOUTS), 'installed tool must be outside source checkouts'
 BIN = RUN / 'bin'
 BIN.mkdir()
 (BIN / 'sourcekit-xcode-bsp').symlink_to(BRIDGE)
@@ -40,6 +66,17 @@ ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(DATA_ALIAS),
            PATH=str(BIN) + os.pathsep + os.environ['PATH'],
            DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1')
 ENV.pop('SDKROOT', None)
+if INSTALLED:
+    for key in ['KNOW_CODE_RUNTIME_DIR', 'KNOW_CODE_COORDINATOR', 'NODE_PATH', 'NODE_OPTIONS']:
+        ENV.pop(key, None)
+    assert len(os.fsencode(DATA_ALIAS / 'c.sock')) < 104, 'choose a shorter owned run-directory for macOS sockets'
+    POLICY = RUN / 'deny-checkout-and-network.sb'
+    denied = ''.join('(deny file-read* file-write* (subpath ' + json.dumps(str(checkout)) + '))' for checkout in CHECKOUTS)
+    POLICY.write_text('(version 1) (allow default) ' + denied +
+        ' (deny network*) (allow network* (local unix-socket (subpath ' + json.dumps(str(RUN)) +
+        '))) (allow network* (remote unix-socket (subpath ' + json.dumps(str(RUN)) + ')))\n')
+INSTALLED_EVIDENCE = None
+SDK_COMMANDS = None
 
 # Extend the common owned fixture instead of maintaining a second PBX generator.
 pbx = PROJECT / 'project.pbxproj'
@@ -145,14 +182,84 @@ CHECKS = []
 DATABASE = None
 
 
-def run(argv, check=True):
-    result = subprocess.run([str(value) for value in argv], cwd=ROOT, env=ENV,
-                            text=True, capture_output=True, timeout=45)
+def run(argv, check=True, sandbox=True, cwd=None, timeout=45):
+    command = (['/usr/bin/sandbox-exec', '-f', str(POLICY)] if INSTALLED and sandbox else []) + list(map(str, argv))
+    result = subprocess.run(command, cwd=cwd or (RUN if INSTALLED else ROOT), env=ENV,
+                            text=True, capture_output=True, timeout=timeout)
     with (RUN / 'commands.jsonl').open('a') as stream:
-        stream.write(json.dumps({'argv': list(map(str, argv)), 'returncode': result.returncode,
+        stream.write(json.dumps({'argv': command, 'returncode': result.returncode,
                                  'stdout': result.stdout, 'stderr': result.stderr}) + '\n')
     assert not check or result.returncode == 0, (argv, result.stdout, result.stderr)
     return result
+
+
+if INSTALLED:
+    # Reuse the authenticated signing flow, including its complete archive and
+    # provenance checks. Test-controller verification can read source; product
+    # commands below always inherit checkout/network denial.
+    signing = PACKAGE_RESULT['signing_verification']
+    PACKAGES = Path(PACKAGE_RESULT['packages']).resolve(strict=True)
+    common_work = RUN / 'common-verification'
+    verified = json.loads(run([sys.executable, ROOT / 'scripts/sign_packages.py', 'verify', '--packages', PACKAGES,
+        '--work-dir', common_work, '--team-id', signing['team_id'], '--signer-sha256', signing['signer_sha256']], sandbox=False, timeout=120).stdout)
+    assert verified['verified'] and verified['manifest_sha256'] == PACKAGE_RESULT['candidate_manifest_sha256']
+    manifest = json.loads((PACKAGES / 'manifest.json').read_text())
+    assert manifest['profile'] == 'release' and {item['file']: item['sha256'] for item in manifest['artifacts']} == PACKAGE_RESULT['archive_sha256']
+    receipt = json.loads((PACKAGES / 'signing-transform.json').read_text())
+    inventories = {row['kind']: row['signed_inventory'] for row in receipt['archives']}
+    bundle = HOST.resolve(strict=True).parent.parent
+    node_package = INSTALLED / 'node-consumer/node_modules/@know-code/node'
+    managed = INSTALLED / 'net-consumer/bin/Release/net10.0'
+    mapped = []
+    for kind, installed, archive_root in [('runtime', bundle, f"know-code-{manifest['version']}-darwin-arm64"),
+                                           ('node', node_package, 'package')]:
+        for name, expected in inventories[kind].items():
+            if expected['kind'] == 'file':
+                mapped.append((installed / Path(name).relative_to(archive_root), expected))
+    for name, target in [('lib/net10.0/KnowCode.dll', managed / 'KnowCode.dll'),
+                         ('runtimes/osx-arm64/native/libknow_code_ffi.dylib', managed / 'runtimes/osx-arm64/native/libknow_code_ffi.dylib')]:
+        mapped.append((target, inventories['nuget'][name]))
+    for file, expected in mapped:
+        assert file.resolve(strict=True).is_relative_to(INSTALLED) and not file.is_symlink(), ('foreign installed payload', file)
+        assert file.stat().st_size == expected['bytes'] and hashlib.sha256(file.read_bytes()).hexdigest() == expected['sha256'], file
+
+    # The separate tool uses the signing owner's existing bridge verifier and
+    # inventory helper. Missing signed-stage evidence is a hard fixture failure.
+    bridge_packages_value = os.environ.get('KNOW_CODE_TEST_XCODE_BRIDGE_PACKAGES')
+    assert bridge_packages_value, 'installed Xcode mode requires KNOW_CODE_TEST_XCODE_BRIDGE_PACKAGES for authenticated bridge verification'
+    bridge_packages = Path(bridge_packages_value).resolve(strict=True)
+    bridge_work = RUN / 'bridge-verification'
+    bridge_verified = json.loads(run([sys.executable, ROOT / 'scripts/sign_packages.py', 'bridge-verify',
+        '--packages', bridge_packages, '--work-dir', bridge_work, '--team-id', signing['team_id'],
+        '--signer-sha256', signing['signer_sha256']], sandbox=False, timeout=120).stdout)
+    assert bridge_verified['verified'] and bridge_verified['tool'] == 'know-code-xcode-bridge'
+    spec = importlib.util.spec_from_file_location('xcode_installed_signing', ROOT / 'scripts/sign_packages.py')
+    signing_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(signing_module)
+    assert signing_module.bridge_inventory(BRIDGE.parent) == bridge_verified['runtime_inventory'], 'installed bridge differs from authenticated archive'
+
+    for checkout in CHECKOUTS:
+        assert (checkout / 'LICENSE').is_file()
+        assert run(['/bin/cat', checkout / 'LICENSE'], check=False).returncode != 0, ('checkout policy ineffective', checkout)
+    deny_script = 'import fs from "node:fs";for(const p of process.argv.slice(1)){try{fs.readFileSync(p);throw Error("checkout readable: "+p)}catch(e){if(!["EACCES","EPERM"].includes(e.code))throw e}}'
+    run(['node', '--input-type=module', '-e', deny_script, *[checkout / 'LICENSE' for checkout in CHECKOUTS]])
+    runtime_info = json.loads(run([HOST, 'runtime-info']).stdout)
+    assert runtime_info['layout'] == 'bundle' and runtime_info['profile'] == 'release'
+    assert Path(runtime_info['resource_directory']).resolve() == bundle / 'lib/know-code'
+    node_smoke = INSTALLED / 'node-consumer' / ('xcode-smoke-' + RUN.name + '.mjs')
+    assert not node_smoke.exists()
+    node_smoke.write_text('import {Index} from "@know-code/node";console.log(JSON.stringify(await new Index(process.argv[2]).query(JSON.parse(process.argv[3]))));\n')
+    resolved = run(['node', '--input-type=module', '-e', 'console.log(import.meta.resolve("@know-code/node"))'], cwd=node_package.parent.parent.parent)
+    from urllib.parse import unquote, urlparse
+    assert Path(unquote(urlparse(resolved.stdout.strip()).path)).resolve().is_relative_to(node_package.resolve()), resolved.stdout
+    SDK_COMMANDS = (['node', node_smoke], ['dotnet', managed / 'Consumer.dll'])
+    INSTALLED_EVIDENCE = {'package_prefix': str(INSTALLED), 'candidate_manifest_sha256': verified['manifest_sha256'],
+        'archives': PACKAGE_RESULT['archive_sha256'], 'runtime_info': runtime_info, 'bridge_verification': bridge_verified,
+        'bridge_root': str(BRIDGE.parent), 'node_entry': resolved.stdout.strip(),
+        'installed_payloads': {str(file): expected['sha256'] for file, expected in mapped},
+        'policy_sha256': hashlib.sha256(POLICY.read_bytes()).hexdigest(), 'denied_checkouts': list(map(str, CHECKOUTS)),
+        'notarization': 'separate distribution/security gate'}
+    (RUN / 'installed-artifacts.json').write_text(json.dumps(INSTALLED_EVIDENCE, indent=2) + '\n')
 
 
 def stop():
@@ -187,8 +294,8 @@ def query(request, equivalent=False, freshness='current'):
     response = json.loads(run([HOST, 'query', DATABASE, encoded]).stdout)
     assert 'result' in response and response['result']['freshness'] == freshness, response
     if equivalent:
-        for argv in (['node', ROOT / f'.artifacts/build/{PROFILE}/node/smoke.mjs'],
-                     ['dotnet', ROOT / f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll']):
+        for argv in SDK_COMMANDS or (['node', ROOT / f'.artifacts/build/{PROFILE}/node/smoke.mjs'],
+                                    ['dotnet', ROOT / f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll']):
             assert json.loads(run([*argv, DATABASE, encoded]).stdout) == response
     return response['result']
 
@@ -260,7 +367,7 @@ def guards():
     assert not any((WORKSPACE / name).exists() for name in ('PHASE_EXECUTED', 'SCHEME_EXECUTED'))
 
 
-grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN / 'fixture-trust.jsonl')
+grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN / 'fixture-trust.jsonl', runner=run if INSTALLED else None)
 DATABASE = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)['database']
 generation = ready('initial')
 contexts = coverage()
@@ -434,8 +541,10 @@ CHECKS.append('new_save_after_acknowledged_cancellation_resumes_both_SDK_graphs'
 
 result = {'passed': True, 'profile': PROFILE, 'run': str(RUN), 'database': DATABASE,
           'bridge': str(BRIDGE), 'generation': generation, 'checks': CHECKS,
+          'installed_artifacts': INSTALLED_EVIDENCE,
           'limits': ['finite owned current-host integration, not whole-language or release certification',
                      'unsupported graph forms remain explicitly partial', 'no encoding or installed-distribution performance claim']}
 (RUN / 'summary.json').write_text(json.dumps(result, indent=2) + '\n')
-(RUN.parent / 'latest.json').write_text(json.dumps(result, indent=2) + '\n')
+if not INSTALLED:
+    (RUN.parent / 'latest.json').write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))
