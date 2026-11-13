@@ -280,11 +280,14 @@ function restoration({root, project, selection, state, bridge, toolchain, reques
   send('progress', {stage: 'restoring', projectPath: relative(root, project), message: 'Resolving Xcode package dependencies with the saved Test configuration; no product build'});
   let error = '';
   try {
-    const args = ['xcodebuild', '-resolvePackageDependencies', path.basename(project) === 'project.pbxproj' ? '-project' : '-workspace', container(project),
+    const args = ['-resolvePackageDependencies', path.basename(project) === 'project.pbxproj' ? '-project' : '-workspace', container(project),
       '-scheme', context.metadataSchemeName, '-configuration', configuration, '-derivedDataPath', path.join(state, 'metadata-preparation'),
       '-clonedSourcePackagesDirPath', path.join(state, 'clones'), '-packageCachePath', path.join(state, 'cache'), '-skipPackageUpdates'];
     if ([path.join(container(project), 'project.xcworkspace/xcshareddata/swiftpm/Package.resolved'), path.join(container(project), 'xcshareddata/swiftpm/Package.resolved')].some(exists)) args.push('-onlyUsePackageVersionsFromResolvedFile');
-    const result = run('/usr/bin/xcrun', args, path.dirname(container(project)), env);
+    // Match metadata's selected executable and inherited environment. xcrun
+    // adds tool environment variables that invalidate SwiftPM manifest caches.
+    const executable = fs.realpathSync(path.join(env.DEVELOPER_DIR, 'usr/bin/xcodebuild'));
+    const result = run(executable, args, path.dirname(container(project)), env);
     if (result.status !== 0) throw Error(`${result.stdout}\n${result.stderr}`);
     const inputs = Object.fromEntries([...new Set([project, ...selection.inputs, ...toolchain.inputPaths])].filter(exists).map(file => [file, hash(fs.readFileSync(file))]));
     plan = {inputs, analysisInputs: Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
@@ -306,7 +309,7 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
   if (toolchain.env.SDKROOT) return gap({root, project, toolchain, selection, error: problem('xcode_sdk_override_conflict', 'Unset SDKROOT for Xcode indexing so the selected Xcode can supply separate device and simulator SDKs; no SDK override was silently substituted.')});
   const state = path.join(work, 'xcode', hash(`${project}:${toolchain.identity}`).slice(0, 24));
   for (const dir of [state, path.join(state, 'clones'), path.join(state, 'cache')]) fs.mkdirSync(dir, {recursive: true});
-  const key = `xcode:${project}`, fingerprint = hash(`${request.preparationFingerprint}:${toolchain.identity}:${bridge.manifestSha256}:${selection.schemePath}:xcode-preparation-1`);
+  const key = `xcode:${project}`, fingerprint = hash(`${request.preparationFingerprint}:${toolchain.identity}:${bridge.manifestSha256}:${selection.schemePath}:xcode-preparation-2`);
   let previous = request.preparations.find(item => item.key === key);
   let plan; try { plan = json(path.join(state, 'dependency-plan.json')); } catch { /* First preparation is explicit below. */ }
   if (previous?.fingerprint === fingerprint && !previous.succeeded && !request.retryPreparation) return gap({root, project, toolchain, selection,
