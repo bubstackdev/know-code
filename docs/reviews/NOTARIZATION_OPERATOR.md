@@ -190,3 +190,125 @@ Reuse the VM/image download already in progress; do not start another download o
 5. Bind raw results to final index/CMS/image/archive hashes, pinned signer, guest snapshot and harness hashes. The existing signed archive harness still requires the local unsigned replay directory; stage that proof separately outside the public image if running it unchanged. Its product/offline checks, including the added relocated npm 10 policy cases, do not automatically certify Gatekeeper. Repeat the normal-security route on the current supported host in an isolated environment; do not replace the active development runtime.
 
 If Finder ticket ingestion, the CLI's first quarantined execution, an SDK's native load, or the image's offline assessment fails, preserve evidence and stop the release. An online rerun is diagnostic only. The fallback is a concrete packaging/installation change with new final artifact hashes and repeat validation, not a security bypass or a claim that notarization alone satisfied the gate.
+
+## Separate Xcode bridge image — source recipe, not executed
+
+The user selected a separate bridge download **and** separate bridge DMG. Keep
+the main image and its three core archives unchanged. This route wraps the
+single archive from `sign_packages.py bridge-sign`; it neither builds nor
+automatically installs the bridge. Require a new matching tool build recording
+`builder_sha256`, successful bridge signing verification and relevant installed
+language checks. Earlier unsigned research binaries are not substitutes.
+
+Use the same externally pinned Team ID/certificate and installed identity as
+above. Set these paths to the actual frozen signed stage and a **new** durable
+work directory; stop on any failed command:
+
+```sh
+set -eu
+export BRIDGE_SIGNED="$PWD/.artifacts/xcode-tooling/ACTUAL_SIGNED_STAGE"
+export BRIDGE_WORK="$PWD/.artifacts/notarization/bridge-final-01"
+export BRIDGE_DMG='know-code-xcode-bridge-index-only.7-notice1-darwin-arm64.dmg'
+export IDENTITY='INSTALLED DEVELOPER ID APPLICATION IDENTITY NAME'
+test ! -e "$BRIDGE_WORK"
+mkdir -p "$BRIDGE_WORK/evidence" "$BRIDGE_WORK/release"
+python3 scripts/sign_packages.py bridge-verify --packages "$BRIDGE_SIGNED" \
+  --work-dir "$BRIDGE_WORK/replay-before" --team-id 3FMAPDQDGP \
+  --signer-sha256 f9a80b2743c868aa5579cd1ac2b9cf5a8925a6784cb2a1c0bb367eb0ffbfcf75 \
+  > "$BRIDGE_WORK/evidence/bridge-verification.json"
+python3 - <<'PY'
+import importlib.util, os, shutil
+from pathlib import Path
+spec = importlib.util.spec_from_file_location('sign_packages', 'scripts/sign_packages.py')
+s = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(s)
+source, work = Path(os.environ['BRIDGE_SIGNED']), Path(os.environ['BRIDGE_WORK'])
+verification = s.read_json(work / 'replay-before/verification.json')
+manifest = s.read_json(source / 'manifest.json')
+receipt = s.read_json(source / 'signing-transform.json')
+assert verification['verified'] and verification['recipe_id'] == 'index-only.7-notice1'
+assert s.digest(Path('scripts/sign_packages.py')) == manifest['signing']['script_sha256']
+image = work / 'image-root'
+image.mkdir()
+for name in ('packages', 'proof'):
+    (image / name).mkdir()
+archive = source / manifest['artifact']['file']
+assert s.digest(archive) == manifest['artifact']['sha256'] == receipt['signed_sha256']
+inventory = s.unpack(archive, image / 'tool')
+assert inventory == receipt['signed_inventory']
+for name, item in inventory.items():
+    (image / 'tool' / name).chmod(item['mode'])
+root = image / 'tool' / verification['archive_root']
+assert s.bridge_inventory(root) == verification['runtime_inventory']
+for destination in (image / 'packages', work / 'release'):
+    shutil.copyfile(archive, destination / archive.name)
+    assert s.digest(destination / archive.name) == manifest['artifact']['sha256']
+for name in ('manifest.json', 'manifest.cms', 'signing-transform.json', 'build-record.json'):
+    for destination in (image / 'proof', work / 'release'):
+        shutil.copyfile(source / name, destination / name)
+        assert s.digest(destination / name) == s.digest(source / name)
+shutil.copyfile('tooling/xcode-bridge/README.md', image / 'INSTALLATION.md')
+s.write_json(work / 'evidence/native-submission-inventory.json', [
+    {'image_path':(Path('tool') / row['path']).as_posix(),
+     'sha256':row['signed_sha256'], 'identifier':row['identifier']}
+    for row in receipt['native']])
+assert len(receipt['native']) == 2
+PY
+/usr/bin/hdiutil create -srcfolder "$BRIDGE_WORK/image-root" \
+  -volname KnowCode-Xcode-Bridge-index-only.7 -fs HFS+ -format UDRO \
+  "$BRIDGE_WORK/release/$BRIDGE_DMG"
+/usr/bin/codesign --sign "$IDENTITY" --timestamp \
+  --identifier dev.bubstack.know-code.xcode-bridge.distribution \
+  "$BRIDGE_WORK/release/$BRIDGE_DMG"
+/usr/bin/hdiutil verify "$BRIDGE_WORK/release/$BRIDGE_DMG"
+```
+
+The image layout is `tool/<archive-topdir>/`, `packages/<single archive>`,
+`proof/{manifest.json,manifest.cms,signing-transform.json,build-record.json}`
+and `INSTALLATION.md`. Keep `unsigned/`, builder/signing evidence, certificate
+extracts and checkout/cache trees local. Do not re-sign either expanded native
+file or edit the adjacent `know-code-xcode-bridge.json` after archive signing.
+
+Before submission, repeat the image signature requirement, secure timestamp,
+certificate extraction/pin, read-only mounting and exact inventory checks from
+the main-image procedure, using identifier
+`dev.bubstack.know-code.xcode-bridge.distribution`. Compare the mounted expanded
+tool with `verification.runtime_inventory` through `bridge_inventory`, and
+mounted proof/archive hashes with the verified stage. Record `codesign
+--display --verbose=4` output and actual architecture/CDHash for **both** native
+files and the image; no product execution belongs in this inspection. Preserve
+the exact signed pre-staple image as `$BRIDGE_WORK/submitted.dmg`.
+
+Reuse the submit/status/log/staple/validate commands above with this bridge
+image and a separate actual submission ID. Require Accepted and review the raw
+Apple log. Its submission SHA-256 must match `submitted.dmg`; ticket contents
+must cover the two actual native CDHashes/architectures and image CDHash.
+Filename matches and overall Accepted status alone are insufficient. After
+stapling, recheck the same native bytes, both native signatures/CDHashes, image
+signature/CDHash, full mounted runtime inventory and unchanged archive/proof
+hashes. Record the final image SHA-256 separately from the submitted hash.
+
+Retain the inner `manifest.json`/CMS unchanged, including its truthful
+`notarization: {status: not_performed}`. Build a separate outer bridge
+`release-index.json` only from the actual verified evidence. Record recipe ID,
+CLI identity, upstream/SwiftBuild revisions, tool build-record digest, recorded
+builder digest, signing-script digest, frozen Know Code source revision and
+operator-document digest; pinned signer/Team ID; every public file's size and
+SHA-256; actual submission ID/status; pre/post-staple hashes; and the two
+native plus image architecture/CDHash rows checked against the raw log. The
+index does not inventory itself or its CMS signature. Authenticate its exact
+bytes with the existing `security cms -S -T -H SHA256 -u 6` procedure. For replay,
+copy the index and its detached signature into a **new evidence directory** as
+`manifest.json`/`manifest.cms` and call existing `verify_cms` with the external
+certificate pin; also check the index's actual artifact hashes. This reuses
+the strict content/signature/signer/trust helper without a second verifier.
+
+The separate public asset allowlist is this DMG, its single bridge TAR, unchanged
+inner manifest/CMS, signing-transform and tool build-record, the actual raw
+notarization log, outer release-index/CMS and final SHA256SUMS. Do not upload the
+entire local signing directory. Before publication, exercise first quarantined
+image open and installation under normal security, offline ticket ingestion,
+and actual installed device/simulator indexing outside the checkout, using the
+existing installed Xcode fixture and authenticated stage. Keep the bridge
+installation explicit and separate from the common runtime. No execution or
+successful notarization/platform/installation claim accompanies this recipe.
