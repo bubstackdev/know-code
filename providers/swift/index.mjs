@@ -13,10 +13,14 @@ const kinds = ['unknown', 'module', 'namespace', 'namespace_alias', 'macro', 'en
   'protocol', 'extension', 'union', 'typealias', 'function', 'variable', 'field', 'enum_constant',
   'instance_method', 'class_method', 'static_method', 'instance_property', 'class_property',
   'static_property', 'constructor', 'destructor', 'conversion_function', 'parameter'];
+function toolStderr(stderr) {
+  const text = String(stderr ?? '');
+  return text.length <= 16000 ? text : `${text.slice(0, 8000)}\n[Swift tool stderr truncated]\n${text.slice(-8000)}`;
+}
 export function run(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, {cwd, env, encoding: 'utf8', maxBuffer: MAX_FRAME, timeout: 120_000});
-  if (result.error) throw new Error(`Swift tool failed: ${result.error.message}`);
-  if (result.signal) throw new Error(`Swift tool interrupted by ${result.signal}`);
+  if (result.error) throw new Error(`Swift tool failed: ${String(result.error.message).slice(0, 4096)}; stderr: ${toolStderr(result.stderr)}`);
+  if (result.signal) throw new Error(`Swift tool interrupted by ${result.signal}; stderr: ${toolStderr(result.stderr)}`);
   return result;
 }
 export function checked(command, args, cwd, env = process.env) {
@@ -29,15 +33,22 @@ export function compileSources({compiler, options, store, root, env}) {
   const diagnostics = [];
   let partial = false;
   for (const option of options) {
-    const compile = run(compiler, ['-index-file', '-index-file-path', option.file,
-      '-index-store-path', store, '-index-include-locals', '-index-ignore-system-modules',
-      '-index-unit-output-path', path.join(store, `${hash(option.file)}.o`), ...option.args], option.workingDirectory, env);
-    const items = compilerDiagnostics(compile.stderr, root);
-    if (/Stack dump:|Please submit a bug report|signal [0-9]+|LLVM ERROR|Assertion failed/i.test(compile.stderr)
-        || (compile.status !== 0 && !items.some(item => item.severity === 'error' && item.path)))
-      throw new Error(`Swift compiler/driver failed: ${compile.stderr.slice(0, 16000)}`);
-    partial ||= compile.status !== 0 || items.some(item => item.severity === 'error');
-    for (const item of items) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
+    try {
+      const compile = run(compiler, ['-index-file', '-index-file-path', option.file,
+        '-index-store-path', store, '-index-include-locals', '-index-ignore-system-modules',
+        '-index-unit-output-path', path.join(store, `${hash(option.file)}.o`), ...option.args], option.workingDirectory, env);
+      const items = compilerDiagnostics(compile.stderr, root);
+      if (/Stack dump:|Please submit a bug report|signal [0-9]+|LLVM ERROR|Assertion failed/i.test(compile.stderr)
+          || (compile.status !== 0 && !items.some(item => item.severity === 'error' && item.path)))
+        throw new Error(`Swift compiler/driver failed: ${compile.stderr.slice(0, 16000)}`);
+      partial ||= compile.status !== 0 || items.some(item => item.severity === 'error');
+      for (const item of items) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
+    } catch (error) {
+      const moduleCaches = option.args.flatMap((value, index) => value === '-module-cache-path' ? [option.args[index + 1] ?? '<missing>']
+        : value.startsWith('-module-cache-path=') ? [value.slice('-module-cache-path='.length)] : []);
+      const bounded = value => String(value).slice(0, 4096);
+      throw new Error(`Swift compiler/driver failed: stage=index-file; source=${bounded(option.file)}; compiler=${bounded(compiler)}; module_cache_path=${bounded(moduleCaches.at(-1) ?? '<not specified>')}; ${String(error.message).slice(0, 22000)}`, {cause: error});
+    }
   }
   return {partial, diagnostics};
 }

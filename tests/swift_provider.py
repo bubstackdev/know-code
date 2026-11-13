@@ -21,13 +21,27 @@ HARNESS = ROOT / 'tests/worker_harness.mjs'
 # otherwise healthy source analysis into a compiler-error report.
 diagnostic_check = subprocess.run(['node', '--input-type=module', '-e', '''
 import assert from 'node:assert/strict';
-import {compilerDiagnostics} from './providers/swift/index.mjs';
+import {compilerDiagnostics, run, compileSources} from './providers/swift/index.mjs';
 const root = process.cwd();
 const warnings = compilerDiagnostics('<unknown>:0: warning: ignoring -experimental-lazy-typecheck (requires -enable-library-evolution)\\nwarning: driver warning\\n', root);
 assert.deepEqual(warnings.map(d => [d.severity, d.path]), [['warning', ''], ['warning', '']]);
 const mixed = compilerDiagnostics(`${root}/Sample.swift:3:7: error: missing value\\n<unknown>:0: note: compiler context\\nremark: compiler remark\\n`, root);
 assert.deepEqual(mixed.map(d => [d.severity, d.path]), [['error', 'Sample.swift'], ['info', ''], ['info', '']]);
 assert.equal(compilerDiagnostics('unrecognized compiler failure', root)[0].severity, 'error');
+assert.throws(() => run(process.execPath, ['-e', "process.stderr.write('owned start' + 'x'.repeat(20000) + 'owned end', () => process.kill(process.pid, 'SIGTERM'))"], root), error => {
+  assert.match(error.message, /Swift tool interrupted by SIGTERM/);
+  assert.ok(error.message.includes('owned start') && error.message.includes('owned end'));
+  assert.ok(error.message.includes('[Swift tool stderr truncated]') && error.message.length < 16200);
+  return true;
+});
+const source = `${root}/OwnedDiagnostic.swift`, compiler = `${process.execPath}/nonexistent-compiler`, cache = `${root}/owned-cache`;
+assert.throws(() => compileSources({compiler, options: [{file: source, args: ['-module-cache-path', cache], workingDirectory: root}],
+  store: `${root}/owned-store`, root}), error => {
+  assert.ok(error.message.includes('stage=index-file') && error.message.includes(`source=${source}`)
+    && error.message.includes(`compiler=${compiler}`) && error.message.includes(`module_cache_path=${cache}`));
+  assert.ok(error.message.includes('Swift tool failed:'));
+  return true;
+});
 '''], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
 assert diagnostic_check.returncode == 0, diagnostic_check.stderr
 subprocess.run([sys.executable, ROOT / 'scripts/build_record.py', 'verify', PROFILE], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
