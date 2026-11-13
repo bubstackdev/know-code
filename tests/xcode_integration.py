@@ -191,11 +191,15 @@ def coverage():
     assert {row['analysis_options']['platform'] for row in rows} == {'iphoneos', 'iphonesimulator'}
     assert all(sum(row['analysis_options']['platform'] == platform for row in rows) == 3
                for platform in ('iphoneos', 'iphonesimulator'))
+    assert all(row['capabilities']['calls'] == row['capabilities']['dependencies']
+               == row['capabilities']['dispatch'] == 'partial'
+               and row['capabilities']['project_links'] == 'unavailable' for row in rows), rows
     return {row['compilation_id']: row for row in rows}
 
 
 def symbols(name):
-    return query({'op': 'symbols', 'name': name, 'limit': 100}, equivalent=True).get('symbols', [])
+    return [symbol for symbol in query({'op': 'symbols', 'name': name, 'limit': 100}, equivalent=True).get('symbols', [])
+            if not symbol['external']]
 
 
 def graph_checks(contexts):
@@ -236,6 +240,7 @@ grant_fixture(HOST, WORKSPACE, ENV, RUN, RUN / 'fixture-trust.jsonl')
 DATABASE = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)['database']
 generation = ready('initial')
 contexts = coverage()
+assert all(not row['diagnostic_counts'].get('error', 0) for row in contexts.values()), contexts
 graph_checks(contexts)
 guards()
 CHECKS += ['six_app_dependency_UI_contexts', 'saved_Test_configuration', 'native_CLI_Node_dotnet_parity',
@@ -276,7 +281,9 @@ assert len(symbols('dependencyEntry()')) == 2 and len(symbols('contextEntry()'))
 CHECKS.append('compiler_error_is_fresh_partial_with_healthy_facts')
 APP.write_text(healthy)
 generation = ready('compiler-repair', generation)
-coverage()
+repaired = coverage()
+assert repaired.keys() == contexts.keys()
+assert all(not row['diagnostic_counts'].get('error', 0) for row in repaired.values()), repaired
 graph_checks(contexts)
 guards()
 CHECKS.append('saved_compiler_error_repair')
