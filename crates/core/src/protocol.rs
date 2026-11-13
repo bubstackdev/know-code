@@ -10,6 +10,7 @@ pub const VERSION: u32 = 7;
 pub const INDEX_LIFECYCLE_VERSION: u32 = 4;
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 pub const ANALYSIS_POLICY_VERSION: u32 = 1;
+pub const SWIFT_ANALYSIS_POLICY_VERSION: u32 = 2;
 
 // Validate once at the worker boundary and bind preparation reuse to the policy.
 // Ordinary request construction remains legacy until shared settings are wired.
@@ -19,9 +20,15 @@ pub(crate) fn prepare_analysis_policy(
     let Some(policy) = &request.analysis_policy else {
         return Ok(None);
     };
-    if policy.version != ANALYSIS_POLICY_VERSION {
+    let supported_version = if matches!(policy.settings, Some(analysis_policy::Settings::Swift(_)))
+    {
+        SWIFT_ANALYSIS_POLICY_VERSION
+    } else {
+        ANALYSIS_POLICY_VERSION
+    };
+    if policy.version != supported_version {
         return Err(Error::UpdateRequired(format!(
-            "analysis policy {} is unsupported; expected {ANALYSIS_POLICY_VERSION}",
+            "analysis policy {} is unsupported; expected {supported_version}",
             policy.version
         )));
     }
@@ -63,13 +70,15 @@ pub(crate) fn prepare_analysis_policy(
             "rust"
         }
         Some(analysis_policy::Settings::Swift(context)) => {
-            if context
-                .scheme_path
-                .as_ref()
-                .is_some_and(|s| !Path::new(s).is_absolute() || s.contains('\0'))
+            if !Path::new(&context.cache_directory).is_absolute()
+                || context.cache_directory.contains('\0')
+                || context
+                    .scheme_path
+                    .as_ref()
+                    .is_some_and(|s| !Path::new(s).is_absolute() || s.contains('\0'))
             {
                 return Err(Error::InvalidRequest(
-                    "Swift scheme_path must be absolute".into(),
+                    "Swift cache_directory and scheme_path must be valid absolute paths".into(),
                 ));
             }
             "swift"
@@ -146,10 +155,15 @@ mod tests {
     use super::*;
 
     fn request(settings: analysis_policy::Settings) -> AnalyzeRequest {
+        let version = if matches!(&settings, analysis_policy::Settings::Swift(_)) {
+            SWIFT_ANALYSIS_POLICY_VERSION
+        } else {
+            ANALYSIS_POLICY_VERSION
+        };
         AnalyzeRequest {
             preparation_fingerprint: "saved-inputs".into(),
             analysis_policy: Some(AnalysisPolicy {
-                version: ANALYSIS_POLICY_VERSION,
+                version,
                 settings: Some(settings),
             }),
             ..Default::default()
@@ -176,11 +190,31 @@ mod tests {
             check_analysis_policy(required, &provider),
             Err(Error::UpdateRequired(_))
         ));
+
         provider.analysis_policy_version = ANALYSIS_POLICY_VERSION;
         check_analysis_policy(required, &provider).unwrap();
         provider.language = "typescript".into();
         assert!(matches!(
             check_analysis_policy(required, &provider),
+            Err(Error::UpdateRequired(_))
+        ));
+
+        let mut swift = request(analysis_policy::Settings::Swift(SwiftBuildContext {
+            cache_directory: "/user/swift".into(),
+            execution_allowed: true,
+            ..Default::default()
+        }));
+        let required = prepare_analysis_policy(&mut swift).unwrap();
+        provider.language = "swift".into();
+        assert!(matches!(
+            check_analysis_policy(required, &provider),
+            Err(Error::UpdateRequired(_))
+        ));
+        provider.analysis_policy_version = SWIFT_ANALYSIS_POLICY_VERSION;
+        check_analysis_policy(required, &provider).unwrap();
+        swift.analysis_policy.as_mut().unwrap().version = ANALYSIS_POLICY_VERSION;
+        assert!(matches!(
+            prepare_analysis_policy(&mut swift),
             Err(Error::UpdateRequired(_))
         ));
     }
@@ -219,11 +253,19 @@ mod tests {
                 default_features: Some(false),
                 ..Default::default()
             })),
-            request(analysis_policy::Settings::Swift(
-                SwiftBuildContext::default(),
-            )),
+            request(analysis_policy::Settings::Swift(SwiftBuildContext {
+                cache_directory: "/user/swift".into(),
+                ..Default::default()
+            })),
             request(analysis_policy::Settings::Swift(SwiftBuildContext {
                 scheme_path: Some("/repo/App.xcscheme".into()),
+                cache_directory: "/user/swift".into(),
+                ..Default::default()
+            })),
+            request(analysis_policy::Settings::Swift(SwiftBuildContext {
+                cache_directory: "/user/swift".into(),
+                execution_allowed: true,
+                ..Default::default()
             })),
         ] {
             prepare_analysis_policy(&mut request).unwrap();
@@ -271,7 +313,10 @@ mod tests {
             }),
             analysis_policy::Settings::Swift(SwiftBuildContext {
                 scheme_path: Some("relative.xcscheme".into()),
+                cache_directory: "/user/swift".into(),
+                ..Default::default()
             }),
+            analysis_policy::Settings::Swift(SwiftBuildContext::default()),
             analysis_policy::Settings::Node(NodePreparationPolicy::default()),
             analysis_policy::Settings::Csharp(CSharpBuildContext {
                 solution_path: Some("relative.sln".into()),

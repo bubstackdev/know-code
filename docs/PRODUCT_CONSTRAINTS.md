@@ -79,3 +79,5 @@ Moved verbatim from AGENTS.md on 2026-11-12 to keep session instructions small. 
 - Query freshness policy: wait up to 500 ms by default for pending saved changes, configurable per query and capped by the caller deadline; then return the last coherent result with explicit stale metadata if fresh analysis is not ready. No usable prior index must produce a not-ready outcome rather than fabricated empty/fresh results. The 500 ms bounds freshness waiting, not total query execution.
 - Paginated queries stay on one index generation while updates publish. Cursors expire to bound retained state; expiration/invalidation must require an explicit restart, never silently switch generations mid-pagination. Exact cursor mechanism and lifetime remain open.
 
+
+- On 2026-11-13 the user approved adoption of the pinned SwiftBuild/BSP bridge as a separately installed optional Xcode-only prerequisite after protected real device/simulator and stored native-query evidence. This supersedes earlier undecided-adoption statements; production integration and release qualification remain pending. Preserve the common core and ordinary shared preparation, scheduling and resource controls.

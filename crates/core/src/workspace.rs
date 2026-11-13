@@ -770,9 +770,11 @@ pub fn refresh_controlled(
             request: AnalyzeRequest {
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: swift,
-                analysis_policy: settings.swift.clone().map(|context| {
+                analysis_policy: settings.swift.clone().map(|mut context| {
+                    // Checked again by the shared update path before worker execution.
+                    context.execution_allowed = true;
                     crate::protocol::AnalysisPolicy {
-                        version: crate::protocol::ANALYSIS_POLICY_VERSION,
+                        version: crate::protocol::SWIFT_ANALYSIS_POLICY_VERSION,
                         settings: Some(crate::protocol::analysis_policy::Settings::Swift(context)),
                     }
                 }),

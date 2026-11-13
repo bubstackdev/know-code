@@ -99,6 +99,10 @@ message RustAnalysisPolicy {
 message SwiftBuildContext {
   // Absent: select the sole shared scheme; ambiguity requires a choice.
   optional string scheme_path = 1;
+  // Derived only from the existing identity-bound personal execution grant.
+  bool execution_allowed = 2;
+  // Absolute coordinator-owned location for compiler preparation outputs.
+  string cache_directory = 3;
 }
 // Required setup state, shared by providers; not usage telemetry or graph facts.
 message PreparationResult {

@@ -8,7 +8,7 @@ public sealed record CSharpBuildContext(string? Configuration, string? SolutionP
 public sealed record NodePreparationPolicy(string CacheDirectory, bool AllowInstallScripts);
 public sealed record RustAnalysisPolicy(string[] Targets, string[] Features, bool? DefaultFeatures,
     bool ExecutionAllowed, string CacheDirectory);
-public sealed record SwiftBuildContext(string? SchemePath);
+public sealed record SwiftBuildContext(string? SchemePath, bool ExecutionAllowed = false, string CacheDirectory = "");
 public sealed record AnalysisSettings(CSharpBuildContext Csharp, NodePreparationPolicy Node,
     string ConfigurationOrigin, string SolutionOrigin, string ProjectFile, string PersonalFile,
     bool ProjectExecutionAllowed = false, RustAnalysisPolicy? Rust = null, SwiftBuildContext? Swift = null);

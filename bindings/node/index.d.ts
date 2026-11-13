@@ -164,7 +164,7 @@ export interface AnalysisSettings {
   csharp: {configuration: string | null; solution_path: string | null};
   node: {cache_directory: string; allow_install_scripts: boolean};
   rust: {targets: string[]; features: string[]; default_features: boolean | null; execution_allowed: boolean; cache_directory: string};
-  swift: {scheme_path: string | null};
+  swift: {scheme_path: string | null; execution_allowed: boolean; cache_directory: string};
   configuration_origin: string; solution_origin: string;
   project_file: string; personal_file: string;
   project_execution_allowed: boolean;

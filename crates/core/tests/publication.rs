@@ -81,7 +81,7 @@ fn populate(writer: &mut Writer, text: &str) {
 }
 
 #[test]
-fn rust_context_policy_backfills_legacy_views_without_retrying_current_gaps() {
+fn provider_policy_backfills_legacy_views_without_retrying_current_gaps() {
     let path = database();
     let stage = |writer: &mut Writer, id: &str, language: &str, options: &str| {
         writer
@@ -139,8 +139,41 @@ fn rust_context_policy_backfills_legacy_views_without_retrying_current_gaps() {
     let current = writer.publish().unwrap();
     assert_eq!(ReadView::readiness(&path).unwrap(), (current, false));
 
+    for origin in ["xcode", "swiftpm_build_server", "inferred_directory"] {
+        let mut writer = Writer::open(&path).unwrap();
+        stage(
+            &mut writer,
+            "old-swift",
+            "swift",
+            &format!(r#"{{"origin":"{origin}"}}"#),
+        );
+        let old = writer.publish().unwrap();
+        assert_eq!(ReadView::readiness(&path).unwrap(), (old, true));
+    }
     let mut writer = Writer::open(&path).unwrap();
-    stage(&mut writer, "other-provider", "swift", "{}");
+    stage(
+        &mut writer,
+        "swift-target",
+        "swift",
+        r#"{"swiftExtractionPolicy":1}"#,
+    );
+    stage(
+        &mut writer,
+        "swift-gap",
+        "swift",
+        r#"{"swiftExtractionPolicy":1,"supported":false}"#,
+    );
+    stage(
+        &mut writer,
+        "rust-target",
+        "rust",
+        r#"{"rustContextPolicy":2}"#,
+    );
+    let current = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (current, false));
+
+    let mut writer = Writer::open(&path).unwrap();
+    stage(&mut writer, "other-provider", "other-language", "{}");
     let other = writer.publish().unwrap();
     assert_eq!(ReadView::readiness(&path).unwrap(), (other, false));
 }

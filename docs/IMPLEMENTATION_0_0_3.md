@@ -270,3 +270,15 @@ launcher fingerprints cannot safely be assumed across tool calls. See
 No bridge rebuild, production adoption, installation or live-service change
 was needed. A separately protected Atelier snapshot is prepared for the next
 metadata/module check; its known omitted resources remain explicit.
+
+## Approved production Xcode integration
+
+On 2026-11-13 the user approved [the concrete bridge proposal](XCODE_BRIDGE_DECISION.md).
+The adapter and separately installed tool recipe are being implemented in
+isolated worktrees, with root owning shared contracts and all heavy validation.
+Swift policy 2 adds derived personal trust and central cache fields, while
+TS/C#/Rust keep policy 1. Existing readiness backfills older Swift extraction
+rows; no store/framing change or second execution/storage engine is introduced.
+Protocol, settings and publication checks pass individually; assembled Swift
+workers and native/installed gates remain pending until the adapter lands.
+Earlier research checkpoints above retain their historical limits.

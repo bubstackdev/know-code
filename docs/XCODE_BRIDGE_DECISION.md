@@ -1,6 +1,6 @@
 # Xcode bridge adoption decision
 
-Prepared 2026-11-13. Adoption is pending. The recommendation is a pinned,
+Approved by the user on 2026-11-13: adopt a pinned,
 separately installed, Xcode-only bridge; SwiftPM and the Rust common core do not
 gain a required runtime dependency. This is a dependency decision, not release
 certification or permission to publish/install anything.
@@ -53,7 +53,7 @@ Receipts: [protected project checks](XCODE_ATELIER_QUALIFICATION.md),
 The user separately approved trust for the two isolated research copies; no
 live repository or global execution grant was changed.
 
-## Remaining work if adopted
+## Remaining integration work
 
 Integrate a narrow adapter through the current Swift worker, shared preparation,
 settings, source publication and scheduler. Detect a missing/incompatible

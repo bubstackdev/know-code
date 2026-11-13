@@ -391,7 +391,11 @@ fn resolve_personal(
             execution_allowed,
             cache_directory: data.join("workers/rust").to_string_lossy().into_owned(),
         }),
-        swift: Some(SwiftBuildContext { scheme_path }),
+        swift: Some(SwiftBuildContext {
+            scheme_path,
+            execution_allowed,
+            cache_directory: data.join("workers/swift").to_string_lossy().into_owned(),
+        }),
     })
 }
 
@@ -646,8 +650,14 @@ mod tests {
         assert_eq!(rust.default_features, Some(false));
         assert!(!rust.execution_allowed);
         assert!(Path::new(&rust.cache_directory).is_absolute());
+        let swift = resolved.swift.unwrap();
+        assert!(!swift.execution_allowed);
         assert_eq!(
-            resolved.swift.unwrap().scheme_path,
+            swift.cache_directory,
+            data.join("workers/swift").to_string_lossy()
+        );
+        assert_eq!(
+            swift.scheme_path,
             Some(
                 root.join("App.xcodeproj/xcshareddata/xcschemes/App.xcscheme")
                     .to_string_lossy()
@@ -666,12 +676,27 @@ mod tests {
         assert!(
             resolve(&root, &data, "")
                 .unwrap()
+                .swift
+                .unwrap()
+                .execution_allowed
+        );
+        assert!(
+            resolve(&root, &data, "")
+                .unwrap()
                 .rust
                 .unwrap()
                 .execution_allowed
         );
         assert!(
             serde_json::from_str::<PersonalSettings>(r#"{"rust":{"execution_allowed":true}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<PersonalSettings>(r#"{"swift":{"execution_allowed":true}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<RepositorySettings>(r#"{"swift":{"cache_directory":"/other"}}"#)
                 .is_err()
         );
         let invalid: PersonalSettings =
