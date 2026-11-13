@@ -31,14 +31,17 @@ assert.equal(compilerDiagnostics('unrecognized compiler failure', root)[0].sever
 assert.throws(() => run(process.execPath, ['-e', "process.stderr.write('owned start' + 'x'.repeat(20000) + 'owned end', () => process.kill(process.pid, 'SIGTERM'))"], root), error => {
   assert.match(error.message, /Swift tool interrupted by SIGTERM/);
   assert.ok(error.message.includes('owned start') && error.message.includes('owned end'));
-  assert.ok(error.message.includes('[Swift tool stderr truncated]') && error.message.length < 16200);
+  assert.ok(error.message.includes('[Swift tool stderr truncated]') && Buffer.byteLength(error.message) < 8200);
   return true;
 });
 const source = `${root}/OwnedDiagnostic.swift`, compiler = `${process.execPath}/nonexistent-compiler`, cache = `${root}/owned-cache`;
 assert.throws(() => compileSources({compiler, options: [{file: source, args: ['-module-cache-path', cache], workingDirectory: root}],
   store: `${root}/owned-store`, root}), error => {
-  assert.ok(error.message.includes('stage=index-file') && error.message.includes(`source=${source}`)
-    && error.message.includes(`compiler=${compiler}`) && error.message.includes(`module_cache_path=${cache}`));
+  for (const length of [8192, 16384]) {
+    const tail = error.message.slice(-length);
+    assert.ok(tail.includes('stage=index-file') && tail.includes(`source=${source}`)
+      && tail.includes(`compiler=${compiler}`) && tail.includes(`module_cache_path=${cache}`));
+  }
   assert.ok(error.message.includes('Swift tool failed:'));
   return true;
 });

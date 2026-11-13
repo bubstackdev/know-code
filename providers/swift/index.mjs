@@ -14,8 +14,8 @@ const kinds = ['unknown', 'module', 'namespace', 'namespace_alias', 'macro', 'en
   'instance_method', 'class_method', 'static_method', 'instance_property', 'class_property',
   'static_property', 'constructor', 'destructor', 'conversion_function', 'parameter'];
 function toolStderr(stderr) {
-  const text = String(stderr ?? '');
-  return text.length <= 16000 ? text : `${text.slice(0, 8000)}\n[Swift tool stderr truncated]\n${text.slice(-8000)}`;
+  const bytes = Buffer.from(String(stderr ?? ''));
+  return bytes.length <= 8000 ? bytes.toString('utf8') : `${bytes.subarray(0, 4000).toString('utf8')}\n[Swift tool stderr truncated]\n${bytes.subarray(-4000).toString('utf8')}`;
 }
 export function run(command, args, cwd, env = process.env) {
   const result = spawnSync(command, args, {cwd, env, encoding: 'utf8', maxBuffer: MAX_FRAME, timeout: 120_000});
@@ -46,8 +46,10 @@ export function compileSources({compiler, options, store, root, env}) {
     } catch (error) {
       const moduleCaches = option.args.flatMap((value, index) => value === '-module-cache-path' ? [option.args[index + 1] ?? '<missing>']
         : value.startsWith('-module-cache-path=') ? [value.slice('-module-cache-path='.length)] : []);
-      const bounded = value => String(value).slice(0, 4096);
-      throw new Error(`Swift compiler/driver failed: stage=index-file; source=${bounded(option.file)}; compiler=${bounded(compiler)}; module_cache_path=${bounded(moduleCaches.at(-1) ?? '<not specified>')}; ${String(error.message).slice(0, 22000)}`, {cause: error});
+      const bounded = value => Buffer.from(String(value)).subarray(0, 1024).toString('utf8');
+      // The shared worker retains only a bounded stderr tail. Put the actual
+      // operation last so a large compiler stack cannot erase its provenance.
+      throw new Error(`Swift compiler/driver failed: ${String(error.message).slice(0, 12000)}\nstage=index-file; source=${bounded(option.file)}; compiler=${bounded(compiler)}; module_cache_path=${bounded(moduleCaches.at(-1) ?? '<not specified>')}; failure=${String(error.message).slice(0, 128).replaceAll('\n', ' ')}`, {cause: error});
     }
   }
   return {partial, diagnostics};
