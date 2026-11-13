@@ -401,3 +401,38 @@ being prepared separately; no old grant, snapshot, index or receipt is silently
 reused or changed. It will require its own personal trust grant before compiler
 or dependency execution. The exact preflight/copy manifest, rather than these
 historical package counts, governs the next production run.
+
+
+## Full current Atelier run: explicit resource limit
+
+The user granted compiler/dependency execution to the new complete source copy
+at `.artifacts/implementation-0.0.3/atelier-production-full-01/snapshot`, with
+personal state confined to its sibling `personal-data` directory. All 1,782
+files (182,755,166 bytes) independently match the copied source hashes, modes
+and mtimes; the original before/after census also matched. The approved manifest
+SHA-256 is `9b29cfc61320a8b69a47e76ece11ad619043fb6ae6aca99cc12e6497037f918b`.
+The first long data path exceeded macOS's Unix-socket pathname limit; a durable
+`.artifacts/af01` symlink points to the same approved physical data directory.
+A sandbox-denied coordinator start and both failed grant attempts remain
+retained before the supported escalated grant succeeded. No global/original
+trust or live installation was changed.
+
+Normal production indexing stopped correctly at the unchanged shared default:
+2,133 MiB observed against 2,048 MiB allowed, during AtelierLibrary's SwiftPM
+module preparation after 68 seconds. Generation stayed zero; this is **not a
+full-corpus pass**. An explicit warm diagnostic retry also stopped at the limit
+(2,155 MiB observed). A bounded sampler using the same macOS physical-footprint
+API captured a 1,921 MiB aggregate sample before termination: AetherCore's Swift
+frontend used about 1,638 MiB, SwiftPM about 242 MiB, Node about 34 MiB and the
+Know Code host about 7 MiB. These are sampled observations, not a true compiler
+peak or proof that the full workload never overlaps frontends.
+
+Evidence: `wave-01/atelier-full-production-01/`,
+`wave-01/atelier-full-memory-probe-01/`, and the full-copy
+`memory-probe-01/{result,analysis}.json`. The diagnostic driver's passing exit
+means the measurement completed; it does not turn the failed cold index or its
+resource-limited retry into a successful corpus run. Both owned coordinators
+were stopped by their drivers. [The source audit](reviews/SWIFTPM_PREPARATION_MEMORY.md)
+finds no demonstrated lost `--jobs 1` forwarding or preparation overlap; it is
+not an exact installed-SwiftPM binary proof. No compiler flag, resource default
+or limit has been changed to manufacture a pass.
