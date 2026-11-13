@@ -111,7 +111,10 @@ invalid_executable.write_text('unrecognized installed tool\n')
 invalid_executable.chmod(0o755)
 source_checks = '''
 import assert from 'node:assert/strict';
-import {xcodeSelection, findXcodeBridge} from './providers/swift/xcode.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import {createHash} from 'node:crypto';
+import {xcodeSelection, findXcodeBridge, readMetadataRejection} from './providers/swift/xcode.mjs';
 import {swiftAnalysisPolicy} from './providers/swift/policy.mjs';
 const [root, first, second, scheme, cache, empty, invalid] = process.argv.slice(1);
 const configuredProjects = [first, second];
@@ -126,10 +129,67 @@ const policy = swiftAnalysisPolicy({analysisPolicy: {version: 2, swift: {cacheDi
 assert.equal(policy.cacheDirectory, cache); assert.equal(policy.schemePath, scheme);
 assert.throws(() => findXcodeBridge({PATH: empty}, empty), error => error.code === 'xcode_bridge_missing');
 assert.throws(() => findXcodeBridge({PATH: invalid}, empty), error => error.code === 'xcode_bridge_incompatible');
+
+// Receipt data only: these owned bytes are never executed as a fake runtime.
+// Shared JSON-RPC tests separately prove the exit-error causal classification.
+const proofRoot = path.join(path.dirname(empty), 'metadata-contract');
+const workspacePath = path.join(proofRoot, 'Bound.xcodeproj'), schemePath = path.join(workspacePath, 'xcshareddata/xcschemes/Bound.xcscheme');
+fs.mkdirSync(path.dirname(schemePath), {recursive: true});
+const projectInput = path.join(workspacePath, 'project.pbxproj'), compiler = path.join(proofRoot, 'compiler-bytes');
+const executablePath = path.join(proofRoot, 'metadata-tool-bytes'), missing = path.join(proofRoot, 'MissingPackage.swift');
+const attemptFile = path.join(proofRoot, 'know-code-project-export-request.json'), receiptFile = path.join(proofRoot, 'know-code-metadata-outcome.json');
+const digest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+for (const [file, bytes] of [[projectInput, 'saved project'], [schemePath, 'saved scheme'], [compiler, 'compiler identity'], [executablePath, 'tool identity']]) fs.writeFileSync(file, bytes);
+const binding = {metadataJobNonce: 'a'.repeat(64), metadataToolchainIdentity: 'b'.repeat(64), metadataCompilerPath: compiler,
+  metadataInputSha256: {[projectInput]: digest(projectInput), [schemePath]: digest(schemePath)}, metadataMissingInputs: [missing]};
+const expected = {...binding, workspacePath, schemePath, platform: 'iphoneos', executablePath, executableSha256: digest(executablePath),
+  clones: path.join(proofRoot, 'clones'), cache: path.join(proofRoot, 'cache')};
+const directArgs = ['-dumpPIF', path.join(proofRoot, 'know-code-project.pif.json'), '-project', workspacePath, '-scheme', 'Bound', '-configuration', 'Debug',
+  '-derivedDataPath', path.join(proofRoot, 'metadata-derived'), '-clonedSourcePackagesDirPath', expected.clones, '-packageCachePath', expected.cache,
+  '-disableAutomaticPackageResolution', '-onlyUsePackageVersionsFromResolvedFile', '-skipPackageUpdates'];
+const naturalExit = {code: 65, signal: null, closed: true, receivedBytes: 0};
+function freshProof() {
+  fs.writeFileSync(projectInput, 'saved project'); fs.writeFileSync(executablePath, 'tool identity'); fs.rmSync(missing, {force: true});
+  const attempt = {...structuredClone(binding), arguments: ['xcodebuild', ...directArgs], executablePath, executableSha256: expected.executableSha256, platform: expected.platform,
+    metadataSchemePath: schemePath, metadataSchemeName: 'Bound', metadataSchemeSha256: binding.metadataInputSha256[schemePath], metadataConfiguration: 'Debug',
+    metadataDerivedDataPath: path.join(proofRoot, 'metadata-derived'), clonedSourcePackagesDirPath: expected.clones, packageCachePath: expected.cache};
+  const receipt = {...structuredClone(binding), version: 1, phase: 'metadata_command', outcome: 'rejected', workspacePath, schemePath, configuration: 'Debug',
+    platform: expected.platform, executablePath, executableSha256: expected.executableSha256, arguments: [...directArgs], terminationReason: 'exit', exitStatus: 74,
+    stdoutEOF: true, stderrEOF: true, bridgeCleanupSucceeded: true, expectedBridgeExit: 65, stdout: '', stderr: 'owned command rejection'};
+  return {attempt, receipt};
+}
+function publish(pair) {
+  fs.writeFileSync(attemptFile, JSON.stringify(pair.attempt)); pair.receipt.attemptSha256 = digest(attemptFile);
+  fs.writeFileSync(receiptFile, JSON.stringify(pair.receipt));
+}
+const read = (termination = naturalExit) => readMetadataRejection({buildRoot: proofRoot, expected, termination});
+const valid = freshProof(); publish(valid); assert.equal(read().code, 'xcode_metadata_unavailable');
+let receiptFaults = 0;
+function rejects(name, mutate, termination = naturalExit) {
+  const pair = freshProof(); publish(pair); mutate(pair); assert.equal(read(termination), null, name); receiptFaults++;
+}
+rejects('nonce cannot be echoed from an old attempt', pair => { pair.attempt.metadataJobNonce = pair.receipt.metadataJobNonce = 'c'.repeat(64); publish(pair); });
+rejects('attempt digest', pair => { pair.receipt.attemptSha256 = '0'.repeat(64); fs.writeFileSync(receiptFile, JSON.stringify(pair.receipt)); });
+rejects('matching tampered argv is still outside this command', pair => { pair.attempt.arguments.push('-quiet'); pair.receipt.arguments.push('-quiet'); publish(pair); });
+rejects('matching wrong input hash', pair => { pair.attempt.metadataInputSha256[projectInput] = pair.receipt.metadataInputSha256[projectInput] = '0'.repeat(64); publish(pair); });
+rejects('saved input changed after command', () => fs.writeFileSync(projectInput, 'later saved bytes'));
+rejects('missing input appeared', () => fs.writeFileSync(missing, 'later file'));
+rejects('selected executable replaced', () => fs.writeFileSync(executablePath, 'different tool bytes'));
+for (const [name, patch] of [['exit disagreement', {code: 1}], ['signal', {signal: 'SIGKILL'}], ['unconfirmed close', {closed: false}], ['protocol stdout', {receivedBytes: 1}]])
+  rejects(name, () => {}, {...naturalExit, ...patch});
+for (const [name, patch] of [['cleanup incomplete', {bridgeCleanupSucceeded: false}], ['stdout EOF missing', {stdoutEOF: false}], ['stderr EOF missing', {stderrEOF: false}],
+  ['command success is not rejection', {exitStatus: 0}], ['status is not an integer', {exitStatus: '74'}], ['signal outcome', {terminationReason: 'signal'}], ['unknown proof version', {version: 2}], ['wrong bridge terminal', {expectedBridgeExit: 1}]])
+  rejects(name, pair => { Object.assign(pair.receipt, patch); fs.writeFileSync(receiptFile, JSON.stringify(pair.receipt)); });
+rejects('malformed receipt', () => fs.writeFileSync(receiptFile, '{'));
+rejects('oversized receipt', () => fs.writeFileSync(receiptFile, ' '.repeat(2 * 1024 * 1024 + 1)));
+rejects('missing receipt', () => fs.rmSync(receiptFile));
+rejects('missing attempt', () => fs.rmSync(attemptFile));
+const finalValid = freshProof(); publish(finalValid); assert.equal(read().code, 'xcode_metadata_unavailable');
+console.log(JSON.stringify({validMetadataRejection: true, rejectedMetadataFaults: receiptFaults}));
 '''
 checks = subprocess.run(['node', '--input-type=module', '-e', source_checks, str(WORKSPACE), str(PROJECT / 'project.pbxproj'), str(SECOND / 'project.pbxproj'), str(scheme), str(RUN / 'state'), str(empty_tools), str(invalid_tools)], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=15)
 assert checks.returncode == 0, (checks.stdout, checks.stderr)
-(RUN / 'source-boundaries.json').write_text(json.dumps({'passed': True, 'twoProjectAmbiguity': True, 'explicitSelection': True, 'internalAliasDeduplicated': True, 'missingAndIncompatiblePrerequisites': True}))
+(RUN / 'source-boundaries.json').write_text(json.dumps({'passed': True, 'twoProjectAmbiguity': True, 'explicitSelection': True, 'internalAliasDeduplicated': True, 'missingAndIncompatiblePrerequisites': True, 'metadataRejectionContract': json.loads(checks.stdout)}))
 
 # Exercise the shared coordinator/watch path, including creation of a new
 # settings input. A worker-only replay cannot detect a missing watcher suffix.
