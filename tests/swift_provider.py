@@ -62,6 +62,27 @@ assert len(compilations) == 1 and compilations[0]['projectPath'] == '$swift-infe
 assert reports[0]['status'] == 'complete', reports
 assert compilations[0]['inferred'] and 'Swift version 6.' in compilations[0]['compilerVersion']
 assert json.loads(compilations[0]['optionsJson'])['signatures'] == 'compiler_index_names_only'
+# An actual invalid store must preserve the helper's stage/path and process exit
+# details. This uses the selected compiler's library, never a replacement reader.
+invalid_store = RUN / 'invalid-index-store'
+invalid_store.write_text('not a directory')
+reader_scratch = RUN / 'reader-failure'
+reader_scratch.mkdir()
+compiler = Path(json.loads(compilations[0]['optionsJson'])['compilerPath'])
+reader_failure = subprocess.run(['node', '--input-type=module', '-e', '''
+import assert from 'node:assert/strict';
+import {ingestStore} from './providers/swift/index.mjs';
+const [root, store, scratch, library] = process.argv.slice(1);
+assert.throws(() => ingestStore({id:'invalid-store', root, store, scratch, library, sources:new Map()}), error => {
+  assert.match(error.message, /Swift IndexStore reader failed: status=1, signal=none, error=none, stderr=Swift IndexStore store create failed/);
+  assert.ok(error.message.includes(`path=${store}`));
+  console.log(JSON.stringify({message:error.message}));
+  return true;
+});
+''', str(WORKSPACE), str(invalid_store), str(reader_scratch), str(compiler.parent.parent / 'lib/libIndexStore.dylib')],
+    cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
+assert reader_failure.returncode == 0, reader_failure.stderr
+(RUN / 'reader-failure-result.json').write_text(json.dumps({'returncode': reader_failure.returncode, **json.loads(reader_failure.stdout)}))
 symbols = {symbol['id']: symbol for message in messages if 'facts' in message for symbol in message['facts']['symbols']}
 occurrences = [occ for message in messages if 'facts' in message for occ in message['facts']['occurrences']]
 relationships = [edge for message in messages if 'facts' in message for edge in message['facts']['relationships']]

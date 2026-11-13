@@ -139,7 +139,7 @@ export function ingestStore({id, root, sources, store, library, scratch, onInput
       const result = spawnSync(reader, [library, store, sourceList], {cwd: root, stdio: ['ignore', fd, 'pipe'],
         encoding: 'utf8', maxBuffer: MAX_FRAME, timeout: 120_000});
       if (result.error || result.signal || result.status !== 0)
-        throw new Error(`Swift IndexStore reader failed: ${result.error?.message ?? result.signal ?? result.stderr}`);
+        throw new Error(`Swift IndexStore reader failed: status=${result.status}, signal=${result.signal ?? 'none'}, error=${String(result.error?.message ?? 'none').slice(-4096)}, stderr=${String(result.stderr ?? '').slice(-16000)}`);
     }
   } finally { fs.closeSync(fd); }
   const symbols = new Map();
