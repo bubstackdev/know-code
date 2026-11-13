@@ -28,6 +28,7 @@ API(text_ref, indexstore_unit_dependency_get_filepath, (handle));
 API(text_ref, indexstore_unit_dependency_get_name, (handle));
 API(handle, indexstore_record_reader_create, (handle, const char *, handle *));
 API(void, indexstore_record_reader_dispose, (handle));
+API(bool, indexstore_record_reader_symbols_apply_f, (handle, bool, void *, bool (*)(void *, handle)));
 API(bool, indexstore_record_reader_occurrences_apply_f, (handle, void *, bool (*)(void *, handle)));
 API(handle, indexstore_occurrence_get_symbol, (handle));
 API(uint64_t, indexstore_occurrence_get_roles, (handle));
@@ -127,6 +128,11 @@ static bool wanted(text_ref path) {
   }
   return false;
 }
+static bool found_symbol(void *ctx, handle symbol) {
+  (void)symbol;
+  *(bool *)ctx = true;
+  return false; // One decoded symbol is enough; occurrence traversal remains authoritative.
+}
 static bool dependency(void *ctx, handle dep) {
   unit_context *unit = ctx;
   text_ref path = indexstore_unit_dependency_get_filepath(dep);
@@ -142,8 +148,17 @@ static bool dependency(void *ctx, handle dep) {
   text_ref record_name = {name, strlen(name)};
   if (!reader) { error("record create", err, unit->unit_name, record_name, path); return false; }
   printf("{\"record\":true,\"path\":"); json(path); puts("}");
+  // LLVM omits occurrence blocks when a record has no symbols. Its occurrence
+  // API still visits the absent cursor and returns false. Establish emptiness
+  // through successful public symbol enumeration, never by that false result.
+  bool has_symbol = false;
+  bool symbols_ok = indexstore_record_reader_symbols_apply_f(reader, true, &has_symbol, found_symbol);
+  if (!symbols_ok && !has_symbol) {
+    error("record symbols traversal", NULL, unit->unit_name, record_name, path);
+    indexstore_record_reader_dispose(reader); return false;
+  }
   record_context context = {unit->unit_name, record_name, path};
-  bool ok = indexstore_record_reader_occurrences_apply_f(reader, &context, occurrence);
+  bool ok = !has_symbol || indexstore_record_reader_occurrences_apply_f(reader, &context, occurrence);
   if (!ok) error("record occurrences traversal", NULL, unit->unit_name, record_name, path);
   indexstore_record_reader_dispose(reader);
   return ok;
@@ -188,7 +203,7 @@ int main(int argc, char **argv) {
   LOAD(indexstore_unit_reader_dispose); LOAD(indexstore_unit_reader_get_main_file); LOAD(indexstore_unit_reader_is_system_unit); LOAD(indexstore_unit_reader_dependencies_apply_f);
   LOAD(indexstore_unit_dependency_get_kind); LOAD(indexstore_unit_dependency_get_filepath);
   LOAD(indexstore_unit_dependency_get_name); LOAD(indexstore_record_reader_create);
-  LOAD(indexstore_record_reader_dispose); LOAD(indexstore_record_reader_occurrences_apply_f);
+  LOAD(indexstore_record_reader_dispose); LOAD(indexstore_record_reader_symbols_apply_f); LOAD(indexstore_record_reader_occurrences_apply_f);
   LOAD(indexstore_occurrence_get_symbol); LOAD(indexstore_occurrence_get_roles);
   LOAD(indexstore_occurrence_get_line_col); LOAD(indexstore_occurrence_relations_apply_f);
   LOAD(indexstore_symbol_relation_get_roles); LOAD(indexstore_symbol_relation_get_symbol);

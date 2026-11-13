@@ -1,0 +1,11 @@
+# Empty Swift IndexStore records
+
+The real Atelier run and an owned two-file reproduction failed when one saved file was entirely excluded by conditional compilation. Its compiler record was valid but contained no symbols. The helper's occurrence-traversal failure remains fatal until matching validation qualifies the fix below.
+
+LLVM's [record writer](https://github.com/swiftlang/llvm-project/blob/next/clang/lib/Index/IndexRecordWriter.cpp#L259-L272) writes declaration/occurrence blocks only when declarations exist. Adding an occurrence always registers its declaration. The [reader](https://github.com/swiftlang/llvm-project/blob/next/clang/lib/Index/IndexRecordReader.cpp#L191-L225) nevertheless visits its occurrence cursor unconditionally. The [public C API](https://github.com/swiftlang/llvm-project/blob/next/clang/tools/IndexStore/IndexStore.cpp#L515-L534) forwards that result. A false result is also possible for malformed data or callback interruption; it cannot generally mean an empty record.
+
+The helper therefore first uses public `indexstore_record_reader_symbols_apply_f`, with caching disabled. A callback stops after the first symbol, after which ordinary full occurrence traversal remains required. Only successful enumeration with zero callbacks establishes an empty symbol table and avoids the absent occurrence cursor. Failed enumeration before any callback, factory failures, occurrence failures for nonempty records, and output failures remain fatal. Source/unit/record evidence stays present for excluded files; no declarations are invented.
+
+The existing Swift provider test adds a fully excluded saved source and a tiny compiler-generated store. Its finite fault cases damage an empty record header and truncate empty/nonempty records, then verify repair. These cases qualify API behavior and specific corruption barriers; they do not certify arbitrary bit-level corruption detection. The upstream reader factory skips occurrence payloads during its initial container scan, and this change adds no private format parser, filename/hash heuristic, or general integrity validator.
+
+Source authoring and syntax checks are separate from the integration owner's matching native/compiler results. The failed real run and initial reproduction must remain recorded as failures.

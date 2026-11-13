@@ -90,6 +90,51 @@ occurrences = [occ for message in messages if 'facts' in message for occ in mess
 relationships = [edge for message in messages if 'facts' in message for edge in message['facts']['relationships']]
 artifacts = {message['source']['id']: message['source'] for message in messages if 'source' in message}
 assert len(artifacts) == len(sources)
+excluded = next(source for source in artifacts.values() if source['path'] == 'Excluded.swift')
+assert __import__('base64').b64decode(excluded['utf8']) == original[WORKSPACE / 'Excluded.swift']
+assert not any('excludedSymbol' in symbol['name'] for symbol in symbols.values())
+# Keep a tiny real compiler store for finite empty/nonempty corruption checks.
+# Filename selection is only for fault injection into these owned test bytes.
+reader_probe = RUN / 'reader-records'
+reader_probe.mkdir()
+active_file, excluded_file = reader_probe / 'ReaderActive.swift', reader_probe / 'ReaderExcluded.swift'
+active_file.write_text('func readerActive() -> Int { 1 }\n')
+excluded_file.write_bytes((WORKSPACE / 'Excluded.swift').read_bytes())
+probe_store = reader_probe / 'store'
+sdk = json.loads(compilations[0]['optionsJson'])['sdkPath']
+for primary, other_file in ((active_file, excluded_file), (excluded_file, active_file)):
+    compiled = subprocess.run([str(compiler), '-frontend', '-typecheck', '-sdk', sdk,
+        '-module-name', 'KnowCodeReaderRecords', '-index-store-path', str(probe_store),
+        '-index-include-locals', '-index-ignore-system-modules', '-primary-file', str(primary), str(other_file),
+        '-index-unit-output-path', str(reader_probe / f'{primary.stem}.o')],
+        cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=30)
+    assert compiled.returncode == 0, compiled.stderr
+
+
+def read_probe(name):
+    result = subprocess.run([str(READER), str(compiler.parent.parent / 'lib/libIndexStore.dylib'), str(probe_store)],
+        cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
+    (reader_probe / f'{name}.json').write_text(json.dumps({'status': result.returncode, 'stderr': result.stderr, 'stdout': result.stdout}))
+    return result
+
+
+assert read_probe('healthy').returncode == 0
+empty_record, = probe_store.glob('v5/records/*/ReaderExcluded.swift-*')
+active_record, = probe_store.glob('v5/records/*/ReaderActive.swift-*')
+empty_bytes, active_bytes = empty_record.read_bytes(), active_record.read_bytes()
+for case, record, damaged in (
+        ('empty-header', empty_record, b'BAD!' + empty_bytes[4:]),
+        ('empty-truncated', empty_record, empty_bytes[:4]),
+        ('nonempty-truncated', active_record, active_bytes[:4])):
+    saved = record.read_bytes()
+    try:
+        record.write_bytes(damaged)
+        result = read_probe(case)
+        assert result.returncode == 1, (case, result.returncode, result.stderr)
+        assert 'record create failed' in result.stderr and f'record={record.name};' in result.stderr, (case, result.stderr)
+    finally:
+        record.write_bytes(saved)
+assert read_probe('repaired').returncode == 0
 for name in ('name', 'message', 'café'):
     matched = [symbol for symbol in symbols.values() if symbol['name'] == name]
     assert matched and all(not symbol['external'] for symbol in matched), (name, matched)
