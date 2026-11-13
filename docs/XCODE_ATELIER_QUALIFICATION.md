@@ -129,3 +129,64 @@ Bridge version/dependency adoption and production packaging stay undecided until
 these concrete results are reviewed. Owned fixture success and sampled resource
 observations do not by themselves establish real-corpus, installed/native/
 CLI/MCP, cancellation, resource or release acceptance.
+
+## Protected metadata and module checkpoint — 2026-11-13
+
+The first protected device attempt failed during nested manifest sandbox setup
+after all profile controls passed (`xcode-protected-atelier-01/iphoneos/`). A
+fresh run separately records normal metadata preparation and protected analysis
+in the same current environment, preserving SwiftPM's manifest sandbox and the
+analysis denial policy. Both device and simulator now pass typed module
+readiness, exact Test/Debug app/UI-test selection, the same-PIF dependency
+closure and global/per-target script guards.
+
+Receipts beneath `.artifacts/implementation-0.0.3/`:
+
+- `xcode-protected-atelier-02-fresh-replay/result.json` and
+  `xcode-protected-atelier-02/iphoneos/result.json`.
+- `xcode-protected-atelier-03-fresh-replay/result.json` and
+  `xcode-protected-atelier-03/iphonesimulator/result.json`.
+
+Each platform returns 10 targets, 316 source entries and 10 compiler-option
+samples. The extra entry beyond the 315-source preflight is the compiler's
+job-owned `DerivedSources/GeneratedAssetSymbols.swift`. The snapshot's omitted
+resources remain omitted; module readiness does not certify their completeness.
+Explicit sampled plugin paths resolve beneath the selected installed Xcode;
+this is not an inventory of every implicit compiler/plugin read.
+
+These runs use the unmodified common-core resource governor through a thin
+research client: two CPU cores, 2 GiB sampled memory enforcement and a
+240-second cancellation bound. The device pair took about 16 seconds with
+730,272 KiB sampled aggregate RSS; these are observations, not peak-memory or
+throughput guarantees. All copied/baseline bytes, modes, mtimes and lock
+inventories remain unchanged. Normal preparation is separately outside the
+outer analysis sandbox and is not claimed OS-network-denied.
+
+## Stored real-primary checkpoint
+
+The existing `Canonical.swift` primary in AtelierAuthoredScene now compiles with
+its actual device and simulator options, retaining the selected SDK/triple,
+source hash, PIF and bounded VFS-overlay evidence. Shared normalization removes
+only the previously qualified indexing shortcuts; the normal Swift ingester
+emits the facts through the usual Protobuf worker contract. The common core's
+trusted update path publishes them under its existing resource governor.
+
+Stored callers, callees and impact preserve the compiler-bound authored
+`CanonicalJSON.encode(_:) → encoder()` edge at UTF-8 bytes 766–773; declaration
+ranges are 713–719 and 272–279. References and indexed source bytes match too.
+All seven queries agree through CLI, Node and .NET on each SDK: 42 comparisons.
+The two compilations remain distinct. These unmanaged research indexes report
+freshness as unverified and graph coverage as partial; no currentness or
+whole-project completeness is claimed.
+
+Evidence: `xcode-real-stored-query-01/result.json`,
+`xcode-protected-atelier-{02,03}/body-graph-01/result.json` and
+`wave-01/xcode-real-body-{device,simulator}-02/` under the implementation root.
+The first body attempt failed before initialization because its research import
+path assumed the main checkout was cwd; the corrected helper passes that path
+explicitly, since the common worker path correctly selects the workspace cwd.
+That failed receipt remains separate. The user's trust grant covers only these
+two research copies and their isolated personal data.
+
+Production integration, whole-target/save/cancellation checks, installed
+validation and [bridge adoption](XCODE_BRIDGE_DECISION.md) remain separate.
