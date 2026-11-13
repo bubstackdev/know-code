@@ -60,6 +60,16 @@ Installed Swift 6.4.2 uses unprefixed BSP extension methods; newer upstream defi
 
 Dependency restoration uses the existing `PreparationResult`/progress contract. Checkpoints cover the request's configuration fingerprint, compiler/SDK identity, workspace state, resolved package paths, and manifest/lock hashes. Source-only saves reuse valid successful setup and retain failed setup until changed inputs or explicit retry. Compiler module preparation still runs through SwiftPM's incremental machinery so a saved API change cannot leave dependents using an old module. The focused regression renames an exported API while introducing a compiler error: the consumer becomes partial and does not resolve the removed API from cached output; repair restores complete coverage.
 
+SwiftPM derived-state directories and preparation fingerprints share an explicit
+compatibility tag and canonical central work root. The canonical-work layout
+does not reuse older trees whose serialized module paths used an alias. Each
+affected package needs one cold setup; prior trees remain on disk, with their
+retention/disk cost unchanged by this fence. No cache is deleted or retried in
+response to a compiler crash. Compiler/SDK selection, semantic flags and saved
+input validation remain intact. Compiler-provided context identities can change
+once with the new derived layout; warm and saved updates must remain stable
+within it. Matching real-corpus qualification is still required.
+
 Root and resolved dependency manifests are preflighted before creating the BSP server, because SwiftPM can run build plugins while constructing its build graph. This slice reports external build-tool plugins as a coverage gap rather than building or executing them. This preflight is conservative, including plugin declarations/usages in the resolved graph. Custom `.macro` tool targets are reported separately as compiler-integrated macro preparation gaps; no automatic tool/product build is attempted. Preinstalled toolchain macros, including Swift Testing in the verified Xcode context below, can be consumed through the actual compiler options.
 
 All SwiftPM work uses central scratch/cache directories and `--jobs 1`. Verified preparation produces Swift modules and generated project source without object/product builds. Resources or separately generated outputs missing from a supplied source snapshot remain explicit gaps, not evidence of a defect in the original project.

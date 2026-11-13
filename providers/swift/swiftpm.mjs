@@ -8,6 +8,7 @@ import {unavailableGraphCapabilities} from './graph.mjs';
 import {semanticArguments} from './compiler.mjs';
 
 export const PREPARATION_TIMEOUT_MS = 600000;
+const CACHE_COMPATIBILITY = 'swiftpm-planner-v3-canonical-work';
 const packageManifest = file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file));
 export const canonicalManifest = file => packageManifest(file) ? path.join(path.dirname(file), 'Package.swift') : file;
 const exists = file => { try { return fs.statSync(file).isFile() || fs.statSync(file).isDirectory(); } catch { return false; } };
@@ -50,10 +51,10 @@ function cachedPlanValid(plan) {
     try { return hash(fs.readFileSync(filename)) === expected; } catch { return false; }
   });
 }
-function prepareDependencies({request, root, project, swift, toolchain, state, configuration}) {
+function prepareDependencies({request, root, project, swift, toolchain, work, state, configuration}) {
   const {env, identity, sdk} = toolchain;
   const directory = path.dirname(project), key = `swiftpm:${project}`;
-  const fingerprint = hash(`${request.preparationFingerprint}:${identity}:${configuration}:swiftpm-planner-v2`);
+  const fingerprint = hash(`${request.preparationFingerprint}:${identity}:${configuration}:${work}:${CACHE_COMPATIBILITY}`);
   const previous = request.preparations.find(item => item.key === key);
   const planFile = path.join(state, 'dependency-plan.json');
   let plan;
@@ -95,7 +96,7 @@ function verifyToolchain(target, compiler) {
 export async function analyzePackage({request, root, project, toolchain, work, scratch}) {
   const {compiler, version, sdk, env} = toolchain;
   const directory = path.dirname(project);
-  const state = path.join(work, 'packages', hash(`${project}:${toolchain.identity}:${request.configuration}`).slice(0, 24));
+  const state = path.join(work, 'packages', hash(`${project}:${toolchain.identity}:${request.configuration}:${work}:${CACHE_COMPATIBILITY}`).slice(0, 24));
   fs.mkdirSync(state, {recursive: true});
   const swift = path.join(path.dirname(compiler), 'swift');
   const configuration = request.configuration || 'Debug';
@@ -107,7 +108,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
   catch (error) { gap(root, project, toolchain, configuration, [diagnostic('swiftpm_manifest_failed', error.message, relative(root, project))]); return; }
   let problem = unsupported(rootManifest, relative(root, project));
   if (problem) { gap(root, project, toolchain, configuration, [problem]); return; }
-  const prepared = prepareDependencies({request, root, project, swift, toolchain, state, configuration});
+  const prepared = prepareDependencies({request, root, project, swift, toolchain, work, state, configuration});
   if (prepared.error) { gap(root, project, toolchain, configuration, [prepared.error]); return; }
   const nodes = dependencyNodes(prepared.plan.graph);
   // Complete manifest preflight precedes creating the BSP server: SwiftPM can
