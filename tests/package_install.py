@@ -391,6 +391,30 @@ if args.experimental:
   previous=ready(node)['generation'];filename.write_text(text)
   MIN_GENERATION=ready(node,previous+1)['generation']
   language_graph(language,entry_name,leaf_name,reference_name,filename)
+ # Reuse the same installed MCP framing/helpers for one new-language graph;
+ # the earlier TS/C# session ended before the Cargo/SwiftPM fixtures existed.
+ rust_entry,rust_report=language_symbol('packaged_rust_entry','rust')
+ rust_leaf,_=language_symbol('packaged_rust_leaf','rust',rust_entry['compilation_id'])
+ rust_anchor=query({'op':'symbols','name':'packaged_rust_entry','compilation_id':rust_entry['compilation_id']})
+ rust_graph_args={'symbol_id':rust_entry['id'],'target':rust_report['target'],'max_depth':1,
+                  'snapshot':rust_anchor['snapshot'],'include_source':True,'source_max_bytes':4096}
+ mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-rust-stderr.log').open('w'))
+ mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
+ try:
+  assert rpc(100,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test-rust','version':'1'}})['result']['protocolVersion']=='2025-11-25'
+  mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
+  rust_mcp=tool_result(101,'callees',rust_graph_args)
+  assert rust_mcp==query(dict(rust_graph_args,op='callees')),rust_mcp
+  assert rust_mcp['snapshot']==rust_anchor['snapshot'] and rust_mcp['generation']==rust_anchor['generation'],rust_mcp
+  called=next(finding for finding in rust_mcp['graph']['findings'] if finding['symbol']['id']==rust_leaf['id'])
+  assert called['symbol']['compilation_id']==rust_entry['compilation_id'],called
+  assert called['paths'] and all(len(path)==1 and path[0]['kind']=='call' and path[0]['resolution']=='compiler_bound'
+                                and path[0]['source_id']==rust_entry['id'] and path[0]['target_id']==rust_leaf['id']
+                                for path in called['paths']),called
+  declarations=called['context']['declarations'];assert declarations and all(d['source_status']=='included' for d in declarations),called
+  for declaration in declarations:exact_source(declaration['source'],rust_file)
+  checks.append('installed_offline_Cargo_MCP_graph_snapshot_source_matches_native_projection')
+ finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp-rust.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
  checks+=['installed_offline_SwiftPM_Cargo_direct_calls_value_impact_exact_source_native_parity',
           'installed_offline_SwiftPM_Cargo_saved_compiler_partial_repair']
 final_generation=ready(node)['generation'];node.close();net.close();checks.append('packaged_saved_file_updates')
