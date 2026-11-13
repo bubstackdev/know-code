@@ -444,8 +444,10 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
           }
           const projectPath = relative(root, project), id = `swift:xcode:${projectPath}:${hash(JSON.stringify([selection.schemePath, evidence.proof.selection.configuration, platform, sdkPath, toolchain.identity, target.id.uri]))}`;
           const store = path.join(scratch, `index-${hash(id)}`); analyzing = true;
+          send('progress', {stage: 'analyzing', projectPath, message: `Indexing Swift source bodies for ${target.displayName}:${platform}`.slice(0, 512)});
           const compiled = compileSources({compiler: toolchain.compiler, options, store, root, env});
           targetDiagnostics.push(...compiled.diagnostics);
+          send('progress', {stage: 'analyzing', projectPath, message: `Reading compiler IndexStore records for ${target.displayName}:${platform}`.slice(0, 512)});
           const facts = ingestStore({id, root, sources, store, library: toolchain.library, scratch, onInputs: indexInputs => {
             for (const file of indexInputs) if (!within(file, work) && !within(file, toolchain.bundle) && !within(file, sdkPath) && exists(file)) observedInputs.add(file);
             send('compilation', {id, language: 'swift', projectPath, target: `${target.displayName}:${platform}`, configuration: evidence.proof.selection.configuration, compilerVersion: toolchain.version,

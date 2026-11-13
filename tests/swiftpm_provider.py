@@ -109,6 +109,14 @@ assert all(report['capabilities']['calls'] == 'partial' and report['capabilities
            and report['capabilities']['project_links'] == 'unavailable' for report in reports)
 assert all(not c['inferred'] and json.loads(c['optionsJson'])['origin'] == 'swiftpm_build_server' for c in compilations)
 assert all(json.loads(c['optionsJson'])['jobs'] == 1 for c in compilations)
+for compilation in compilations:
+    target = compilation['target']
+    body, = [i for i, message in enumerate(initial) if message.get('progress', {}).get('stage') == 'analyzing'
+             and message['progress']['message'] == f'Indexing Swift source bodies for {target}']
+    reader, = [i for i, message in enumerate(initial) if message.get('progress', {}).get('stage') == 'analyzing'
+               and message['progress']['message'] == f'Reading compiler IndexStore records for {target}']
+    published, = [i for i, message in enumerate(initial) if message.get('compilation', {}).get('id') == compilation['id']]
+    assert body < reader < published, (target, body, reader, published)
 assert any('Package@swift-6.0.swift' in input_path for c in compilations for input_path in c['inputPaths'])
 preparations = [message['preparation'] for message in initial if 'preparation' in message]
 assert len(preparations) == 1 and preparations[0]['succeeded']
@@ -233,6 +241,7 @@ summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'reader_sha256':
            'source_save_dependency_checkpoint_reused': True, 'external_plugin_executed': False}
 summary['legacy_failed_checkpoint_bypassed_and_tree_retained'] = True
 summary['compatible_warm_and_saved_context_ids_stable'] = True
+summary['compiler_and_reader_progress_marked_analyzing'] = True
 summary['toolchain_selection'] = selection
 summary['xcode_testing_macros_saved_update'] = bool(selection['xcodeVersion'])
 (RUN / 'summary.json').write_text(json.dumps(summary, indent=2))

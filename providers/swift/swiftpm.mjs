@@ -243,10 +243,12 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       let partial = diagnostics.some(item => item.severity === 'error');
       const compilerInputs = new Set([...inputs, ...toolchain.inputPaths]);
       const toolchainRoot = path.resolve(path.dirname(compiler), '..', '..');
+      send('progress', {stage: 'analyzing', projectPath, message: `Indexing Swift source bodies for ${target.displayName}`.slice(0, 512)});
       const compiled = compileSources({compiler, options, store, root, env});
       partial ||= compiled.partial;
       for (const item of compiled.diagnostics) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
       const library = path.resolve(path.dirname(compiler), '..', 'lib', 'libIndexStore.dylib');
+      send('progress', {stage: 'analyzing', projectPath, message: `Reading compiler IndexStore records for ${target.displayName}`.slice(0, 512)});
       const facts = ingestStore({id, root, sources, store, library, scratch, onInputs: indexInputs => {
         for (const file of indexInputs)
           if (!within(file, work) && !within(file, toolchainRoot) && !within(file, fs.realpathSync(sdk)) && exists(file)) compilerInputs.add(file);
