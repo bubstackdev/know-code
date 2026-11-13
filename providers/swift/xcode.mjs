@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {spawnSync} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
 import {send, MAX_FRAME} from '../shared/protocol.mjs';
 import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {sourceBoundary} from '../shared/source.mjs';
@@ -11,8 +12,8 @@ import {extensionRequest, loadManifest, unsupportedManifest} from './swiftpm.mjs
 import {semanticArguments} from './compiler.mjs';
 import {unavailableGraphCapabilities} from './graph.mjs';
 
-const bridgeVersion = '0.1.0-know-code-index-only.6';
-const recipe = 'index-only.6-notice1';
+const bridgeVersion = '0.1.0-know-code-index-only.7';
+const recipe = 'index-only.7-notice1';
 const bridges = new Map();
 const within = (file, directory) => { const p = path.relative(directory, file); return p === '' || (p !== '..' && !p.startsWith(`..${path.sep}`) && !path.isAbsolute(p)); };
 const exists = file => { try { return fs.statSync(file).isFile() || fs.statSync(file).isDirectory(); } catch { return false; } };
@@ -123,14 +124,76 @@ async function close(client) {
   catch { /* Preserve the primary planner/preparation diagnostic. */ }
   finally { client.terminate(); }
 }
-async function openBridge({root, bridge, project, selection, state, scratch, platform, env, onDiagnostic}) {
+
+function metadataBinding({project, selection, toolchain, knownInputs}) {
+  const inputs = {}, missing = [];
+  const paths = new Set([project, selection.schemePath, ...selection.inputs, ...toolchain.inputPaths,
+    ...knownInputs, fs.realpathSync(project), fs.realpathSync(selection.schemePath)]);
+  for (const file of paths) {
+    if (typeof file !== 'string' || !path.isAbsolute(file)) continue;
+    try {
+      if (!fs.statSync(file).isFile()) throw Error(`Metadata input is not a regular file: ${file}`);
+      inputs[file] = hash(fs.readFileSync(file));
+    } catch (error) { if (error.code === 'ENOENT') missing.push(file); else throw error; }
+  }
+  const binding = {metadataJobNonce: randomBytes(32).toString('hex'), metadataInputSha256: inputs, metadataMissingInputs: missing.sort(),
+    metadataToolchainIdentity: hash(toolchain.identity), metadataCompilerPath: fs.realpathSync(toolchain.compiler)};
+  if (paths.size > 4096 || Buffer.byteLength(JSON.stringify(binding)) > 1024 * 1024) throw Object.assign(Error('resource-limited: Xcode metadata binding exceeds its bounded allowance'), {fatal: true});
+  return binding;
+}
+
+// Only a naturally rejected direct command, bound to this open and exact saved
+// inputs, can become unavailable coverage. Invalid/missing proof returns null;
+// the caller preserves its original fatal transport failure.
+export function readMetadataRejection({buildRoot, expected, termination}) {
+  try {
+    if (termination.code !== 65 || termination.signal !== null || termination.closed !== true || termination.receivedBytes !== 0) return null;
+    const proof = json(path.join(buildRoot, 'know-code-metadata-outcome.json'), 2 * 1024 * 1024);
+    const attemptPath = path.join(buildRoot, 'know-code-project-export-request.json');
+    const attempt = json(attemptPath, 2 * 1024 * 1024);
+    const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const pairs = value => value && typeof value === 'object' && !Array.isArray(value) ? Object.entries(value).sort(([a], [b]) => a.localeCompare(b)) : null;
+    if (proof.version !== 1 || proof.phase !== 'metadata_command' || proof.outcome !== 'rejected'
+        || proof.expectedBridgeExit !== 65 || proof.terminationReason !== 'exit' || !Number.isInteger(proof.exitStatus) || proof.exitStatus <= 0 || proof.exitStatus > 255
+        || proof.stdoutEOF !== true || proof.stderrEOF !== true || proof.bridgeCleanupSucceeded !== true
+        || typeof proof.stdout !== 'string' || typeof proof.stderr !== 'string' || proof.stdout.length > 16384 || proof.stderr.length > 16384
+        || hash(fs.readFileSync(attemptPath)) !== proof.attemptSha256) return null;
+    for (const value of [attempt, proof]) {
+      for (const name of ['metadataJobNonce', 'metadataToolchainIdentity', 'metadataCompilerPath']) if (value[name] !== expected[name]) return null;
+      if (!equal(pairs(value.metadataInputSha256), pairs(expected.metadataInputSha256))
+          || !Array.isArray(value.metadataMissingInputs) || !equal([...value.metadataMissingInputs].sort(), expected.metadataMissingInputs)) return null;
+      if (fs.realpathSync(value.executablePath) !== expected.executablePath || value.executableSha256 !== expected.executableSha256 || value.platform !== expected.platform) return null;
+    }
+    if (proof.workspacePath !== expected.workspacePath || proof.schemePath !== expected.schemePath || typeof proof.configuration !== 'string' || !proof.configuration
+        || attempt.metadataSchemePath !== expected.schemePath || attempt.metadataConfiguration !== proof.configuration
+        || attempt.metadataSchemeSha256 !== expected.metadataInputSha256[expected.schemePath]
+        || attempt.metadataSchemeName !== path.basename(expected.schemePath, '.xcscheme') || attempt.metadataDerivedDataPath !== path.join(buildRoot, 'metadata-derived')
+        || attempt.clonedSourcePackagesDirPath !== expected.clones || attempt.packageCachePath !== expected.cache) return null;
+    const args = ['-dumpPIF', path.join(buildRoot, 'know-code-project.pif.json'), expected.workspacePath.endsWith('.xcodeproj') ? '-project' : '-workspace', expected.workspacePath,
+      '-scheme', path.basename(expected.schemePath, '.xcscheme'), '-configuration', proof.configuration, '-derivedDataPath', path.join(buildRoot, 'metadata-derived'),
+      '-clonedSourcePackagesDirPath', expected.clones, '-packageCachePath', expected.cache, '-disableAutomaticPackageResolution', '-onlyUsePackageVersionsFromResolvedFile', '-skipPackageUpdates'];
+    if (attempt.executablePath !== proof.executablePath || !equal(proof.arguments, args) || !equal(attempt.arguments, ['xcodebuild', ...args])) return null;
+    for (const [file, digest] of Object.entries(expected.metadataInputSha256)) if (hash(fs.readFileSync(file)) !== digest) return null;
+    if (expected.metadataMissingInputs.some(file => fs.existsSync(file)) || hash(fs.readFileSync(expected.executablePath)) !== expected.executableSha256) return null;
+    return problem('xcode_metadata_unavailable', `Xcode rejected metadata for the selected saved context (command exit ${proof.exitStatus}). ${proof.stderr || proof.stdout}`);
+  } catch { return null; }
+}
+
+async function openBridge({root, bridge, project, selection, state, scratch, platform, env, toolchain, knownInputs, onDiagnostic}) {
   const buildRoot = path.join(state, platform), config = path.join(scratch, `${hash(project)}-${platform}`);
   fs.mkdirSync(buildRoot, {recursive: true}); fs.mkdirSync(config, {recursive: true});
-  for (const name of ['know-code-selected-scheme.json', 'know-code-selected-closure.json', 'know-code-last-preparation.json', 'know-code-project-export-request.json', 'know-code-project.pif.json', 'know-code-index-only-request.json']) fs.rmSync(path.join(buildRoot, name), {force: true});
-  put(path.join(config, 'buildServer.json'), {workspace: container(project), schemePath: selection.schemePath, buildRoot, platform,
+  for (const name of ['know-code-selected-scheme.json', 'know-code-selected-closure.json', 'know-code-last-preparation.json', 'know-code-project-export-request.json', 'know-code-project.pif.json', 'know-code-index-only-request.json', 'know-code-metadata-outcome.json']) fs.rmSync(path.join(buildRoot, name), {force: true});
+  let binding;
+  try { binding = metadataBinding({project, selection, toolchain, knownInputs}); } catch (error) { error.fatal = true; throw error; }
+  const executablePath = fs.realpathSync(path.join(env.DEVELOPER_DIR, 'usr/bin/xcodebuild'));
+  const expected = {...binding, executablePath, executableSha256: hash(fs.readFileSync(executablePath)), workspacePath: fs.realpathSync(container(project)), schemePath: selection.schemePath,
+    platform, clones: fs.realpathSync(path.join(state, 'clones')), cache: fs.realpathSync(path.join(state, 'cache'))};
+  put(path.join(config, 'buildServer.json'), {...binding, workspace: expected.workspacePath, schemePath: selection.schemePath, buildRoot, platform,
     clonedSourcePackagesDirPath: path.join(state, 'clones'), packageCachePath: path.join(state, 'cache'), serviceBundlePath: bridge.service});
   const client = new JsonRpcProcess(bridge.executable, [], {cwd: config, env, timeout: 120000,
     onNotification(method, params) { if (method === 'build/logMessage' && [1, 2].includes(params?.type)) onDiagnostic({...diagnostic('xcode_preparation', String(params.message ?? '')), severity: params.type === 1 ? 'error' : 'warning'}); }});
+  let processClosed = false;
+  const closed = new Promise(resolve => client.child.once('close', () => { processClosed = true; resolve(true); }));
   try {
     await client.request('build/initialize', {displayName: 'Know Code', version: '0.0.3', bspVersion: '2.2.0',
       rootUri: pathToFileURL(root).href, capabilities: {languageIds: ['swift']}});
@@ -139,10 +202,19 @@ async function openBridge({root, bridge, project, selection, state, scratch, pla
     if (!Array.isArray(inventory.targets)) throw Error('Bridge target inventory is unavailable');
     return {client, buildRoot, targets: inventory.targets};
   } catch (error) {
-    // A request sidecar is context, never proof that a process exit was an
-    // ordinary compiler failure. Unexpected EOF/kill must preserve prior facts.
-    error.fatal ||= Boolean(client.failure);
-    await close(client); error.buildRoot = buildRoot; throw error;
+    let rejection;
+    if (error === client.failure && error.processExit?.code === 65 && error.processExit.signal === null
+        && client.child.exitCode === 65 && client.child.signalCode === null) {
+      let timer;
+      const drained = processClosed || await Promise.race([closed, new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); })]);
+      clearTimeout(timer);
+      if (drained) rejection = readMetadataRejection({buildRoot, expected, termination: {code: client.child.exitCode, signal: client.child.signalCode, closed: true, receivedBytes: client.receivedBytes}});
+      else { client.child.stdin.destroy(); client.child.stdout.destroy(); client.child.stderr.destroy(); }
+    }
+    // Request sidecars alone never turn EOF/kill/timeout/framing faults into a
+    // fresh empty graph. Only the bound deliberate rejection above can do so.
+    if (!rejection) error.fatal ||= Boolean(client.failure);
+    await close(client); const result = rejection ?? error; result.buildRoot = buildRoot; throw result;
   }
 }
 function contextProof(buildRoot, platform, selection) {
@@ -258,7 +330,7 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
     const addDiagnostic = item => { if (diagnostics.length < 100) diagnostics.push(item); else dropped++; };
     try {
       let session, initialError;
-      try { session = await openBridge({root, bridge, project, selection, state, scratch, platform, env, onDiagnostic: addDiagnostic}); }
+      try { session = await openBridge({root, bridge, project, selection, state, scratch, platform, env, toolchain, knownInputs: plan?.inputs && typeof plan.inputs === 'object' && !Array.isArray(plan.inputs) ? Object.keys(plan.inputs) : [], onDiagnostic: addDiagnostic}); }
       catch (error) { initialError = error; }
       if (!previous || previous.fingerprint !== fingerprint || (request.retryPreparation && !preparationAttempted) || !validPlan(plan)) {
         let attempt; try { attempt = json(path.join(state, platform, 'know-code-project-export-request.json')); } catch { /* Preserve original planner/selection failure. */ }
@@ -268,7 +340,7 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
         preparationAttempted = true;
         const prepared = restoration({root, project, selection, state, bridge, toolchain: {...toolchain, env}, request: preparationRequest, context: attempt, previous, key, fingerprint, onDiagnostic: addDiagnostic});
         plan = prepared.plan; previous = {key, fingerprint, succeeded: true, error: '', outputs: plan.outputs};
-        session = await openBridge({root, bridge, project, selection, state, scratch, platform, env, onDiagnostic: addDiagnostic});
+        session = await openBridge({root, bridge, project, selection, state, scratch, platform, env, toolchain, knownInputs: plan?.inputs && typeof plan.inputs === 'object' && !Array.isArray(plan.inputs) ? Object.keys(plan.inputs) : [], onDiagnostic: addDiagnostic});
         if (initialError) {
           addDiagnostic({code: 'xcode_recovered_initialization', severity: 'info', path: relative(root, project), message: String(initialError.message).slice(-16000)});
           for (const item of diagnostics) { item.code = 'xcode_recovered_initialization'; item.severity = 'info'; item.message = `Recovered after successful dependency preparation: ${item.message}`; }

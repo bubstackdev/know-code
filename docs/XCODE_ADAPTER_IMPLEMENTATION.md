@@ -35,8 +35,8 @@ replacement. SwiftPM still follows its independent package analysis path.
 
 ## Separate installed prerequisite
 
-The adapter accepts recipe `index-only.6-notice1`, CLI identity
-`0.1.0-know-code-index-only.6`, pinned sourcekit-xcode-bsp `726ce706…` and
+The adapter accepts recipe `index-only.7-notice1`, CLI identity
+`0.1.0-know-code-index-only.7`, pinned sourcekit-xcode-bsp `726ce706…` and
 SwiftBuild `7f96ee0e…`. It looks in the versioned user tool location or PATH,
 follows the real executable, and requires its adjacent component manifest,
 matching CLI/service inventory and exact CLI version. Verification is cached
@@ -94,6 +94,21 @@ saves do not repeat manifest compilation/restoration. Unsupported external
 codegen is an explicit coverage gap with retained repair inputs. Metadata safety
 still depends on the separate pinned-tool hostile-plugin gate; PBX script guards
 alone are not a package-plugin claim.
+
+The .7 component adds a narrow terminal metadata-rejection receipt. Each open
+has a fresh nonce and bound project/scheme/known configuration and manifest
+hashes, missing-path witnesses and effective toolchain identity. Only a naturally
+nonzero **direct selected xcodebuild** command followed by successful bridge
+cleanup can produce the receipt and deliberate bridge exit65. The adapter
+requires its original JSON-RPC failure to be that typed exit, drains child close
+for at most one second, rejects any protocol stdout, and then validates the
+bounded receipt/attempt/argv/executable/context plus saved-input/absence hashes.
+Timeout, framing/stdin error, signal, unconfirmed drain, missing/invalid proof or
+changed inputs retains fatal failure semantics and the prior graph. A bound
+rejection reports generic `xcode_metadata_unavailable`; it does not infer a root
+cause. Existing shared preparation may still attempt the ordinary authorized
+resolve, whose actual failure reports `dependency_restore_failed`. No extra
+per-SDK retry path or core/protocol/settings contract is introduced.
 
 ## Gates before promoting this checkpoint
 
