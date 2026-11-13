@@ -1,10 +1,10 @@
 # Swift indexing by exact compiler settings
 
-Source-only research, 2026-11-13; follow-up to
-[SwiftPM preparation reuse](SWIFTPM_PREPARATION_REUSE.md). No compiler, probe,
-benchmark or production change accompanies this proposal. The active Atelier
-copy and indexing job were left untouched. These observations establish no
-speedup or selected-Xcode compiler compatibility.
+Research started source-only on 2026-11-13; follow-up to
+[SwiftPM preparation reuse](SWIFTPM_PREPARATION_REUSE.md). The integration owner
+subsequently ran the finite probe recorded below. No production grouping change
+or speedup claim follows; the active Atelier copy and indexing job were left
+untouched by this research lane.
 
 ## Current cost and ownership boundary
 
@@ -70,3 +70,37 @@ aggregate memory with the existing shared governor. Larger groups may increase
 peak memory or enlarge an error's coverage impact. Keep the existing per-source
 route unless a bounded grouping policy proves both correctness and resource
 behavior. This proposal adds no engine, persistent cache or validation harness.
+
+## Finite selected-compiler result — 2026-11-13
+
+The integration owner's
+[second checkpoint passed](../../.artifacts/implementation-0.0.3/wave-01/swift-multi-primary-feasibility-02/summary.json)
+with Apple Swift 6.4.2 from Xcode 27.2, the selected macOS SDK and the matching
+Debug reader. The retained
+[result](../../.artifacts/implementation-0.0.3/swift-multi-primary-probe-01/attempt-1794605340498-46939/result.json)
+records three planned baseline frontend invocations versus one grouped frontend
+for identical ordered semantic arguments, working directory and saved bytes.
+Both modes produced each of the three files' own unit/record evidence, identical
+public IndexStore semantic-record sets and identical shared-ingestion
+source/symbol/occurrence/relationship sets. The fixture verifies a nested
+cross-file body call, local `café` reference and exact UTF-8 token spans,
+function-value reference without a false call, and an excluded empty file.
+Reports were complete for this extraction; graph capabilities remained partial.
+
+The
+[first attempt failed](../../.artifacts/implementation-0.0.3/swift-multi-primary-probe-01/attempt-1794605319097-46875/result.json)
+at driver planning because the probe invoked `realpath(tool.compiler)`:
+`swiftc` resolves to the multicall `swift-frontend` image, changing argv[0] and
+driver dispatch. The owner retained that failure and corrected invocation to
+use the selected `swiftc` spelling, recording the resolved image separately.
+See [correction hashes](../../.artifacts/implementation-0.0.3/swift-multi-primary-probe-01/owner-correction-02.json)
+and [the executed source snapshot](../../.artifacts/implementation-0.0.3/swift-multi-primary-probe-01/run-owner-02.mjs.snapshot).
+Canonical image identity must not silently change executable invocation semantics.
+
+This approximately 1.17-second checkpoint is mode feasibility, not a throughput
+benchmark: baseline/grouped ordering and shared caches do not establish a speedup
+under AV1 load. Before production adoption, still qualify both SDKs/generated
+sources, heterogeneous settings isolation, broader implicit/initializer evidence,
+compiler-error partial publication and saved repair, plus bounded group memory,
+cancellation and cleanup through the shared governor. No batching policy or
+product implementation is accepted by this finite result alone.
