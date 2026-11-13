@@ -173,6 +173,37 @@ command('dotnet','restore',WORKSPACE/'App.csproj','--configfile',PREFIX/'NuGet.C
 assert (WORKSPACE/'node_modules/typescript/lib/typescript.js').is_file()
 assert (WORKSPACE/'node_modules/@know-code/offline-dependency/index.d.ts').is_file()
 assets=json.loads((WORKSPACE/'obj/project.assets.json').read_text());assert f'KnowCode/{VERSION}' in assets['libraries']
+# Restore only the two exact additional compiler selections before denial.
+# These owned projects contain no serving state; normal installed discovery and
+# common trust/preparation must select them after first offline registration.
+selected_typescript=[]
+for suffix,version in [('6','6.0.2'),('7','7.0.2')]:
+ directory=WORKSPACE/('selected-ts'+suffix);directory.mkdir()
+ prefix='selected_ts'+suffix
+ source=directory/'Code.ts'
+ source.write_text('// café 🦀 selected compiler source\n'
+                   +f'export function {prefix}_leaf(value: number): number {{ return value + 1; }}\n'
+                   +f'export function {prefix}_entry(): number {{ return {prefix}_leaf(41); }}\n'
+                   +f'export function {prefix}_reference() {{ return {prefix}_leaf; }}\n')
+ (directory/'tsconfig.json').write_text(json.dumps({'compilerOptions':{'target':'ES2022','module':'NodeNext','moduleResolution':'NodeNext','strict':True,'noEmit':True},'files':['Code.ts']})+'\n')
+ dependencies={'typescript':version}
+ if suffix=='7':dependencies['@typescript/typescript-darwin-arm64']=version
+ (directory/'package.json').write_text(json.dumps({'name':'selected-typescript-'+suffix,'private':True,'type':'module','packageManager':'npm@'+npm_version,'devDependencies':dependencies})+'\n')
+ command('npm','install','--ignore-scripts','--no-audit','--no-fund',cwd=directory)
+ selected=directory/'node_modules/typescript/package.json';compiler=json.loads(selected.read_text())
+ assert compiler['name']=='typescript' and compiler['version']==version,compiler
+ evidence={'version':version,'project':str(directory.relative_to(WORKSPACE)),'source':str(source),
+           'compiler_manifest':str(selected),'compiler_manifest_sha256':hashlib.sha256(selected.read_bytes()).hexdigest(),
+           'lock_sha256':hashlib.sha256((directory/'package-lock.json').read_bytes()).hexdigest(),'scripts':'disabled'}
+ if suffix=='7':
+  native_manifest=directory/'node_modules/@typescript/typescript-darwin-arm64/package.json'
+  native=json.loads(native_manifest.read_text());assert native['name']=='@typescript/typescript-darwin-arm64' and native['version']==version,native
+  binary=native_manifest.parent/'lib/tsc';assert binary.is_file() and os.access(binary,os.X_OK),binary
+  evidence.update(native_manifest=str(native_manifest),native_manifest_sha256=hashlib.sha256(native_manifest.read_bytes()).hexdigest(),
+                  native_binary=str(binary),native_binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+ selected_typescript.append(dict(evidence,suffix=suffix))
+(PREFIX/'selected-typescript-setup.json').write_text(json.dumps(selected_typescript,indent=2)+'\n')
+checks.append('exact_TS6_TS7_and_native_platform_packages_restored_scripts_off_before_denial')
 # Acquire only a tool distribution, through the shipped helper, before Internet
 # denial. This cache lives outside DATA and cannot pre-seed a serving index.
 TOOL_CACHE=PREFIX/'tool-cache';npm10_prime=PREFIX/'prime-npm10.mjs'
@@ -274,6 +305,43 @@ for caller,callee,filename in [('answer','leaf','value.ts'),('GreetCaller','Gree
  assert limited['truncated'] and 'source_budget' in limited['graph']['limits'],limited
  assert [f['symbol'] for f in limited['graph']['findings']]==[f['symbol'] for f in compact['findings']],limited
 checks.append('installed_offline_TS_Csharp_graph_source_defaults_exact_bodies_limits_native_parity')
+# Fixed supported compiler cells, not a package-manager/configuration matrix.
+# All reads use the installed runtime and both installed in-process SDKs.
+selected_typescript_results=[]
+for case in selected_typescript:
+ prefix='selected_ts'+case['suffix'];filename=Path(case['source'])
+ found=query({'op':'symbols','name':prefix+'_entry','coverage_detail':'full','detail_max_bytes':262144})
+ reports=[row for row in found['coverage'] if row['language']=='typescript' and row['project_path']==case['project']+'/tsconfig.json']
+ assert len(reports)==1 and reports[0]['compiler_version']==case['version'],reports
+ report=reports[0];options=report['analysis_options'];compilation=report['compilation_id']
+ if case['suffix']=='7':
+  assert options['knowCodeNativeCompiler']=='7.0.2' and options['knowCodeNativeApi']=='unstable/sync',report
+  assert report['status']=='partial' and report['capabilities']['project_links']=='unavailable',report
+ else:
+  assert 'knowCodeNativeCompiler' not in options and options['knowCodeSourceReferenceRedirect'] is True,report
+ symbols={}
+ for role in ['entry','leaf','reference']:
+  values=query({'op':'symbols','name':prefix+'_'+role,'compilation_id':compilation})['symbols']
+  matches=[symbol for symbol in values if symbol['name']==prefix+'_'+role and not symbol['external'] and symbol['compilation_id']==compilation]
+  assert len(matches)==1,(role,matches);symbols[role]=matches[0]
+ scope={'snapshot':found['snapshot'],'max_depth':1}
+ callees=query(dict(scope,op='callees',symbol_id=symbols['entry']['id'],include_source=True,source_max_bytes=4096))
+ called=next(finding for finding in callees['graph']['findings'] if finding['symbol']['id']==symbols['leaf']['id'])
+ assert called['paths'] and all(len(path)==1 and path[0]['kind']=='call' and path[0]['resolution']=='compiler_bound'
+                               and path[0]['source_id']==symbols['entry']['id'] and path[0]['target_id']==symbols['leaf']['id']
+                               for path in called['paths']),called
+ declarations=called['context']['declarations'];assert declarations and all(d['source_status']=='included' for d in declarations),called
+ for declaration in declarations:exact_source(declaration['source'],filename)
+ impact=query(dict(scope,op='impact',symbol_id=symbols['leaf']['id']))
+ assert {symbols['entry']['id'],symbols['reference']['id']}<={finding['symbol']['id'] for finding in impact['graph']['findings']},impact
+ location=symbols['leaf']['locations'][0]
+ retained=query({'op':'source','artifact_id':location['artifact_id'],'snapshot':found['snapshot'],'content_hash':location['content_hash'],'max_bytes':4096})['source']
+ exact_source(retained,filename)
+ offset=retained['start_byte'];assert retained['text'].encode()[location['start_byte']-offset:location['end_byte']-offset].decode()==prefix+'_leaf'
+ selected_typescript_results.append({'setup':case,'coverage':report,'snapshot':found['snapshot'],'generation':found['generation'],
+                                     'callees':callees['graph'],'impact':impact['graph'],'source':retained})
+(PREFIX/'selected-typescript-results.json').write_text(json.dumps(selected_typescript_results,indent=2)+'\n')
+checks.append('installed_offline_exact_TS6_legacy_TS7_native_graph_value_impact_source_and_three_client_parity')
 # MCP startup/query/EOF over the installed executable, using the same saved publication.
 mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-stderr.log').open('w'))
 mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
