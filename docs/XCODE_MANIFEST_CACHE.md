@@ -67,6 +67,30 @@ They are not proof that only the two service keys explain the actual miss.
 Service-path variables may also affect service selection, so treat their
 functional effects separately from their participation in an upstream hash.
 
+## Retained controlled matrix checkpoint
+
+Root's `xcode-metadata-env-matrix-01/result.json` records all four standalone
+metadata commands returning0 with matching PIF hashes: clean normal/protected
+and factory normal/protected. Each pair has one equal complete environment
+fingerprint. They use the unchanged restored-analysis OS profile. This is
+standalone xcrun evidence, not an actual wired08 bridge/module certification.
+
+The reviewed orchestration scripts differ concretely. The matrix adds four
+process Git configuration entries, `GIT_ALLOW_PROTOCOL=file`, no Git prompts and
+a controlled `matrix01-factory` diagnostic value. The original
+`run-wired08-package-cases.py` sets DEVELOPER_DIR/TMPDIR and removes SDKROOT but
+adds none of those Git/diagnostic values. The bridge then applies its service
+settings. Both invoke existing wrappers; `run-command.py` changes PATH, five
+runtime variables and a test-cache default. Repeated wrapper layers must not be
+assumed to preserve an environment fingerprint.
+
+The next owned helper verifies complete controlled **launcher** environment
+equality with the retained factory pair before invoking the real driver. It
+does not infer native xcrun equality from that alone. Fresh03 PIF/DerivedData
+paths and native cwd differ from the matrix's older owned output, and the real
+bridge creates its service/session before metadata. Those remaining context
+differences stay explicit until the actual replay is retained.
+
 ## Narrow root-owned isolation plan
 
 Keep wired08, its failed runs, source/dependency pins and the OS analysis profile
