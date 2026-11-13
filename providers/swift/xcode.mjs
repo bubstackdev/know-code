@@ -109,9 +109,13 @@ function gap({root, project, toolchain, selection, platform = '', target, error,
     diagnostics: [diagnostic(error.code ?? 'xcode_analysis_unavailable', error.message, projectPath)]});
 }
 function validPlan(plan) {
-  return plan && plan.outputs.every(exists) && Object.entries(plan.inputs).every(([file, expected]) => {
-    try { return hash(fs.readFileSync(file)) === expected; } catch { return false; }
-  });
+  if (!plan || !Array.isArray(plan.outputs) || !plan.outputs.length || !plan.inputs || typeof plan.inputs !== 'object' || Array.isArray(plan.inputs)
+      || (plan.analysisInputs !== undefined && (!Array.isArray(plan.analysisInputs) || !plan.analysisInputs.every(file => typeof file === 'string' && path.isAbsolute(file))))) return false;
+  return plan.outputs.every(file => typeof file === 'string' && path.isAbsolute(file) && exists(file))
+    && Object.entries(plan.inputs).length > 0 && Object.entries(plan.inputs).every(([file, expected]) => {
+      if (!path.isAbsolute(file) || typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected)) return false;
+      try { return hash(fs.readFileSync(file)) === expected; } catch { return false; }
+    });
 }
 async function close(client) {
   client.timeout = Math.min(client.timeout, 5000);
@@ -212,7 +216,7 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
   let previous = request.preparations.find(item => item.key === key);
   let plan; try { plan = json(path.join(state, 'dependency-plan.json')); } catch { /* First preparation is explicit below. */ }
   if (previous?.fingerprint === fingerprint && !previous.succeeded && !request.retryPreparation) return gap({root, project, toolchain, selection,
-    inputs: plan?.analysisInputs ?? [], error: problem('dependency_restore_failed', previous.error)});
+    inputs: Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], error: problem('dependency_restore_failed', previous.error)});
   // The fixed bridge's factory sets these same service keys. Supply one
   // coherent child environment to normal preparation and metadata as well.
   const env = {...toolchain.env, TMPDIR: path.join(state, 'tmp'), SWBBUILDSERVICE_PATH: bridge.service,
@@ -222,10 +226,12 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
   if (!Number.isSafeInteger(gitCount) || gitCount < 0 || gitCount > 1024) throw problem('xcode_preparation_environment', 'Invalid inherited Git configuration count');
   env.GIT_CONFIG_COUNT = String(gitCount + 2); env[`GIT_CONFIG_KEY_${gitCount}`] = 'core.hooksPath'; env[`GIT_CONFIG_VALUE_${gitCount}`] = '/dev/null';
   env[`GIT_CONFIG_KEY_${gitCount + 1}`] = 'protocol.ext.allow'; env[`GIT_CONFIG_VALUE_${gitCount + 1}`] = 'never';
-  let preparationFailed, preparationAttempted = false;
+  const previousAnalysisInputs = Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], jobAnalysisInputs = new Set();
+  let preparationFailed, preparationAttempted = false, unobservedContext = false;
   for (const platform of ['iphoneos', 'iphonesimulator']) {
-    if (preparationFailed) { gap({root, project, toolchain, selection, platform, error: preparationFailed}); continue; }
-    let client, analyzing = false;
+    if (preparationFailed) { unobservedContext = true; gap({root, project, toolchain, selection, platform, inputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs])], error: preparationFailed}); continue; }
+    let client, analyzing = false, inventoryObserved = false;
+    const observedInputs = new Set();
     const diagnostics = []; let dropped = 0;
     const addDiagnostic = item => { if (diagnostics.length < 100) diagnostics.push(item); else dropped++; };
     try {
@@ -255,6 +261,21 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
         const response = await client.request('buildTarget/sources', {targets: [target.id]});
         sourcesByTarget.set(target.id.uri, response.items.flatMap(item => item.sources));
       }
+      // Enroll exact compiler-selected saved inputs before preparation can
+      // fail. Missing linked sources/configs stay watched for later creation.
+      for (const file of [project, ...selection.inputs, ...toolchain.inputPaths, ...Object.keys(evidence.proof.selection.inputSha256)]) observedInputs.add(file);
+      for (const filename of evidence.projects) {
+        const configuration = filename.endsWith('.xcodeproj') ? path.join(filename, 'project.pbxproj')
+          : filename.endsWith('.xcworkspace') ? path.join(filename, 'contents.xcworkspacedata')
+          : path.basename(filename) === 'Package.swift' ? filename : undefined;
+        if (configuration && !within(configuration, work)) observedInputs.add(configuration);
+        for (const lock of [path.join(path.dirname(filename), 'Package.resolved'), path.join(filename, 'project.xcworkspace/xcshareddata/swiftpm/Package.resolved')]) if (exists(lock) && !within(lock, work)) observedInputs.add(lock);
+      }
+      for (const items of sourcesByTarget.values()) for (const item of items) if (item.uri.startsWith('file:')) {
+        const file = fileURLToPath(item.uri); if (!within(file, work)) observedInputs.add(file);
+      }
+      for (const file of observedInputs) jobAnalysisInputs.add(file);
+      inventoryObserved = true;
       send('progress', {stage: 'preparing', projectPath: relative(root, project), message: `Preparing selected ${platform} modules; scripts and product builds stay disabled`});
       let preparationError;
       try { await extensionRequest(client, 'buildTarget/prepare', {targets: targets.map(target => target.id)}); }
@@ -272,14 +293,6 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
         throw problem('xcode_module_preparation_failed', `Xcode reported a failed module preparation: ${JSON.stringify(prepared.diagnostics ?? []).slice(-14000)}`);
       if (preparationError || prepared.succeeded !== true || prepared.operationState !== 'succeeded'
           || JSON.stringify(prepared.typedTerminalResults) !== '["ok"]' || !(prepared.typedPreparationCompleteCount > 0)) throw invalidProof();
-      const observedInputs = new Set([project, ...selection.inputs, ...toolchain.inputPaths, ...Object.keys(evidence.proof.selection.inputSha256)]);
-      for (const filename of evidence.projects) {
-        if (path.basename(filename) === 'Package.swift' && !within(filename, state)) observedInputs.add(filename);
-        for (const lock of [path.join(path.dirname(filename), 'Package.resolved'), path.join(filename, 'project.xcworkspace/xcshareddata/swiftpm/Package.resolved')]) if (exists(lock) && !within(lock, state)) observedInputs.add(lock);
-      }
-      for (const items of sourcesByTarget.values()) for (const item of items) if (item.uri.startsWith('file:')) {
-        const file = fileURLToPath(item.uri); if (!within(file, work) && exists(file)) observedInputs.add(file);
-      }
       const sdk = run('/usr/bin/xcrun', ['--sdk', platform, '--show-sdk-path'], root, env);
       if (sdk.status !== 0 || !sdk.stdout.trim()) throw problem('xcode_sdk_unavailable', sdk.stderr || `Missing ${platform} SDK`);
       const sdkPath = fs.realpathSync(sdk.stdout.trim());
@@ -339,14 +352,19 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
       // Only compiler-selected saved inputs enter the shared watcher manifest.
       // Job/module/generated output paths never trigger a save/restore loop.
       const setupInputs = [...new Set([...observedInputs, ...evidence.projects.filter(file => path.basename(file) === 'Package.swift')])].filter(file => /(?:^|\/)(?:Package(?:@swift-[0-9.]+)?\.swift|Package\.resolved|project\.pbxproj|contents\.xcworkspacedata|\.swift-version|\.tool-versions|\.xcode-version)$|\.(?:xcscheme|xcconfig)$/.test(file));
-      plan = {inputs: Object.fromEntries(setupInputs.filter(exists).map(file => [file, hash(fs.readFileSync(file))])), analysisInputs: [...observedInputs],
+      plan = {inputs: Object.fromEntries(setupInputs.filter(exists).map(file => [file, hash(fs.readFileSync(file))])), analysisInputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs, ...observedInputs])],
         outputs: [path.join(state, 'dependency-plan.json'), path.join(state, 'clones'), path.join(state, 'cache'), ...evidence.projects.filter(file => within(file, state))], bridgeManifest: bridge.manifestSha256, configuration: evidence.proof.selection.configuration};
       put(path.join(state, 'dependency-plan.json'), plan);
     } catch (error) {
+      unobservedContext ||= !inventoryObserved;
       if (error.code === 'dependency_restore_failed') preparationFailed = error;
       if (analyzing || error.fatal || client?.failure || error.code === 'xcode_saved_inputs_changed') throw error;
       if (!error.code && /interrupted|resource-limited|timed out|oversized|truncated|frame|compiler\/driver failed|Swift tool failed|IndexStore reader failed/i.test(error.message)) throw error;
-      gap({root, project, toolchain, selection, platform, error, inputs: plan?.analysisInputs ?? (plan ? Object.keys(plan.inputs) : [])});
+      gap({root, project, toolchain, selection, platform, error, inputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs, ...observedInputs])]});
     } finally { if (client) await close(client); }
+  }
+  if (plan && !unobservedContext) {
+    plan.analysisInputs = [...jobAnalysisInputs];
+    put(path.join(state, 'dependency-plan.json'), plan);
   }
 }
