@@ -26,7 +26,14 @@ WORKSPACE, MACROS = ARTIFACTS / 'fixture', ARTIFACTS / 'macro-api'
     ' "impl Derived { pub fn generated_method(&self) -> usize { 9 } }".parse().unwrap()\n}\n'
     '#[proc_macro_attribute] pub fn rename(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {\n'
     ' item.into_iter().map(|token| match token { proc_macro::TokenTree::Ident(name) if name.to_string() == "old_name" => '
-    'proc_macro::TokenTree::Ident(proc_macro::Ident::new("new_name", name.span())), other => other }).collect()\n}\n')
+    'proc_macro::TokenTree::Ident(proc_macro::Ident::new("new_name", name.span())), other => other }).collect()\n}\n'
+    'fn rename_shape_tokens(item: proc_macro::TokenStream) -> proc_macro::TokenStream {\n'
+    ' item.into_iter().map(|token| match token {\n'
+    ' proc_macro::TokenTree::Ident(name) if name.to_string() == "OldShape" => proc_macro::TokenTree::Ident(proc_macro::Ident::new("NewShape", name.span())),\n'
+    ' proc_macro::TokenTree::Ident(name) if name.to_string() == "old_field" => proc_macro::TokenTree::Ident(proc_macro::Ident::new("new_field", name.span())),\n'
+    ' proc_macro::TokenTree::Group(group) => { let mut replacement = proc_macro::Group::new(group.delimiter(), rename_shape_tokens(group.stream())); replacement.set_span(group.span()); proc_macro::TokenTree::Group(replacement) },\n'
+    ' other => other }).collect()\n}\n'
+    '#[proc_macro_attribute] pub fn rename_shape(_: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream { rename_shape_tokens(item) }\n')
 (WORKSPACE / 'Cargo.toml').write_text('[package]\nname="owned-macro-consumer"\nversion="0.1.0"\nedition="2024"\n[workspace]\n'
     '[dependencies]\nmacro-api={package="owned-macro-api",path=' + json.dumps(str(MACROS)) + '}\n')
 (WORKSPACE / 'src/lib.rs').write_text(
@@ -35,7 +42,19 @@ WORKSPACE, MACROS = ARTIFACTS / 'fixture', ARTIFACTS / 'macro-api'
     'pub fn entry() -> usize { macro_api::choose!(); selected() + ordinary_leaf() + generated_one() + generated_two() }\n'
     '#[derive(macro_api::Made)] pub struct Derived;\npub fn derived_use() -> usize { Derived.generated_method() }\n'
     '#[macro_api::rename] pub fn old_name() -> usize { ordinary_leaf() }\npub fn renamed_use() -> usize { new_name() }\n'
-    'use crate::ordinary_leaf as alias_leaf;\npub fn aliased() -> usize { alias_leaf() }\n')
+    'use crate::ordinary_leaf as alias_leaf;\npub fn aliased() -> usize { alias_leaf() }\n'
+    '#[macro_api::rename_shape] pub struct OldShape { pub old_field: usize }\n'
+    'pub fn renamed_shape_use() -> usize { let value = NewShape { new_field: 1 }; value.new_field }\n'
+    'pub struct PlainShape { pub plain_field: usize }\n'
+    'pub fn plain_shape_use() -> usize { let value = PlainShape { plain_field: 2 }; value.plain_field }\n'
+    '#[macro_api::passthrough] pub mod attributed { pub struct AttributedShape { pub attributed_field: usize } pub fn nested_leaf() -> usize { crate::ordinary_leaf() } }\n'
+    'pub fn nested_call() -> usize { attributed::nested_leaf() }\n'
+    '#[path="risk/mod.rs"] pub mod risk;\nmod plain;\n'
+    'pub fn risk_call() -> usize { risk::risk_leaf() }\n')
+(WORKSPACE / 'src/risk').mkdir()
+(WORKSPACE / 'src/risk/mod.rs').write_text('pub mod nested;\npub struct RiskShape { pub risk_field: usize }\npub fn risk_leaf() -> usize { crate::ordinary_leaf() }\n')
+(WORKSPACE / 'src/risk/nested.rs').write_text('pub struct DeepRiskShape { pub deep_risk_field: usize }\n')
+(WORKSPACE / 'src/plain.rs').write_text('pub struct PlainNestedShape { pub plain_nested_field: usize }\n')
 NODE = shutil.which('node')
 assert NODE
 sysroot = subprocess.run(['rustc', '--print', 'sysroot'], cwd=WORKSPACE, text=True, capture_output=True, check=True).stdout.strip()
@@ -97,13 +116,21 @@ def validate(payload):
         assert not calls('entry', 'selected'), 'macro-disabled fallback binding was published'
         assert calls('ordinary', 'selected'), 'attribute replay lost the unchanged authored body'
         assert calls('aliased', 'ordinary_leaf'), 'canonical declaration validation confused an alias with a renamed target'
+        assert calls('nested_leaf', 'ordinary_leaf') and calls('nested_call', 'nested_leaf'), 'attributed module suppressed proven callable identities'
+        assert calls('risk_leaf', 'ordinary_leaf') and calls('risk_call', 'risk_leaf'), 'out-of-line attribute risk suppressed proven callables'
+        assert not {'OldShape', 'NewShape', 'old_field', 'new_field', 'AttributedShape', 'attributed_field',
+                    'RiskShape', 'risk_field', 'DeepRiskShape', 'deep_risk_field'} & {symbol['name'] for symbol in symbols.values()}, 'unproved attributed noncallable identity was published'
+        for name in ('PlainShape', 'plain_field', 'PlainNestedShape', 'plain_nested_field'):
+            authored(name)
+
         assert not {'old_name', 'new_name'} & {symbol['name'] for symbol in symbols.values()}, 'same-kind attribute rename reused an authored function identity'
         assert not {'generated_one', 'generated_two', 'generated_method'} & {symbol['name'] for symbol in symbols.values()}, 'unproven expansion identity was published'
         assert not any(symbol['name'] in ('choose', 'made') and symbol['kind'] in ('function', 'method') for symbol in symbols.values()), 'macro implementation function became a runtime call target'
         owned_sources = [frame['source']['path'] for frame in payload['messages'] if frame.get('source', {}).get('compilationId') == identity]
-        assert owned_sources == ['src/lib.rs'], owned_sources
+        assert sorted(owned_sources) == ['src/lib.rs', 'src/plain.rs', 'src/risk/mod.rs', 'src/risk/nested.rs'], owned_sources
         report = next(frame['report'] for frame in payload['messages'] if frame.get('report', {}).get('compilationId') == identity)
         assert any(item['code'] == 'rust_unproven_definition_origin' for item in report['diagnostics']), report
+        assert any(item['code'] == 'rust_unproven_attribute_origin' for item in report['diagnostics']), report
         assert len([item for item in report['diagnostics'] if item['code'] == 'rust_lookup_syntax_unavailable' and 'macro-api/src/lib.rs' in item.get('path', '')]) == 1, report
 
 
@@ -153,7 +180,8 @@ assert any(item.get('method') == 'textDocument/diagnostic' and item.get('result'
                    for diagnostic in item['result'].get('items', [])) for item in negative), negative
 (ARTIFACTS / 'summary.json').write_text(json.dumps({'passed': True, 'assertions': [
     'exact captured macro dylib replay in both library contexts', 'Cargo-injected macro environment selects the correct valid authored binding', 'macro-induced binding/shadowing change',
-    'ordinary and attribute-preserved body calls', 'same-kind attribute rename omitted without breaking aliases', 'unproven generated declarations omitted',
+    'ordinary and attribute-preserved body calls', 'same-kind attribute rename omitted without breaking aliases',
+    'same-kind type/field transformation and enclosing module risk omit unproved noncallables', 'unattributed root/module type and field identities remain', 'unproven generated declarations omitted',
     'macro implementation is not a runtime call target', 'dependency source remains lookup-only',
     'Cargo-selected compiler/sysroot independent of unrelated PATH rustc',
     'synchronous full diagnostics gate replay', 'lookup-only syntax presentation panic omits unproved targets', 'healthy server with actual dylib-load failure publishes no fallback facts'],

@@ -54,7 +54,7 @@ function connection(input, output, request) {
           record({injectedLoaderFault: {capturedDylibs: replaced, replacement: invalidDylib}});
         }
         if (syntaxMethods.has(message.method)) record({request: {id: message.id, method: message.method, params: message.params}});
-        if (['initialize', 'shutdown', 'textDocument/diagnostic', 'textDocument/prepareCallHierarchy', 'callHierarchy/outgoingCalls'].includes(message.method) || syntaxMethods.has(message.method))
+        if (['initialize', 'shutdown', 'textDocument/diagnostic', 'textDocument/definition', 'textDocument/prepareCallHierarchy', 'callHierarchy/outgoingCalls'].includes(message.method) || syntaxMethods.has(message.method))
           pending.set(message.id, {method: message.method, params: message.params});
       } else if (!message.method && pending.has(message.id)) {
         const original = pending.get(message.id);

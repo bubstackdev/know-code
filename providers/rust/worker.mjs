@@ -208,7 +208,12 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
   const externalSources = new ExternalSources();
   const declarationOrigins = new Map();
   const canonicalCallables = new Map();
-  let originAnchors = 0, omittedOrigins = 0;
+  const moduleEdges = new Map(), riskyModuleFiles = new Set(), unknownModuleFiles = new Set();
+  const knownModuleFiles = new Set(selected ? [pathToFileURL(selected.unit.cfg.root).href] : []);
+  const capturedRoots = new Set(selected ? selected.graph.reachable.map(index => pathToFileURL(collection.units[index].cfg.root).href) : []);
+  let unknownModuleAncestry = false, moduleEdgeCount = 0;
+
+  let originAnchors = 0, omittedOrigins = 0, omittedAttributeOrigins = 0;
   function rememberOrigins(target, syntax) {
     const key = `${target.uri}@${target.artifact.sha256}`, anchors = syntax?.declarationAnchors() ?? new Map();
     if (anchors.size > 65536) return undefined;
@@ -239,6 +244,11 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       anchors = rememberOrigins(target, syntax);
       if (!anchors) return false;
     } else { declarationOrigins.delete(key); declarationOrigins.set(key, anchors); }
+    if (replayMacros && !['function', 'method'].includes(kind) &&
+        (anchors.get(`${start}:${end}`)?.attributed || unknownModuleAncestry || riskyModuleFiles.has(target.uri) ||
+          (sources.has(target.uri) ? !knownModuleFiles.has(target.uri) : !capturedRoots.has(target.uri)))) {
+      omittedAttributeOrigins++; return false;
+    }
     return authoredDeclaration(anchors, start, end, kind);
   }
   const callableIdentity = item => JSON.stringify([item.uri, item.kind, item.name, item.selectionRange,
@@ -355,19 +365,50 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       }
       const modules = [];
       const collectModules = items => { for (const item of items ?? []) {
-        if (item.kind === 2 && item.selectionRange) modules.push(item.selectionRange.start);
+        if (item.kind === 2 && item.selectionRange) modules.push(item.selectionRange);
         collectModules(item.children);
       }};
       collectModules(outline);
-      for await (const {definitions} of orderedDefinitions(modules,
-        position => analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position}))) {
+      const moduleDeclarations = new Map();
+      if (replayMacros && modules.length) {
+        const syntax = await syntaxGraph(analyzer, current);
+        if (syntax) {
+          const anchors = rememberOrigins(current, syntax);
+          for (const owner of syntax.owners) if (owner.kind === 'MOD' && owner.selection) {
+            moduleDeclarations.set(`${owner.selection.start}:${owner.selection.end}`, {
+              attributed: anchors?.get(`${owner.selection.start}:${owner.selection.end}`)?.attributed ?? true,
+              external: owner.children.some(child => child.kind === 'SEMICOLON')});
+          }
+        } else unknownModuleFiles.add(current.uri);
+      }
+      for await (const {item: range, definitions} of orderedDefinitions(modules,
+        range => analyzer.request('textDocument/definition', {textDocument: {uri: current.uri}, position: range.start}))) {
         const locations = definitions ? (Array.isArray(definitions) ? definitions : [definitions]) : [];
         const definitionsByLocation = new Map(locations.map(item => {
           const uri = item.targetUri ?? item.uri, range = item.targetSelectionRange ?? item.range;
           return [JSON.stringify([uri, range]), uri];
         }));
-        if (definitionsByLocation.size !== 1) continue;
+        const declaration = moduleDeclarations.get(`${current.byte(range.start)}:${current.byte(range.end)}`);
+        if (replayMacros && !declaration) unknownModuleFiles.add(current.uri);
+        if (definitionsByLocation.size !== 1) {
+          if (replayMacros && declaration?.external) {
+            unknownModuleFiles.add(current.uri);
+            if (declaration.attributed) unknownModuleAncestry = true;
+          }
+          continue;
+        }
         const uri = [...definitionsByLocation.values()][0];
+        if (replayMacros && declaration?.external) {
+          if (uri !== current.uri && sources.has(uri)) {
+            const edges = moduleEdges.get(current.uri) ?? new Set();
+            if (!edges.has(uri) && ++moduleEdgeCount > 65536) throw new Error('resource-limited: Rust module-origin risk inputs exceed 65536 edges');
+            edges.add(uri); moduleEdges.set(current.uri, edges);
+            if (declaration.attributed) riskyModuleFiles.add(uri);
+          } else {
+            unknownModuleFiles.add(current.uri);
+            if (declaration.attributed) unknownModuleAncestry = true;
+          }
+        }
         if (!selected && uri?.startsWith('file:') && !sources.has(uri)) {
           const filename = fileURLToPath(uri);
           if (fs.existsSync(filename)) sources.set(uri, source(filename, root, compilationId));
@@ -376,6 +417,13 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       analyzer.notify('textDocument/didClose', {textDocument: {uri: current.uri}});
     }
     if (replayMacros) {
+      if (!initialized.capabilities.documentSymbolProvider && sources.size > 1) unknownModuleAncestry = true;
+      // These edges propagate uncertainty only. They neither enroll source nor
+      // establish a body/dependency link across compiler units.
+      for (const [files, pending] of [[knownModuleFiles, [...knownModuleFiles]], [riskyModuleFiles, [...riskyModuleFiles]]])
+        for (let index = 0; index < pending.length; index++) for (const child of moduleEdges.get(pending[index]) ?? [])
+          if (!files.has(child)) { files.add(child); pending.push(child); }
+      if ([...riskyModuleFiles].some(uri => unknownModuleFiles.has(uri))) unknownModuleAncestry = true;
       if (macroDiagnostics.length) {
         send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
           {code: 'rust_macro_replay_unavailable', severity: 'error', path: projectPath,
@@ -506,6 +554,8 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     }
     if (unresolved) diagnostics.push({code: 'rust_unresolved_navigation', severity: 'warning', path: projectPath,
       message: `${unresolved} semantic tokens had no unique supported definition; no exact reference was invented.`});
+    if (omittedAttributeOrigins) diagnostics.push({code: 'rust_unproven_attribute_origin', severity: 'warning', path: projectPath,
+      message: `${omittedAttributeOrigins} non-callable targets beneath attributed syntax or unproved module ancestry lacked canonical expansion-origin proof and were omitted. This conservative boundary includes built-in/inert attributes and lookup-only non-root files; proven callable identities remain available.`});
     if (omittedOrigins) diagnostics.push({code: 'rust_unproven_definition_origin', severity: 'warning', path: projectPath,
       message: `${omittedOrigins} targets lacked matching authored declaration ranges/kinds, including possible expansion origins or lookup-only source beyond the 64 KiB syntax-proof allowance; no invocation anchor was reused as a symbol identity.`});
     diagnostics.push({code: 'rust_graph_limits', severity: 'warning', path: projectPath,

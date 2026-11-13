@@ -16,7 +16,7 @@ const DECLARATIONS = {
   namespace: ['MOD', 'SOURCE_FILE'], macro: ['MACRO_RULES', 'MACRO_DEF', 'FN'], procMacro: ['FN'], derive: ['FN']
 };
 
-export const authoredDeclaration = (anchors, start, end, kind) => DECLARATIONS[kind]?.includes(anchors.get(`${start}:${end}`)) ?? false;
+export const authoredDeclaration = (anchors, start, end, kind) => DECLARATIONS[kind]?.includes(anchors.get(`${start}:${end}`)?.kind) ?? false;
 
 export class RustGraph {
   constructor(source, encoded, compilerText = source.text) {
@@ -101,14 +101,19 @@ export class RustGraph {
   }
   callableOwners() { return this.owners.filter(node => node.id && node.selection && callable(node)); }
   declarationAnchors() {
-    const anchors = new Map([[`0:${this.source.artifact.utf8.length}`, 'SOURCE_FILE']]);
-    const stack = [{node: this.root, parent: undefined}];
+    const anchors = new Map();
+    const stack = [{node: this.root, parent: undefined, attributed: false}];
     while (stack.length) {
-      const {node, parent} = stack.pop();
+      const {node, parent, attributed: enclosingAttribute} = stack.pop();
+      // Attributes can replace an entire item, including nested items/fields,
+      // parameters and locals. Walk raw ancestry: IMPL and source-file inner
+      // attributes are meaningful even though they are not execution owners.
+      const attributed = enclosingAttribute || node.children.some(child => child.kind === 'ATTR');
+      if (node === this.root) anchors.set(`0:${this.source.artifact.utf8.length}`, {kind: 'SOURCE_FILE', attributed});
       const identifier = node.kind === 'NAME' ? node.children.find(child => child.kind === 'IDENT') :
         node.kind === 'SELF_PARAM' ? node.children.find(child => child.kind === 'SELF_KW') : undefined;
-      if (identifier) anchors.set(`${identifier.start}:${identifier.end}`, node.kind === 'SELF_PARAM' ? node.kind : parent.kind);
-      for (const child of node.children) stack.push({node: child, parent: node});
+      if (identifier) anchors.set(`${identifier.start}:${identifier.end}`, {kind: node.kind === 'SELF_PARAM' ? node.kind : parent.kind, attributed});
+      for (const child of node.children) stack.push({node: child, parent: node, attributed});
     }
     return anchors;
   }
