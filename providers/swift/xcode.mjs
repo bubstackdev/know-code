@@ -67,8 +67,8 @@ export function xcodeSelection({root, configuredProjects, schemePath}) {
 }
 
 export function findXcodeBridge(env = process.env, home = os.homedir()) {
-  const candidates = [...new Set([path.join(home, '.local/share/know-code/tools/xcode-bridge', recipe, 'sourcekit-xcode-bsp'),
-    ...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, 'sourcekit-xcode-bsp'))])];
+  const candidates = [...new Set([...(env.PATH ?? '').split(path.delimiter).filter(Boolean).map(dir => path.join(dir, 'sourcekit-xcode-bsp')),
+    path.join(home, '.local/share/know-code/tools/xcode-bridge', recipe, 'sourcekit-xcode-bsp')])];
   let incompatible;
   for (const candidate of candidates) {
     if (!exists(candidate)) continue;
