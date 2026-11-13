@@ -85,7 +85,7 @@ fn validate(root: &Path) -> Result<PathBuf> {
                 "runtime layout/protocol/store/lifecycle/build profile is incompatible",
             ));
         }
-        for required in ["typescript", "csharp"] {
+        for required in ["typescript", "csharp", "rust", "swift"] {
             if !manifest.providers.iter().any(|p| p.language == required) {
                 return Err(invalid(format!(
                     "runtime lacks required {required} provider"

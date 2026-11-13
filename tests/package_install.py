@@ -134,6 +134,7 @@ runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
 contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':2,'resource_control_version':3}
 assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
 assert runtime_manifest['version']==VERSION
+assert {p['language']:p['status'] for p in runtime_manifest['providers']}==dict.fromkeys(['typescript','csharp','rust','swift'],'required'),runtime_manifest
 assert command(HOST,'--version').stdout.strip()==f'know-code {VERSION}'
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']
 for native in [bundle/'bin/know-code',PREFIX/'unused']:
@@ -512,7 +513,19 @@ while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 resources=bundle/'lib/know-code';worker=resources/'providers/typescript/worker.mjs';backup=worker.with_suffix('.held');worker.rename(backup)
 try:failure=command(HOST,'runtime-info',check=False);assert failure.returncode and 'missing' in failure.stderr
 finally:backup.rename(worker)
-manifest_file=resources/'runtime.json';saved=manifest_file.read_bytes();broken=json.loads(saved);broken['worker_protocol']=999;manifest_file.write_text(json.dumps(broken))
+manifest_file=resources/'runtime.json';saved=manifest_file.read_bytes()
+for language in ['rust','swift']:
+ # Keep provider bytes intact: omission from the manifest must itself fail.
+ original=json.loads(saved);entry=next(p for p in original['providers'] if p['language']==language)
+ assert (resources/entry['entrypoint']).is_file(),entry
+ broken=dict(original,providers=[p for p in original['providers'] if p['language']!=language])
+ manifest_file.write_text(json.dumps(broken))
+ try:
+  failure=command(HOST,'runtime-info',check=False)
+  assert failure.returncode and f'runtime lacks required {language} provider' in failure.stderr,failure.stderr
+ finally:manifest_file.write_bytes(saved)
+checks.append('required_Rust_Swift_manifest_entries_cannot_be_omitted')
+broken=json.loads(saved);broken['worker_protocol']=999;manifest_file.write_text(json.dumps(broken))
 try:failure=command(HOST,'runtime-info',check=False);assert failure.returncode and 'incompatible' in failure.stderr
 finally:manifest_file.write_bytes(saved)
 invalid=PREFIX/'invalid-resources';invalid.mkdir();failure=command(HOST,'runtime-info',check=False,env=dict(ENV,KNOW_CODE_RUNTIME_DIR=str(invalid)));assert failure.returncode and 'manifest' in failure.stderr
