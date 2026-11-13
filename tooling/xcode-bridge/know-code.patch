@@ -1,0 +1,915 @@
+diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift b/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift
+--- a/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift
++++ b/Sources/SourceKitXcodeBSP/Bootstrap/BuildServerBootstrap.swift
+@@ -1,4 +1,6 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
+ import BuildServerProtocol
++import CryptoKit
+ import Foundation
+ import LanguageServerProtocol
+ import LanguageServerProtocolTransport
+@@ -57,21 +59,27 @@
+                 platform: config.platform
+             )
+ 
+-            // Load workspace and populate configured targets before creating the server.
+-            // Using .session pifSource means SWBBuildServer skips loadWorkspace on
+-            // build/initialize — so this is the one and only loadWorkspace call.
+-            // The correct PIF GUIDs come from workspaceInfo(), not the raw project file.
+-            try await populateTargets(
+-                session: session,
+-                buildRequest: &buildRequest,
+-                workspacePath: workspacePath
++            let exported = try await OwnedPIFExport.create(
++                workspacePath: workspacePath, schemePath: config.schemePath, buildRoot: buildRoot,
++                clonedSourcePackagesDirPath: config.clonedSourcePackagesDirPath, packageCachePath: config.packageCachePath
++            )
++            buildRequest.parameters.configurationName = exported.selection.configuration
++            buildRequest.containerPath = workspacePath
++            try await populateTargets(session: session, buildRequest: &buildRequest, exported: exported, buildRoot: buildRoot)
++            // Mandatory research gate: repository/target settings cannot enable
++            // shell script execution during description or preparation.
++            Self.enforceIndexingSafety(&buildRequest)
++            try buildRequest.jsonData().write(
++                to: URL(fileURLWithPath: buildRoot).appendingPathComponent("know-code-index-only-request.json"),
++                options: .atomic
+             )
+ 
+             // Start server and wait for exit.
+             try await runServer(
+                 session: session,
+                 buildRequest: buildRequest,
+-                workspacePath: workspacePath,
++                exported: exported,
++                buildRoot: buildRoot,
+                 connection: connection
+             )
+         } catch {
+@@ -137,30 +145,89 @@
+             buildRequest.parameters.activeRunDestination = Self.makeRunDestination(for: platform)
+         }
+ 
++        Self.enforceIndexingSafety(&buildRequest)
+         return buildRequest
++    }
++
++    /// This is a forced request policy, not a project setting or optional grant.
++    private static func enforceIndexingSafety(_ request: inout SWBBuildRequest) {
++        func guarded(_ original: SWBBuildParameters) -> SWBBuildParameters {
++            var parameters = original
++            parameters.action = "indexbuild"
++            var settings = parameters.overrides.commandLine ?? SWBSettingsTable()
++            settings.set(value: "YES", for: "INDEX_DISABLE_SCRIPT_EXECUTION")
++            settings.set(value: "NO", for: "INDEX_FORCE_SCRIPT_EXECUTION")
++            settings.set(value: "YES", for: "ONLY_ACTIVE_ARCH")
++            settings.set(value: "NO", for: "INDEX_ENABLE_OPTIMIZATION_LEVEL_OVERRIDE")
++            parameters.overrides.commandLine = settings
++            return parameters
++        }
++        request.parameters = guarded(request.parameters)
++        for index in request.configuredTargets.indices {
++            request.configuredTargets[index].parameters = guarded(
++                request.configuredTargets[index].parameters ?? request.parameters
++            )
++        }
++        request.buildCommand = .prepareForIndexing(buildOnlyTheseTargets: nil, enableIndexBuildArena: true)
++        request.enableIndexBuildArena = true
++        request.useParallelTargets = false
++        request.useImplicitDependencies = true
++        request.continueBuildingAfterErrors = true
+     }
+ 
+     private func populateTargets(
+         session: any BuildServiceSessionProviding,
+         buildRequest: inout SWBBuildRequest,
+-        workspacePath: String
++        exported: OwnedPIFExport,
++        buildRoot: String
+     ) async throws {
+-        do {
+-            try await session.loadWorkspace(containerPath: workspacePath)
+-        } catch {
+-            throw BootstrapError.workspaceLoadFailed(error)
+-        }
++        // Load precisely the bounded/hash-bound PIF used for native selection.
++        try await session.loadWorkspace(containerPath: exported.path)
++        let bytes = try boundedXcodeData(exported.path, maximumBytes: 64 * 1024 * 1024)
++        let actualHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
++        guard actualHash == exported.sha256 else { throw CocoaError(.fileReadCorruptFile) }
+         let targets = try await session.workspaceInfo().targetInfos
+-        logger.info("Adding \(targets.count) configured targets")
+-        for target in targets {
+-            buildRequest.add(target: SWBConfiguredTarget(guid: target.guid))
+-        }
++        for selected in exported.selection.targets {
++            guard targets.filter({ $0.guid == selected.plannerIdentifier }).count == 1 else {
++                throw CocoaError(.fileReadCorruptFile)
++            }
++            buildRequest.add(target: SWBConfiguredTarget(guid: selected.plannerIdentifier, parameters: buildRequest.parameters))
++        }
++        Self.enforceIndexingSafety(&buildRequest)
++        guard let real = session as? RealBuildServiceSession else { throw CocoaError(.featureUnsupported) }
++        let roots = exported.selection.targets.map(\.plannerIdentifier)
++        let closure = try await real.session.computeDependencyClosure(targetGUIDs: roots,
++            buildParameters: buildRequest.parameters, includeImplicitDependencies: true)
++        // Every actual closure target must support the explicit Test config;
++        // do not accept a hidden target-default fallback for a dependency.
++        guard let objects = try JSONSerialization.jsonObject(with: bytes) as? [[String: Any]] else { throw CocoaError(.fileReadCorruptFile) }
++        let allTargets = objects.filter { $0["type"] as? String == "target" }.compactMap { $0["contents"] as? [String: Any] }
++        for guid in closure {
++            let selected = allTargets.filter { $0["guid"] as? String == guid }
++            guard selected.count == 1, let configurations = selected.first?["buildConfigurations"] as? [[String: Any]],
++                  configurations.filter({ $0["name"] as? String == exported.selection.configuration }).count == 1 else {
++                throw NSError(domain: "KnowCodeXcodeSelection", code: 2,
++                    userInfo: [NSLocalizedDescriptionKey: "Planner dependency lacks selected Test configuration \(exported.selection.configuration): \(guid)"])
++            }
++        }
++        struct Proof: Encodable {
++            let pifSha256: String
++            let loadedPIFPath: String
++            let selectedRootGUIDs: [String]
++            let dependencyClosureGUIDs: [String]
++            let configuration: String
++        }
++        let proof = Proof(pifSha256: exported.sha256, loadedPIFPath: exported.path, selectedRootGUIDs: roots,
++            dependencyClosureGUIDs: closure, configuration: exported.selection.configuration)
++        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
++        try encoder.encode(proof).write(to: URL(fileURLWithPath: buildRoot).appendingPathComponent("know-code-selected-closure.json"), options: .atomic)
+     }
+ 
+     private func runServer(
+         session: any BuildServiceSessionProviding,
+         buildRequest: SWBBuildRequest,
+-        workspacePath: String,
++        exported: OwnedPIFExport,
++        buildRoot: String,
+         connection: JSONRPCConnection
+     ) async throws {
+         guard let realSession = session as? RealBuildServiceSession else {
+@@ -170,28 +237,10 @@
+         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+             // Guard against double-resume: exitHandler and closeHandler can both fire
+             let resumed = OSAllocatedUnfairLock(initialState: false)
+-            let reloadTasks = OSAllocatedUnfairLock(initialState: [Task<Void, Never>]())
+-            // Retained across finish / onChange; set after coordinator is created.
+-            let watcherBox = OSAllocatedUnfairLock<WorkspaceWatcher?>(initialState: nil)
+-            let coordinatorBox = OSAllocatedUnfairLock<WorkspaceReloadCoordinator?>(initialState: nil)
+-
+             @Sendable func finish(
+                 _ result: Result<Void, any Error>,
+                 closeConnection: Bool
+             ) {
+-                let tasks = reloadTasks.withLock { tasks -> [Task<Void, Never>] in
+-                    let copy = tasks
+-                    tasks.removeAll()
+-                    return copy
+-                }
+-                for task in tasks {
+-                    task.cancel()
+-                }
+-                if let coordinator = coordinatorBox.withLock({ $0 }) {
+-                    Task { await coordinator.cancel() }
+-                }
+-                watcherBox.withLock { $0 }?.stop()
+-
+                 let alreadyResumed = resumed.withLock { val -> Bool in
+                     if val { return true }
+                     val = true
+@@ -226,59 +275,13 @@
+                 }
+             )
+ 
+-            // Coalesce FSEvents bursts and serialize loadWorkspace + regenerate so
+-            // overlapping client/server notifications cannot interleave reloads.
+-            let reloadCoordinator = WorkspaceReloadCoordinator { [server] in
+-                guard !Task.isCancelled else { return }
+-                logger.info("Project changed, reloading workspace...")
+-                connection.send(OnBuildLogMessageNotification(
+-                    type: .log,
+-                    message: "Reloading workspace...",
+-                    structure: .begin(.init(title: "Reloading workspace"))
+-                ))
+-                // Reload workspace on session then notify server to regenerate
+-                // build description (.session pifSource uses sessionPIFURI).
+-                // handle() only schedules regenerate on SWB's serial queue and
+-                // returns; we cannot await that work from here, so a trailing
+-                // loadWorkspace may still overlap an in-flight regenerate.
+-                do {
+-                    try await realSession.session.loadWorkspace(containerPath: workspacePath)
+-                    guard !Task.isCancelled else { return }
+-                    let notification = OnWatchedFilesDidChangeNotification(
+-                        changes: [FileEvent(uri: SWBBuildServer.sessionPIFURI, type: .changed)]
+-                    )
+-                    await server.handle(notification: notification)
+-                    connection.send(OnBuildLogMessageNotification(
+-                        type: .log,
+-                        message: "Workspace load finished; build description regeneration scheduled",
+-                        structure: .end(.init())
+-                    ))
+-                } catch is CancellationError {
+-                    return
+-                } catch {
+-                    logger.error("Workspace reload failed: \(error)")
+-                    connection.send(OnBuildLogMessageNotification(
+-                        type: .error,
+-                        message: "Workspace reload failed: \(error)",
+-                        structure: .end(.init())
+-                    ))
+-                }
+-            }
+-            coordinatorBox.withLock { $0 = reloadCoordinator }
+-
+-            let watcher = WorkspaceWatcher(
+-                workspacePath: workspacePath,
+-                onChange: {
+-                    let task = Task {
+-                        await reloadCoordinator.requestReload()
+-                    }
+-                    reloadTasks.withLock { $0.append(task) }
+-                }
+-            )
+-            watcherBox.withLock { $0 = watcher }
+-            watcher?.start()
+-
+-            connection.start(receiveHandler: server) {
++            // One immutable job: common coordinator owns saved-file watching.
++            // Never reload a different PIF behind an acknowledged selection.
++            let preparation = TypedIndexPreparation(session: realSession.session, request: buildRequest,
++                proofPath: URL(fileURLWithPath: buildRoot).appendingPathComponent("know-code-last-preparation.json"),
++                pifSha256: exported.sha256)
++            let handler = KnowCodeBuildServer(server: server, preparation: preparation)
++            connection.start(receiveHandler: handler) {
+                 finish(.success(()), closeConnection: false)
+             }
+         }
+diff --git a/Sources/SourceKitXcodeBSP/Bootstrap/KnowCodeBuildServer.swift b/Sources/SourceKitXcodeBSP/Bootstrap/KnowCodeBuildServer.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/SourceKitXcodeBSP/Bootstrap/KnowCodeBuildServer.swift
+@@ -0,0 +1,136 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
++import Foundation
++import BuildServerProtocol
++import LanguageServerProtocol
++import LanguageServerProtocolTransport
++import SwiftBuild
++
++/// Preserve the public planner/navigation implementation. Only preparation is
++/// intercepted because its upstream RPC discards the typed service outcome.
++final class KnowCodeBuildServer: MessageHandler {
++    let server: SWBBuildServer
++    let preparation: TypedIndexPreparation
++
++    init(server: SWBBuildServer, preparation: TypedIndexPreparation) {
++        self.server = server; self.preparation = preparation
++    }
++    func handle(_ notification: some NotificationType) { server.handle(notification) }
++    func handle<Request: RequestType>(_ request: Request, id: RequestID,
++        reply: @Sendable @escaping (LSPResult<Request.Response>) -> Void) {
++        if let prepare = request as? BuildTargetPrepareRequest {
++            Task {
++                do {
++                    try await preparation.prepare(targets: prepare.targets)
++                    guard let response = BuildTargetPrepareResponse() as? Request.Response else {
++                        throw PreparationFailure("Incompatible typed preparation response")
++                    }
++                    reply(.success(response))
++                } catch { reply(.failure(.unknown(error.localizedDescription))) }
++            }
++        } else {
++            server.handle(request, id: id) { result in
++                if case .success(let response) = result, let inventory = response as? WorkspaceBuildTargetsResponse {
++                    Task { await self.preparation.setTargets(inventory.targets.map(\.id)); reply(result) }
++                } else { reply(result) }
++            }
++        }
++    }
++}
++
++actor TypedIndexPreparation {
++    private let session: SWBBuildServiceSession
++    private let request: SWBBuildRequest
++    private let proofPath: URL
++    private let pifSha256: String
++    private var targets: Set<BuildTargetIdentifier>?
++    private var attempted = false
++
++    init(session: SWBBuildServiceSession, request: SWBBuildRequest, proofPath: URL, pifSha256: String) {
++        self.session = session; self.request = request; self.proofPath = proofPath; self.pifSha256 = pifSha256
++    }
++    func setTargets(_ targets: [BuildTargetIdentifier]) { self.targets = Set(targets) }
++
++    func prepare(targets requested: [BuildTargetIdentifier]) async throws {
++        // The adapter prepares the entire selected context once. Validate the
++        // exact planner-returned opaque IDs, without parsing their URI shape.
++        guard let targets, !targets.isEmpty, Set(requested) == targets else {
++            throw PreparationFailure("Prepare requires the entire selected scheme target inventory")
++        }
++        guard !attempted else { throw PreparationFailure("Preparation already attempted; start a fresh immutable analysis job") }
++        attempted = true
++        var prepared = request
++        prepared.buildCommand = .prepareForIndexing(buildOnlyTheseTargets: request.configuredTargets.map(\.guid), enableIndexBuildArena: true)
++        let operation = try await session.createBuildOperation(request: prepared, delegate: IndexPlanningDelegate())
++        struct EventEvidence: Sendable {
++            let terminals: [String]
++            let completed: Int
++            let diagnostics: [String]
++            let droppedDiagnostics: Int
++        }
++        let events = try await operation.start()
++        // Mutable collection belongs entirely to this operation closure. Only
++        // its immutable Sendable value crosses back into proof construction.
++        let evidence = await withTaskCancellationHandler {
++            var terminals = [String](), completed = 0, diagnostics = [String](), droppedDiagnostics = 0
++            for await event in events {
++                var message: String?
++                switch event {
++                case .buildCompleted(let info): terminals.append(info.result.rawValue)
++                case .preparationComplete: completed += 1
++                case .buildDiagnostic(let info): message = info.message
++                case .taskDiagnostic(let info): message = info.message
++                case .targetDiagnostic(let info): message = info.message
++                case .diagnostic(let info): message = info.message
++                default: break // Compiler/project log strings cannot assert success.
++                }
++                if let message {
++                    if diagnostics.count < 100 { diagnostics.append(String(message.prefix(1024))) }
++                    else { droppedDiagnostics += 1 }
++                }
++            }
++            await operation.waitForCompletion()
++            return EventEvidence(terminals: terminals, completed: completed,
++                diagnostics: diagnostics, droppedDiagnostics: droppedDiagnostics)
++        } onCancel: { operation.cancel() }
++        let state: String
++        switch operation.state {
++        case .requested: state = "requested"
++        case .running: state = "running"
++        case .succeeded: state = "succeeded"
++        case .failed: state = "failed"
++        case .cancelled: state = "cancelled"
++        case .aborted: state = "aborted"
++        @unknown default: state = "unknown"
++        }
++        let succeeded = evidence.terminals == ["ok"] && evidence.completed > 0 && state == "succeeded"
++        struct Proof: Encodable {
++            let typedTerminalResults: [String]
++            let typedPreparationCompleteCount: Int
++            let operationState: String
++            let succeeded: Bool
++            let pifSha256: String
++            let configuredRootGUIDs: [String]
++            let configurationName: String?
++            let requestedTargetURIs: [String]
++            let diagnostics: [String]
++            let droppedDiagnostics: Int
++        }
++        let proof = Proof(typedTerminalResults: evidence.terminals, typedPreparationCompleteCount: evidence.completed,
++            operationState: state, succeeded: succeeded, pifSha256: pifSha256,
++            configuredRootGUIDs: request.configuredTargets.map(\.guid), configurationName: request.parameters.configurationName,
++            requestedTargetURIs: requested.map { $0.uri.stringValue }, diagnostics: evidence.diagnostics, droppedDiagnostics: evidence.droppedDiagnostics)
++        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
++        try encoder.encode(proof).write(to: proofPath, options: .atomic)
++        guard succeeded else { throw PreparationFailure("Typed indexing preparation did not succeed: terminal=\(evidence.terminals), state=\(state), preparationComplete=\(evidence.completed)") }
++    }
++}
++
++private struct PreparationFailure: Error, LocalizedError {
++    let errorDescription: String?
++    init(_ message: String) { errorDescription = message }
++}
++
++private final class IndexPlanningDelegate: SWBPlanningOperationDelegate, Sendable {
++    func provisioningTaskInputs(targetGUID: String, provisioningSourceData: SWBProvisioningTaskInputsSourceData) async -> SWBProvisioningTaskInputs { .init() }
++    func executeExternalTool(commandLine: [String], workingDirectory: String?, environment: [String: String]) async throws -> SWBExternalToolResult { .deferred }
++}
+diff --git a/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift b/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift
+--- a/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift
++++ b/Sources/SourceKitXcodeBSP/Config/ConfigLoader.swift
+@@ -1,3 +1,4 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
+ import Foundation
+ 
+ /// Configuration loaded from buildServer.json.
+@@ -15,6 +16,13 @@
+     /// If not specified, SwiftBuild uses priority order (macOS > iPhone Simulator > etc.).
+     public let platform: String?
+ 
++    /// Know Code's selected saved shared scheme; nil selects the sole shared scheme.
++    public let schemePath: String?
++
++    /// Existing centrally owned outputs from common dependency preparation.
++    public let clonedSourcePackagesDirPath: String?
++    public let packageCachePath: String?
++
+     /// Whether to synchronously serialize generated build descriptions before notifying clients.
+     /// When omitted, the server defaults to true.
+     public let synchronousBuildDescriptionSerialization: Bool?
+@@ -28,12 +36,18 @@
+         workspace: String,
+         buildRoot: String? = nil,
+         platform: String? = nil,
++        schemePath: String? = nil,
++        clonedSourcePackagesDirPath: String? = nil,
++        packageCachePath: String? = nil,
+         synchronousBuildDescriptionSerialization: Bool? = nil,
+         serviceBundlePath: String? = nil
+     ) {
+         self.workspace = workspace
+         self.buildRoot = buildRoot
+         self.platform = platform
++        self.schemePath = schemePath
++        self.clonedSourcePackagesDirPath = clonedSourcePackagesDirPath
++        self.packageCachePath = packageCachePath
+         self.synchronousBuildDescriptionSerialization = synchronousBuildDescriptionSerialization
+         self.serviceBundlePath = serviceBundlePath
+     }
+diff --git a/Sources/SourceKitXcodeBSP/Xcode/PIFExport.swift b/Sources/SourceKitXcodeBSP/Xcode/PIFExport.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/SourceKitXcodeBSP/Xcode/PIFExport.swift
+@@ -0,0 +1,88 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
++import Foundation
++import CryptoKit
++
++struct OwnedPIFExport: Sendable {
++    let path: String
++    let sha256: String
++    let selection: XcodeSchemeSelection
++
++    static func create(workspacePath: String, schemePath: String?, buildRoot: String,
++        clonedSourcePackagesDirPath: String?, packageCachePath: String?) async throws -> Self {
++        let clones = try preparedDirectory(clonedSourcePackagesDirPath, field: "clonedSourcePackagesDirPath")
++        let cache = try preparedDirectory(packageCachePath, field: "packageCachePath")
++        let context = try XcodeSchemeSelection.metadataContext(workspacePath: workspacePath, selectedPath: schemePath)
++        let root = URL(fileURLWithPath: buildRoot).standardizedFileURL.resolvingSymlinksInPath()
++        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
++        let metadataDerivedData = root.appendingPathComponent("metadata-derived").path
++        let output = root.appendingPathComponent("know-code-project.pif.json")
++        if FileManager.default.fileExists(atPath: output.path) { try FileManager.default.removeItem(at: output) }
++        let kind = URL(fileURLWithPath: workspacePath).pathExtension
++        guard ["xcodeproj", "xcworkspace"].contains(kind) else {
++            throw NSError(domain: "KnowCodeXcodeSelection", code: 1, userInfo: [NSLocalizedDescriptionKey: "Expected an Xcode project or workspace container"])
++        }
++        let arguments = ["xcodebuild", "-dumpPIF", output.path, kind == "xcodeproj" ? "-project" : "-workspace", workspacePath,
++            "-scheme", context.schemeName, "-configuration", context.configuration, "-derivedDataPath", metadataDerivedData,
++            "-clonedSourcePackagesDirPath", clones, "-packageCachePath", cache,
++            "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile", "-skipPackageUpdates"]
++        // Retain the exact attempted metadata command even when the selected
++        // tool rejects an absent/incomplete prepared cache. This is not a
++        // preparation or successful-export checkpoint.
++        let attempt = ["arguments": arguments, "clonedSourcePackagesDirPath": clones,
++            "packageCachePath": cache, "packageVersionPolicy": "saved_lock_versions_no_updates",
++            "metadataDerivedDataPath": metadataDerivedData, "metadataSchemePath": context.schemePath,
++            "metadataSchemeName": context.schemeName, "metadataConfiguration": context.configuration,
++            "metadataSchemeSha256": context.schemeSha256,
++            "cliFlagsGuaranteeOfflineExecution": false] as [String: Any]
++        try JSONSerialization.data(withJSONObject: attempt, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
++            .write(to: root.appendingPathComponent("know-code-project-export-request.json"), options: .atomic)
++        let capture = try await ProcessRunner().run(executableURL: URL(fileURLWithPath: "/usr/bin/xcrun"), arguments: arguments, monitoredFile: output)
++        let bytes = try boundedXcodeData(output.path, maximumBytes: 64 * 1024 * 1024)
++        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
++        let selected = try XcodeSchemeSelection.resolve(workspacePath: workspacePath, selectedPath: schemePath, pif: bytes)
++        guard selected.schemePath == context.schemePath, selected.configuration == context.configuration,
++              selected.inputSha256[context.schemePath] == context.schemeSha256 else {
++            throw NSError(domain: "KnowCodeXcodeSelection", code: 2,
++                userInfo: [NSLocalizedDescriptionKey: "Saved scheme changed during metadata export; refresh from a coherent saved snapshot"])
++        }
++        struct Proof: Encodable {
++            let arguments: [String]
++            let pifPath: String
++            let pifSha256: String
++            let pifBytes: Int
++            let selection: XcodeSchemeSelection
++            let metadataStdout: String
++            let metadataStderr: String
++            let filesystemReloadDisabled: Bool
++            let clonedSourcePackagesDirPath: String
++            let packageCachePath: String
++            let packageVersionPolicy: String
++            let cliFlagsGuaranteeOfflineExecution: Bool
++            let metadataDerivedDataPath: String
++            let metadataContext: XcodeSchemeSelection.MetadataContext
++        }
++        let proof = Proof(arguments: arguments, pifPath: output.path, pifSha256: digest, pifBytes: bytes.count,
++            selection: selected, metadataStdout: String(decoding: capture.stdout, as: UTF8.self),
++            metadataStderr: String(decoding: capture.stderr, as: UTF8.self), filesystemReloadDisabled: true,
++            clonedSourcePackagesDirPath: clones, packageCachePath: cache,
++            packageVersionPolicy: "saved_lock_versions_no_updates", cliFlagsGuaranteeOfflineExecution: false,
++            metadataDerivedDataPath: metadataDerivedData, metadataContext: context)
++        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
++        try encoder.encode(proof).write(to: root.appendingPathComponent("know-code-selected-scheme.json"), options: .atomic)
++        return Self(path: output.path, sha256: digest, selection: selected)
++    }
++    private static func preparedDirectory(_ value: String?, field: String) throws -> String {
++        guard let value, value.hasPrefix("/"), !value.contains("\0"),
++              URL(fileURLWithPath: value).standardizedFileURL.path == value else {
++            throw NSError(domain: "KnowCodeXcodePreparation", code: 1,
++                userInfo: [NSLocalizedDescriptionKey: "Xcode analysis requires a job-owned absolute normalized \(field); update the coordinator/bridge configuration"])
++        }
++        var directory: ObjCBool = false
++        guard FileManager.default.fileExists(atPath: value, isDirectory: &directory), directory.boolValue,
++              FileManager.default.isReadableFile(atPath: value) else {
++            throw NSError(domain: "KnowCodeXcodePreparation", code: 2,
++                userInfo: [NSLocalizedDescriptionKey: "Prepared Xcode dependency cache is missing or unreadable: \(field)=\(value). Run common dependency preparation, then refresh; analysis does not create this cache directory."])
++        }
++        return URL(fileURLWithPath: value).resolvingSymlinksInPath().path
++    }
++}
+diff --git a/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift b/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift
+--- a/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift
++++ b/Sources/SourceKitXcodeBSP/Xcode/ProcessRunner.swift
+@@ -1,72 +1,117 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
+ import Foundation
+-import SWBUtil
++import Darwin
+ 
+-/// Runs subprocesses and captures their output. Not tied to any particular caller —
+-/// domain-specific failures should be translated at the call site.
++/// One bounded subprocess capture path, including EOF after leader exit.
+ public actor ProcessRunner {
+     public struct Output: Sendable {
+         public let stdout: Data
+         public let stderr: Data
+     }
+ 
+-    public enum RunError: Error, Sendable {
+-        /// The process could not be launched (bad executable path, permissions, etc.),
+-        /// or the surrounding task was cancelled before/while it ran.
++    public enum RunError: Error, Sendable, LocalizedError {
+         case launchFailed(underlying: any Error)
+-        /// The process launched and ran to completion but exited with a non-zero status.
+         case nonZeroExit(terminationStatus: Int32, output: Output)
++        case resourceLimited(String)
++        case captureFailed(String)
++
++        public var errorDescription: String? {
++            switch self {
++            case .launchFailed(let error): "Metadata process could not start: \(error.localizedDescription)"
++            case .nonZeroExit(let status, let output): "Metadata process exited \(status): \(String(decoding: output.stderr.suffix(16384), as: UTF8.self))"
++            case .resourceLimited(let reason), .captureFailed(let reason): reason
++            }
++        }
+     }
+ 
+     public init() {}
+ 
+-    public func run(executableURL: URL, arguments: [String]) async throws -> Output {
++    public func run(executableURL: URL, arguments: [String], monitoredFile: URL? = nil,
++        timeout: Duration = .seconds(120)) async throws -> Output {
+         let process = Process()
+         process.executableURL = executableURL
+         process.arguments = arguments
+-
+-        let stdoutPipe = Pipe()
++        process.standardInput = FileHandle.nullDevice
++        let stdoutPipe = Pipe(), stderrPipe = Pipe()
+         process.standardOutput = stdoutPipe
+-        let stderrPipe = Pipe()
+         process.standardError = stderrPipe
+-
+-        // Drain both pipes concurrently with the process running, rather than after
+-        // it exits, so output larger than the pipe buffer can't deadlock the process
+-        // (it would block writing to a full pipe that nothing is reading yet).
+-        let stdoutTask = Task {
+-            var stdoutBuffer: [UInt8] = []
+-            do {
+-                for try await byte in stdoutPipe.fileHandleForReading.bytes {
+-                    stdoutBuffer.append(byte)
++        defer {
++            try? stdoutPipe.fileHandleForReading.close()
++            try? stdoutPipe.fileHandleForWriting.close()
++            try? stderrPipe.fileHandleForReading.close()
++            try? stderrPipe.fileHandleForWriting.close()
++        }
++        // Nonblocking reads have no detached reader lifetime to strand when a
++        // descendant inherits the writer after the tracked leader has exited.
++        for handle in [stdoutPipe.fileHandleForReading, stderrPipe.fileHandleForReading] {
++            let flags = fcntl(handle.fileDescriptor, F_GETFL)
++            guard flags >= 0, fcntl(handle.fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
++                throw RunError.captureFailed("Cannot make metadata capture nonblocking")
++            }
++        }
++        let deadline = ContinuousClock.now.advanced(by: timeout)
++        // Other files import SWBUtil's async run(interruptible: = true).
++        // Pin Foundation's synchronous launch; awaiting the other overload
++        // before draining would deadlock a child that fills these pipes.
++        let launch: () throws -> Void = process.run
++        do { try launch() }
++        catch { throw RunError.launchFailed(underlying: error) }
++        // Only child/descendant copies remain as writers. Closing our copies is
++        // necessary to distinguish real EOF from a writer we retained ourselves.
++        try? stdoutPipe.fileHandleForWriting.close()
++        try? stderrPipe.fileHandleForWriting.close()
++        var stdout = Data(), stderr = Data(), stdoutEOF = false, stderrEOF = false
++        func drain(_ handle: FileHandle, into bytes: inout Data, eof: inout Bool) throws {
++            guard !eof else { return }
++            var chunk = [UInt8](repeating: 0, count: 64 * 1024)
++            let count = chunk.withUnsafeMutableBytes { Darwin.read(handle.fileDescriptor, $0.baseAddress, $0.count) }
++            if count > 0 {
++                guard bytes.count + count <= 4 * 1024 * 1024 else {
++                    throw RunError.resourceLimited("Metadata capture exceeded 4 MiB per stream")
+                 }
+-            } catch {}
+-            return Data(stdoutBuffer)
++                bytes.append(contentsOf: chunk.prefix(count))
++            } else if count == 0 { eof = true }
++            else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
++                throw RunError.captureFailed("Metadata pipe read failed: \(String(cString: strerror(errno)))")
++            }
+         }
+-        let stderrTask = Task {
+-            var stderrBuffer: [UInt8] = []
+-            do {
+-                for try await byte in stderrPipe.fileHandleForReading.bytes {
+-                    stderrBuffer.append(byte)
++        do {
++            while true {
++                try Task.checkCancellation()
++                guard ContinuousClock.now < deadline else {
++                    throw RunError.resourceLimited("Metadata deadline expired before leader exit and complete stdout/stderr EOF")
+                 }
+-            } catch {}
+-            return Data(stderrBuffer)
++                let size = monitoredFile.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.size] as? NSNumber }?.uint64Value ?? 0
++                guard size <= 64 * 1024 * 1024 else {
++                    throw RunError.resourceLimited("Metadata PIF exceeded sampled 64 MiB allowance")
++                }
++                try drain(stdoutPipe.fileHandleForReading, into: &stdout, eof: &stdoutEOF)
++                try drain(stderrPipe.fileHandleForReading, into: &stderr, eof: &stderrEOF)
++                if !process.isRunning && stdoutEOF && stderrEOF { break }
++                try await Task.sleep(for: .milliseconds(20))
++            }
++        } catch {
++            // Signal only the owned Foundation Process while it is running.
++            // Do not signal a numeric PID or guessed descendant/process group.
++            if process.isRunning { process.terminate() }
++            let grace = ContinuousClock.now.advanced(by: .seconds(2))
++            while process.isRunning && ContinuousClock.now < grace && !Task.isCancelled {
++                do { try await Task.sleep(for: .milliseconds(20)) } catch { break }
++            }
++            let note = "; ownedLeaderExited=\(!process.isRunning); descendant cleanup requires the owning job scope"
++            if let failure = error as? RunError {
++                switch failure {
++                case .resourceLimited(let message): throw RunError.resourceLimited(message + note)
++                case .captureFailed(let message): throw RunError.captureFailed(message + note)
++                default: break
++                }
++            }
++            throw error
+         }
+-
+-        do {
+-            // SWBUtil's run(interruptible:) suspends until the process actually
+-            // exits (via terminationHandler) and propagates task cancellation as
+-            // SIGTERM. Foundation's own Process.run() only launches the process
+-            // and returns immediately.
+-            try await process.run(interruptible: true)
+-        } catch {
+-            throw RunError.launchFailed(underlying: error)
+-        }
+-
+-        let output = await Output(stdout: stdoutTask.value, stderr: stderrTask.value)
+-
++        let output = Output(stdout: stdout, stderr: stderr)
+         guard process.terminationStatus == 0 else {
+             throw RunError.nonZeroExit(terminationStatus: process.terminationStatus, output: output)
+         }
+-
+         return output
+     }
+ }
+diff --git a/Sources/SourceKitXcodeBSP/Xcode/SchemeSelection.swift b/Sources/SourceKitXcodeBSP/Xcode/SchemeSelection.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/SourceKitXcodeBSP/Xcode/SchemeSelection.swift
+@@ -0,0 +1,210 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
++import Foundation
++import CryptoKit
++
++/// Resolve build selection from the saved scheme, native project and the exact
++/// compiler-exported PIF that will be loaded by the service. This never derives
++/// a planner GUID from a native identifier or uses a name outside its project.
++struct XcodeSchemeSelection: Sendable, Codable {
++    struct Target: Sendable, Codable {
++        let projectPath: String
++        let nativeIdentifier: String
++        let nativeName: String
++        let plannerIdentifier: String
++    }
++    let schemePath: String
++    let configuration: String
++    let targets: [Target]
++    let inputPaths: [String]
++    let inputSha256: [String: String]
++
++    static func resolve(workspacePath: String, selectedPath: String?, pif: Data) throws -> Self {
++        guard let objects = try JSONSerialization.jsonObject(with: pif) as? [[String: Any]],
++              objects.first?["type"] as? String == "workspace" else {
++            throw SelectionError("Unsupported compiler PIF export; expected workspace-first object array")
++        }
++        var bySignature = [String: [String: Any]]()
++        for object in objects {
++            guard let kind = object["type"] as? String, let signature = object["signature"] as? String,
++                  let contents = object["contents"] as? [String: Any],
++                  bySignature["\(kind):\(signature)"] == nil else {
++                throw SelectionError("Invalid, duplicate or unsupported compiler PIF object")
++            }
++            bySignature["\(kind):\(signature)"] = contents
++        }
++        let projects = objects.filter { $0["type"] as? String == "project" }.compactMap { $0["contents"] as? [String: Any] }
++        var containers = Set([canonical(workspacePath)])
++        for project in projects {
++            guard let filename = project["path"] as? String else { throw SelectionError("Compiler PIF project lacks a path") }
++            containers.insert(canonical(filename))
++        }
++        let shared = try sharedPaths(containers: containers)
++        let path: String
++        if let selectedPath {
++            path = canonical(selectedPath)
++            guard shared.contains(path) else { throw SelectionError("Selected scheme is not a shared scheme in this workspace: \(selectedPath)") }
++        } else {
++            guard shared.count == 1, let only = shared.first else {
++                throw SelectionError("Select one shared scheme with swift.scheme; found \(shared.count): \(shared.sorted().joined(separator: ", "))")
++            }
++            path = only
++        }
++        let (data, delegate, configuration) = try readSavedScheme(path)
++        let container = URL(fileURLWithPath: path).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
++        var resolved = [Target](), inputs = [path: data], seen = Set<String>()
++        for reference in delegate.references {
++            guard reference.container.hasPrefix("container:") else { throw SelectionError("Unsupported scheme referenced container: \(reference.container)") }
++            let relative = String(reference.container.dropFirst("container:".count))
++            let nativeProject = canonical(container.deletingLastPathComponent().appendingPathComponent(relative).path)
++            let matches = projects.filter { ($0["path"] as? String).map(canonical) == nativeProject }
++            guard matches.count == 1, let project = matches.first,
++                  let signatures = project["targets"] as? [String] else {
++                throw SelectionError("Referenced native project has no unique compiler PIF project: \(nativeProject)")
++            }
++            let filename = URL(fileURLWithPath: nativeProject).appendingPathComponent("project.pbxproj").path
++            if inputs[filename] == nil { inputs[filename] = try boundedXcodeData(filename) }
++            guard let bytes = inputs[filename],
++                  let pbx = try PropertyListSerialization.propertyList(from: bytes, options: [], format: nil) as? [String: Any],
++                  let nativeObjects = pbx["objects"] as? [String: [String: Any]],
++                  let root = pbx["rootObject"] as? String,
++                  let ids = nativeObjects[root]?["targets"] as? [String], ids.contains(reference.identifier),
++                  let native = nativeObjects[reference.identifier], let name = native["name"] as? String,
++                  ["PBXNativeTarget", "PBXAggregateTarget"].contains(native["isa"] as? String ?? ""),
++                  ids.filter({ nativeObjects[$0]?["name"] as? String == name }).count == 1 else {
++                throw SelectionError("Scheme target lacks an unambiguous native project identity: \(reference.identifier)")
++            }
++            let candidates = try signatures.map { signature -> [String: Any] in
++                guard let target = bySignature["target:\(signature)"] else { throw SelectionError("Compiler PIF project references a missing target") }
++                return target
++            }.filter { $0["name"] as? String == name }
++            guard candidates.count == 1, let target = candidates.first, let guid = target["guid"] as? String,
++                  let configs = target["buildConfigurations"] as? [[String: Any]],
++                  configs.filter({ $0["name"] as? String == configuration }).count == 1 else {
++                throw SelectionError("Native target \(name) has no unique compiler target/configuration \(configuration) in \(nativeProject)")
++            }
++            if seen.insert(guid).inserted {
++                resolved.append(Target(projectPath: nativeProject, nativeIdentifier: reference.identifier, nativeName: name, plannerIdentifier: guid))
++            }
++        }
++        return Self(schemePath: path, configuration: configuration, targets: resolved, inputPaths: inputs.keys.sorted(),
++            inputSha256: inputs.mapValues { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() })
++    }
++
++    /// CLI preparation/export uses the same saved Test policy as native/PIF
++    /// selection. This is build selection, never semantic symbol identity.
++    struct MetadataContext: Sendable, Codable {
++        let schemePath: String
++        let schemeName: String
++        let configuration: String
++        let schemeSha256: String
++    }
++
++    static func metadataContext(workspacePath: String, selectedPath: String?) throws -> MetadataContext {
++        let path: String
++        if let selectedPath {
++            path = canonical(selectedPath)
++        } else {
++            let shared = try sharedPaths(containers: Set([canonical(workspacePath)]))
++            guard shared.count == 1, let only = shared.first else {
++                throw SelectionError("Metadata requires one saved shared scheme; select swift.scheme when the container has \(shared.count) direct shared schemes (including nested-project-only schemes)")
++            }
++            path = only
++        }
++        let url = URL(fileURLWithPath: path)
++        guard url.pathExtension == "xcscheme",
++              url.deletingLastPathComponent().lastPathComponent == "xcschemes",
++              url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "xcshareddata" else {
++            throw SelectionError("Metadata requires a saved shared .xcscheme path")
++        }
++        let (bytes, _, configuration) = try readSavedScheme(path)
++        let name = url.deletingPathExtension().lastPathComponent
++        guard !name.isEmpty else { throw SelectionError("Selected shared scheme has an empty CLI name") }
++        // Exact membership, native identities and configuration support are
++        // checked against compiler PIF after export, before loading the service.
++        return MetadataContext(schemePath: path, schemeName: name, configuration: configuration,
++            schemeSha256: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined())
++    }
++
++    private static func sharedPaths(containers: Set<String>) throws -> Set<String> {
++        var shared = Set<String>()
++        for container in containers where ["xcodeproj", "xcworkspace"].contains(URL(fileURLWithPath: container).pathExtension) {
++            let directory = URL(fileURLWithPath: container).appendingPathComponent("xcshareddata/xcschemes")
++            if FileManager.default.fileExists(atPath: directory.path) {
++                for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
++                    where file.pathExtension == "xcscheme" { shared.insert(canonical(file.path)) }
++            }
++        }
++        return shared
++    }
++
++    private static func readSavedScheme(_ path: String) throws -> (Data, SchemeXML, String) {
++        let data = try boundedXcodeData(path)
++        guard let xml = String(data: data, encoding: .utf8),
++              !xml.contains("<!DOCTYPE"), !xml.contains("<!ENTITY") else {
++            throw SelectionError("Unsupported or oversized saved Xcode scheme")
++        }
++        let delegate = SchemeXML()
++        let parser = XMLParser(data: data)
++        parser.shouldResolveExternalEntities = false
++        parser.delegate = delegate
++        guard parser.parse(), delegate.testActions == 1, !delegate.invalidReference,
++              let configuration = delegate.configuration, !configuration.isEmpty else {
++            throw SelectionError("Selected shared scheme requires a valid Test action with an explicit buildConfiguration")
++        }
++        guard !delegate.hasTestPlans else { throw SelectionError("Selected scheme uses test plans; test-plan target selection is not implemented") }
++        guard !delegate.references.isEmpty else { throw SelectionError("Selected scheme has no test-build or Test action targets") }
++        return (data, delegate, configuration)
++    }
++
++    private static func canonical(_ path: String) -> String {
++        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
++    }
++
++}
++
++func boundedXcodeData(_ path: String, maximumBytes: Int = 8 * 1024 * 1024) throws -> Data {
++        let file = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
++        defer { try? file.close() }
++        var data = Data()
++        while let part = try file.read(upToCount: 64 * 1024), !part.isEmpty {
++            guard data.count + part.count <= maximumBytes else { throw SelectionError("Saved Xcode input exceeds research limit: \(path)") }
++            data.append(part)
++        }
++        return data
++}
++
++private struct SelectionError: Error, LocalizedError {
++    let errorDescription: String?
++    init(_ message: String) { errorDescription = message }
++}
++
++private final class SchemeXML: NSObject, XMLParserDelegate {
++    struct Reference { let identifier: String; let container: String }
++    var configuration: String?
++    var testActions = 0
++    var invalidReference = false
++    var hasTestPlans = false
++    var references = [Reference]()
++    private var stack = [String]()
++    private var includeBuildEntry = false
++    private var includeTestable = false
++
++    func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attrs: [String: String]) {
++        stack.append(elementName)
++        if stack == ["Scheme", "TestAction"] { testActions += 1; configuration = attrs["buildConfiguration"] }
++        if stack == ["Scheme", "TestAction", "TestPlans"] { hasTestPlans = true }
++        if stack == ["Scheme", "BuildAction", "BuildActionEntries", "BuildActionEntry"] { includeBuildEntry = attrs["buildForTesting"] == "YES" }
++        if stack == ["Scheme", "TestAction", "Testables", "TestableReference"] { includeTestable = attrs["skipped"] != "YES" }
++        let build = stack == ["Scheme", "BuildAction", "BuildActionEntries", "BuildActionEntry", "BuildableReference"] && includeBuildEntry
++        let test = stack == ["Scheme", "TestAction", "Testables", "TestableReference", "BuildableReference"] && includeTestable
++        if build || test {
++            if let identifier = attrs["BlueprintIdentifier"], !identifier.isEmpty,
++               let container = attrs["ReferencedContainer"], !container.isEmpty {
++                references.append(Reference(identifier: identifier, container: container))
++            } else { invalidReference = true }
++        }
++    }
++    func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
++        stack.removeLast()
++    }
++}
+diff --git a/Sources/sourcekit-xcode-bsp/SourcekitXcodeBspCommand.swift b/Sources/sourcekit-xcode-bsp/SourcekitXcodeBspCommand.swift
+--- a/Sources/sourcekit-xcode-bsp/SourcekitXcodeBspCommand.swift
++++ b/Sources/sourcekit-xcode-bsp/SourcekitXcodeBspCommand.swift
+@@ -1,3 +1,4 @@
++// Modified by Know Code contributors in 2026; see tooling/xcode-bridge/MODIFICATIONS.md in the Know Code source.
+ import ArgumentParser
+ import BuildServerProtocol
+ import Darwin
+@@ -10,7 +11,7 @@
+ struct SourcekitXcodeBspCommand: AsyncParsableCommand {
+     static let configuration = CommandConfiguration(
+         abstract: "A Build Server Protocol server for Xcode projects, for usage with SourceKit-LSP.",
+-        version: "0.1.0",
++        version: "0.1.0-know-code-index-only.6",
+         subcommands: [Serve.self, InitCommand.self],
+         // The LSP client launches the bare binary (no subcommand) per buildServer.json's
+         // `argv`, so running the server must remain the default behavior.
