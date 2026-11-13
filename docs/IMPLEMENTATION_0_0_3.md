@@ -745,3 +745,50 @@ the existing nonblocking Node `Workspace.refresh()` to submit the explicit
 retry, then polls bounded status. The CLI's own two-minute initial wait is
 unchanged; no product timeout was increased to repair the harness. Attempt 08
 is running at this checkpoint. Neither failed attempt is relabeled as passing.
+
+## Corpus reconciliation and packaging preparation
+
+Attempt 08 remains failed at its 1,800-second first-current guard (1,804.26
+seconds including cleanup). It published generation 16 for captured epoch 5,
+then reconciled observed epoch 12 after setup/compiler-input discovery. The
+observed epoch stayed stable during the second pass, but that pass had not
+finished before the guard. This is no current-data, latency or encoding pass;
+neither a compiler crash nor an endless-loop cause was established. Cleanup
+restored exact owned source and two-core/2-GiB settings.
+
+The warm follow-up 09 failed **before indexing** in 3.51 seconds: initial
+resource reads/set succeeded, then `watch`, cancellation and the resource reset
+returned OS error 35. Shutdown succeeded. The automatic memory reset therefore
+did not complete; owner cleanup verified the coordinator writer lock was free
+and its socket refused connections, then atomically restored the isolated
+setting from 4 GiB to 2 GiB. Exact source bytes/mtime were also verified. The
+original cleanup failures and subsequent `manual-cleanup.json` remain retained.
+This setup error is not the configured memory-cap outcome.
+
+The retained generation-16 preflight contains 105 Swift compilation rows with
+**zero** saved input paths under either spelling of the central Swift cache.
+Four saved lock hashes were recorded before the warm follow-up. A short
+isolated coordinator trace subsequently completed all resource/watch/cancel/
+status calls in 6–18 ms and shut down with 2 GiB restored; it did not reproduce
+the stall. Source review identified an enrollment/retention lock chain worth
+a deterministic regression, not a confirmed attribution for attempt 09.
+Further corpus runs wait for that control-path investigation.
+
+Evidence: `wave-01/atelier-restore-budget-saved-08/`,
+`wave-01/atelier-warm-convergence-saved-09/`, their owned driver directories,
+and `coordinator-admission-trace-01/`. No required corpus gate is waived.
+
+The user selected **packaging gates before Swift batching**, and a **separate
+bridge download and DMG**. Candidate source now has coordinated 0.0.3 versions,
+four required provider entries and omission checks, installed exact TS6.0.2 /
+native TS7.0.2 cells, a representative installed Rust MCP graph, separate
+bridge signing/verification, and an installed mode of the existing Xcode
+fixture. Published support remains 0.0.2. These source changes require fresh
+matching artifacts; no old producer is certified against them.
+
+At `fb0b964`, the four quick source checks and all six archive-boundary tests
+pass (`wave-01/{candidate-source-quick-01,bridge-signing-boundaries-01}/`). The
+new package/compiler/Xcode installation modes have not run. The next bridge
+build must record its builder digest before compilation; the old build-02
+record is deliberately not retrofitted. Signing, notarization, installed,
+upgrade/rollback and final platform evidence remain pending.
