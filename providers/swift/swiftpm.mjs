@@ -151,6 +151,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       }
     }
   });
+  let completed = false;
   try {
     const initialized = await client.request('build/initialize', {displayName: 'Know Code', version: '0.0.2',
       bspVersion: '2.2.0', rootUri: pathToFileURL(directory).href, capabilities: {languageIds: ['swift', 'c', 'cpp', 'objective-c', 'objective-cpp']}});
@@ -259,8 +260,9 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       if (!sources.size) diagnostics.push(diagnostic('swiftpm_no_source_inputs', 'No Swift source could be analyzed for this target.', projectPath));
       send('report', {compilationId: id, status: partial || facts.partial || !sources.size ? 'partial' : 'complete', diagnostics, capabilities: facts.capabilities});
     }
+    completed = true;
   } finally {
-    try { if (!client.failure) { await client.request('build/shutdown', {}); client.notify('build/exit', {}); } }
+    try { if (completed && !client.failure) { await client.request('build/shutdown', {}); client.notify('build/exit', {}); } }
     finally { client.terminate(); }
   }
 }
