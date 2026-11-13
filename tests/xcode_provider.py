@@ -114,7 +114,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {xcodeSelection, findXcodeBridge, readMetadataRejection} from './providers/swift/xcode.mjs';
+import {xcodeSelection, findXcodeBridge, readMetadataRejection, contextProof} from './providers/swift/xcode.mjs';
 import {swiftAnalysisPolicy} from './providers/swift/policy.mjs';
 const [root, first, second, scheme, cache, empty, invalid] = process.argv.slice(1);
 const configuredProjects = [first, second];
@@ -185,7 +185,32 @@ rejects('oversized receipt', () => fs.writeFileSync(receiptFile, ' '.repeat(2 * 
 rejects('missing receipt', () => fs.rmSync(receiptFile));
 rejects('missing attempt', () => fs.rmSync(attemptFile));
 const finalValid = freshProof(); publish(finalValid); assert.equal(read().code, 'xcode_metadata_unavailable');
-console.log(JSON.stringify({validMetadataRejection: true, rejectedMetadataFaults: receiptFaults}));
+// Bridge sidecars canonicalize filesystem paths. A short personal-data alias
+// must resolve to the same job root; a PIF symlink escaping that root must fail.
+const contextRoot = path.join(path.dirname(empty), 'context-proof'), realRoot = path.join(contextRoot, 'real');
+const aliasRoot = path.join(contextRoot, 'alias');
+fs.mkdirSync(realRoot, {recursive: true}); fs.symlinkSync(realRoot, aliasRoot, 'dir');
+const pifPath = path.join(realRoot, 'know-code-project.pif.json');
+fs.writeFileSync(pifPath, JSON.stringify([{type: 'project', contents: {path: workspacePath}}]));
+const parameters = {action: 'indexbuild', configurationName: 'Debug', activeRunDestination: {platform: 'iphoneos', sdk: 'iphoneos', targetArchitecture: 'arm64'},
+  overrides: {commandLine: {table: {INDEX_DISABLE_SCRIPT_EXECUTION: 'YES', INDEX_FORCE_SCRIPT_EXECUTION: 'NO'}}}};
+const selectedContext = {pifPath, pifSha256: digest(pifPath), selection: {schemePath, configuration: 'Debug', inputSha256: {[schemePath]: digest(schemePath)}, targets: [{plannerIdentifier: 'owned-root'}]},
+  metadataContext: {schemePath, configuration: 'Debug'}};
+const closureContext = {pifSha256: selectedContext.pifSha256, loadedPIFPath: pifPath, configuration: 'Debug', selectedRootGUIDs: ['owned-root']};
+const putContext = () => {
+  fs.writeFileSync(path.join(realRoot, 'know-code-selected-scheme.json'), JSON.stringify(selectedContext));
+  fs.writeFileSync(path.join(realRoot, 'know-code-selected-closure.json'), JSON.stringify(closureContext));
+};
+putContext();
+fs.writeFileSync(path.join(realRoot, 'know-code-index-only-request.json'), JSON.stringify({buildCommand: {command: 'prepareForIndexing'}, parameters,
+  configuredTargets: [{guid: 'owned-root', parameters}]}));
+assert.deepEqual(contextProof(realRoot, 'iphoneos', {schemePath}).projects, [workspacePath]);
+assert.deepEqual(contextProof(aliasRoot, 'iphoneos', {schemePath}).projects, [workspacePath]);
+const outsidePif = path.join(contextRoot, 'outside.pif.json'), escapedPif = path.join(realRoot, 'escaped.pif.json');
+fs.copyFileSync(pifPath, outsidePif); fs.symlinkSync(outsidePif, escapedPif);
+selectedContext.pifPath = closureContext.loadedPIFPath = escapedPif; putContext();
+assert.throws(() => contextProof(aliasRoot, 'iphoneos', {schemePath}), error => error.code === 'xcode_context_proof_invalid');
+console.log(JSON.stringify({validMetadataRejection: true, rejectedMetadataFaults: receiptFaults, canonicalJobRoot: true, pifSymlinkEscapeRejected: true}));
 '''
 checks = subprocess.run(['node', '--input-type=module', '-e', source_checks, str(WORKSPACE), str(PROJECT / 'project.pbxproj'), str(SECOND / 'project.pbxproj'), str(scheme), str(RUN / 'state'), str(empty_tools), str(invalid_tools)], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=15)
 assert checks.returncode == 0, (checks.stdout, checks.stderr)

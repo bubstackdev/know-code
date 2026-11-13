@@ -180,8 +180,9 @@ export function readMetadataRejection({buildRoot, expected, termination}) {
 }
 
 async function openBridge({root, bridge, project, selection, state, scratch, platform, env, toolchain, knownInputs, onDiagnostic}) {
-  const buildRoot = path.join(state, platform), config = path.join(scratch, `${hash(project)}-${platform}`);
-  fs.mkdirSync(buildRoot, {recursive: true}); fs.mkdirSync(config, {recursive: true});
+  const directory = path.join(state, platform), config = path.join(scratch, `${hash(project)}-${platform}`);
+  fs.mkdirSync(directory, {recursive: true}); fs.mkdirSync(config, {recursive: true});
+  const buildRoot = fs.realpathSync(directory);
   for (const name of ['know-code-selected-scheme.json', 'know-code-selected-closure.json', 'know-code-last-preparation.json', 'know-code-project-export-request.json', 'know-code-project.pif.json', 'know-code-index-only-request.json', 'know-code-metadata-outcome.json']) fs.rmSync(path.join(buildRoot, name), {force: true});
   let binding;
   try { binding = metadataBinding({project, selection, toolchain, knownInputs}); } catch (error) { error.fatal = true; throw error; }
@@ -217,10 +218,11 @@ async function openBridge({root, bridge, project, selection, state, scratch, pla
     await close(client); const result = rejection ?? error; result.buildRoot = buildRoot; throw result;
   }
 }
-function contextProof(buildRoot, platform, selection) {
+export function contextProof(buildRoot, platform, selection) {
   const proof = json(path.join(buildRoot, 'know-code-selected-scheme.json'));
   const closure = json(path.join(buildRoot, 'know-code-selected-closure.json'));
-  if (!within(proof.pifPath, buildRoot) || hash(fs.readFileSync(proof.pifPath)) !== proof.pifSha256
+  if (!path.isAbsolute(proof.pifPath) || !within(fs.realpathSync(proof.pifPath), fs.realpathSync(buildRoot))
+      || hash(fs.readFileSync(proof.pifPath)) !== proof.pifSha256
       || closure.pifSha256 !== proof.pifSha256 || closure.loadedPIFPath !== proof.pifPath
       || proof.selection.schemePath !== selection.schemePath || proof.metadataContext.schemePath !== selection.schemePath
       || proof.metadataContext.configuration !== proof.selection.configuration || closure.configuration !== proof.selection.configuration)
