@@ -128,7 +128,7 @@ function contextIdentity(manifest, root, plan) {
 function unavailableContext(root, manifest, configuration, target, diagnostics, context = 'unavailable') {
   const projectPath = relative(root, manifest), id = `rust:${projectPath}:unavailable:${encodeURIComponent(target ?? 'repository-default')}`;
   send('compilation', {id, language: 'rust', projectPath, target: target ?? 'repository-default', configuration,
-    inferred: false, optionsJson: JSON.stringify({provider: 'cargo-rust-analyzer', rustContextPolicy: 1, context}), inputPaths: [manifest], dependencies: []});
+    inferred: false, optionsJson: JSON.stringify({provider: 'cargo-rust-analyzer', rustContextPolicy: 2, context}), inputPaths: [manifest], dependencies: []});
   send('report', {compilationId: id, status: 'partial', diagnostics,
     capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
 }
@@ -181,7 +181,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     cargo: {...cargo, features: policy?.features ?? 'default', buildJobs: 1}, procMacros: trustedPreparation,
     requestedPolicy: policy ? {targets: policy.targets, defaultFeatures: policy.defaultFeatures, executionAllowed: policy.executionAllowed} : null,
     sourceOwnership: selected ? 'Selected compiler unit dep-info membership; dependency crates are lookup-only' : 'Cargo target roots and unique analyzer-selected module files',
-    ...(selected ? {rustContextPolicy: 1, context: {cargoPackageId: selected.unit.cargo.package_id, target: selected.unit.cargo.target,
+    ...(selected ? {rustContextPolicy: 2, context: {cargoPackageId: selected.unit.cargo.package_id, target: selected.unit.cargo.target,
       profile: selected.unit.cargo.profile, features: selected.unit.cargo.features, cfg: selected.unit.cfg.effective,
       compilerSha256: selected.unit.cfg.compilerSha256, captureAttempts: collection.captureAttempts}, generatedInputs,
       analyzerReplay: {cfg: selected.graph.analyzerCfg, cargoCfgs: selected.graph.cargoCfgs, buildScripts: false,

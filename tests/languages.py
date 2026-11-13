@@ -119,7 +119,7 @@ assert {item['language'] for item in coverage} == {'typescript', 'csharp', 'rust
 assert all(item['status'] == 'partial' for item in coverage if item['language'] == 'rust'), coverage
 assert all(item['status'] == 'complete' for item in coverage if item['language'] != 'rust'), coverage
 rust_coverage = [item for item in coverage if item['language'] == 'rust']
-assert all(item['analysis_options']['rustContextPolicy'] == 1 for item in rust_coverage), rust_coverage
+assert all(item['analysis_options']['rustContextPolicy'] == 2 for item in rust_coverage), rust_coverage
 rust_contexts = [item for item in rust_coverage if isinstance(item['analysis_options']['context'], dict)]
 rust_summaries = [item for item in rust_coverage if item not in rust_contexts]
 assert all(item['analysis_options']['context'] == 'workspace-summary' for item in rust_summaries), rust_summaries

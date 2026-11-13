@@ -97,7 +97,7 @@ def validate(payload):
                 and isinstance(json.loads(frame['compilation']['optionsJson']).get('context'), dict)}
     assert len(contexts) == 2, contexts
     for identity, options in contexts.items():
-        assert options['rustContextPolicy'] == 1 and options['analyzerReplay']['procMacros'] is True
+        assert options['rustContextPolicy'] == 2 and options['analyzerReplay']['procMacros'] is True
         dylibs = options['analyzerReplay']['macroDylibs']
         assert len(dylibs) == 1 and len(dylibs[0]['sha256']) == 64 and Path(dylibs[0]['path']).is_file()
         symbols = {symbol['id']: symbol for frame in payload['messages'] if frame.get('facts', {}).get('compilationId') == identity

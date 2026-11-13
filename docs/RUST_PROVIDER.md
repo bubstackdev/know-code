@@ -10,7 +10,7 @@ implementation language does not establish Rust source-language support.
 | --- | --- |
 | Shipped v0.0.2 | Experimental adapter; no v0.0.3 language-release claim. |
 | Integrated at `8155a11` | Managed compiler-captured contexts, selected-root ownership, direct calls/dependencies, native parity and policy backfill. |
-| Unintegrated macro candidate `dbf6e54` | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Snapshot07 passes all 14 finite macro assertions; I/O and actual Cargo collection checks pass separately. Integrated/native/installed candidate checks remain pending. |
+| Macro source integrated at `7e10a53` (from `dbf6e54`) | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Snapshot07 passes all 14 finite macro assertions; I/O and actual Cargo collection checks pass separately. Matching assembled/native and installed candidate checks remain pending. |
 
 ## One provider contract and one core
 
@@ -67,7 +67,7 @@ sibling; failed units cannot borrow prior successful proof. Aggregate compiler
 diagnostics remain on workspace-summary/unavailable rows rather than being
 copied as failures into every healthy unit.
 
-Integrated rows stamp `optionsJson.rustContextPolicy=1`. The existing common
+Integrated rows stamp `optionsJson.rustContextPolicy=2`. Both earlier combined views and policy-1 selected/unavailable rows require ordinary bounded backfill for the macro policy; current policy-2 unavailable rows avoid retry loops. The existing common
 readiness/backfill path requests bounded reanalysis for older combined-view
 rows, including unchanged repositories after restart. Current unavailable rows
 carry the marker too, avoiding expensive retry loops.
@@ -123,9 +123,9 @@ The candidate macro path validates rust-src against Cargo's actual captured
 compiler rather than an unrelated PATH rustc. Unsupported wrappers/custom
 compiler equivalence remain explicit gaps.
 
-## Candidate procedural-macro replay
+## Procedural-macro replay in the integration branch
 
-This section describes unintegrated source, not shipped or integrated support.
+This section describes integrated development source, not shipped support.
 The candidate supplies an actual compiler-emitted macro dylib only when exact
 Cargo provenance and every consumer's extern-content hash agree. It checks the
 matching compiler/sysroot and runs one analyzer/macro process at a time. It does
@@ -183,7 +183,7 @@ buffers/maps are still materialized for the selected unit.
   including Rust normal/test coverage, shared source artifacts, stored graph
   and native parity, saved changes, empty publication and pinned reads. This
   is not optimized/installed/release or real-corpus performance certification.
-- Unintegrated immutable snapshot07 at `dbf6e54` passes all 14 macro
+- Immutable snapshot07 at `dbf6e54`, subsequently integrated, passes all 14 macro
   assertions: both captured library contexts, forced Cargo environment selecting
   the correct valid binding, ordinary/attribute-preserved and aliased calls,
   same-kind renamed function/type/field omissions, attributed module ancestry,

@@ -1470,10 +1470,10 @@ impl ReadView {
         Ok(self.connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language='csharp' AND {missing})"),[self.generation],|r|r.get(0))?)
     }
 
-    /// Old experimental Rust views need ordinary reanalysis in selected contexts.
+    /// Older Rust extraction policies need ordinary bounded reanalysis.
     fn needs_provider_backfill(&self) -> Result<bool> {
         Ok(self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language='rust' AND coalesce(json_extract(nullif(c.options_json,''),'$.rustContextPolicy'),0)<>1)",
+            "SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language='rust' AND coalesce(json_extract(nullif(c.options_json,''),'$.rustContextPolicy'),0)<>2)",
             [self.generation], |r| r.get(0),
         )?)
     }

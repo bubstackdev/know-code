@@ -111,18 +111,30 @@ fn rust_context_policy_backfills_legacy_views_without_retrying_current_gaps() {
     let legacy = writer.publish().unwrap();
     assert_eq!(ReadView::readiness(&path).unwrap(), (legacy, true));
 
+    for context in ["{}", r#""unavailable""#] {
+        let mut writer = Writer::open(&path).unwrap();
+        stage(
+            &mut writer,
+            "pre-macro",
+            "rust",
+            &format!(r#"{{"rustContextPolicy":1,"context":{context}}}"#),
+        );
+        let old_policy = writer.publish().unwrap();
+        assert_eq!(ReadView::readiness(&path).unwrap(), (old_policy, true));
+    }
+
     let mut writer = Writer::open(&path).unwrap();
     stage(
         &mut writer,
         "unit",
         "rust",
-        r#"{"rustContextPolicy":1,"context":{}}"#,
+        r#"{"rustContextPolicy":2,"context":{}}"#,
     );
     stage(
         &mut writer,
         "unavailable",
         "rust",
-        r#"{"rustContextPolicy":1,"context":"unavailable"}"#,
+        r#"{"rustContextPolicy":2,"context":"unavailable"}"#,
     );
     let current = writer.publish().unwrap();
     assert_eq!(ReadView::readiness(&path).unwrap(), (current, false));
