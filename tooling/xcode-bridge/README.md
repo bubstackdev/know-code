@@ -58,6 +58,51 @@ inventory. It leaves build source/cache and logs outside the installable tool.
 It does not activate or install anything. Existing wider validation tools own
 resource/process observations and relevant provider/native checks.
 
+## Separate signed download
+
+The accepted distribution is a separate bridge download and a separate bridge
+DMG. The common runtime, npm and NuGet archives remain a three-artifact set and
+do not install this prerequisite. The DMG is a later container/notarization
+step; the archive operation below does not create or certify one.
+
+For the next matching build, the builder records its own source SHA-256 before
+compilation and checks it afterward. Earlier build records without that field
+must be rebuilt; adding today's source digest to an old record would not prove
+which builder produced it.
+
+The existing signing tool has independent bridge operations:
+
+```sh
+python3 scripts/sign_packages.py bridge-sign \
+  --bridge-build .artifacts/xcode-tooling/build-next \
+  --out .artifacts/xcode-tooling/signed-next \
+  --identity 'Developer ID Application: YOUR IDENTITY' \
+  --team-id YOURTEAMID --signer-sha256 YOUR_CERTIFICATE_DER_SHA256
+
+python3 scripts/sign_packages.py bridge-verify \
+  --packages .artifacts/xcode-tooling/signed-next \
+  --work-dir .artifacts/xcode-tooling/verify-next \
+  --team-id YOURTEAMID --signer-sha256 YOUR_CERTIFICATE_DER_SHA256
+```
+
+These are operator examples, not evidence that signing has run. Both output
+directories must be new durable locations. `bridge-sign` copies the completed
+staged tool; signs exactly `sourcekit-xcode-bsp` and `SWBBuildServiceBundle`
+with hardened runtime and timestamps; updates only those two manifest inventory
+rows; and preserves every other file, license, resource and archive mode. The
+identifiers are `dev.bubstack.know-code.xcode-bridge` and
+`dev.bubstack.know-code.xcode-build-service`.
+
+The signed stage retains the original archive, original tool build record and
+exact builder under `unsigned/`, the signing script, a full transformation
+receipt and a CMS-authenticated outer manifest. Its single archive is
+`know-code-xcode-bridge-index-only.7-notice1-darwin-arm64.tar.gz`, with a matching
+top-level directory containing the flat runtime. Verification authenticates the
+manifest before checking the complete inventories, source/dependency pins,
+two native signatures and exact signed-byte hashes. It reports notarization
+as `not_performed`; normal-security installation, DMG notarization/stapling,
+platform and installed Xcode execution remain separate required checks.
+
 ## User-scoped installation layout
 
 After a separately reviewed successful build and relevant validation, copy the

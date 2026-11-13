@@ -76,8 +76,11 @@ device/simulator requirement.
 
 ## Packaging audit proposal — 2026-11-13
 
-This source audit proposes the remaining packaging work; it does **not**
-implement, qualify or select an archive/DMG layout or signing identifiers.
+The user subsequently selected a **separate bridge download and separate
+bridge DMG**. The source implementation in the existing signing tool provides
+independent `bridge-sign`/`bridge-verify` operations and keeps the exact three
+core archives unchanged. This checkpoint does not record an executed build,
+signature, notarization or installation check.
 The current pinned recipe is [index-only.7-notice1](../tooling/xcode-bridge/recipe.json);
 the earlier `.6` adoption evidence above retains its historical boundary.
 
@@ -103,6 +106,9 @@ the earlier `.6` adoption evidence above retains its historical boundary.
   Whole-tool resources must work outside the checkout under normal security;
   installing Xcode is not part of this proposal or current tooling.
 
-Archive/DMG layout, signing identifiers, final signed-tool installation and
-platform qualification remain separate decisions/checkpoints. No new product
-code, build, signing, installation or runtime check accompanies this section.
+The archive layout and routine signing identifiers are specified in the
+[tool recipe README](../tooling/xcode-bridge/README.md#separate-signed-download).
+The final signed-tool build, separate DMG construction/notarization, installation
+and platform qualification remain separate checkpoints. The common installer
+does not automatically install the bridge. No build, signing, installation or
+runtime check accompanies this source-only packaging checkpoint.

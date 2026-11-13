@@ -392,15 +392,210 @@ def sign_packages(args):
     return result
 
 
+BRIDGE_NATIVE = {'sourcekit-xcode-bsp':'dev.bubstack.know-code.xcode-bridge',
+                 'SWBBuildServiceBundle':'dev.bubstack.know-code.xcode-build-service'}
+BRIDGE_MANIFEST = 'know-code-xcode-bridge.json'
+
+
+def bridge_names(recipe_id):
+    require(isinstance(recipe_id, str) and re.fullmatch(r'[A-Za-z0-9._-]+', recipe_id), 'Unsafe bridge recipe ID')
+    root = f'know-code-xcode-bridge-{recipe_id}-darwin-arm64'
+    return root, root + '.tar.gz'
+
+
+def bridge_inventory(runtime):
+    """The separately built tool has no links or special files in its qualified layout."""
+    require(runtime.is_dir() and not runtime.is_symlink(), 'Expected a physical bridge runtime directory')
+    result, total = {}, 0
+    for path in sorted(runtime.rglob('*')):
+        name, info = safe_name(path.relative_to(runtime).as_posix()), path.lstat()
+        require(len(result) < MAX_ENTRIES and not info.st_mode & 0o7000, 'Bridge entry/mode limit')
+        require(stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode), f'Nonregular bridge input: {name}')
+        item = {'kind':'directory' if stat.S_ISDIR(info.st_mode) else 'file', 'mode':stat.S_IMODE(info.st_mode)}
+        if item['kind'] == 'file':
+            total += info.st_size
+            require(total <= MAX_EXPANDED_BYTES, 'Bridge expanded-byte limit exceeded')
+            item.update(bytes=info.st_size, sha256=digest(path))
+        result[name] = item
+    return result
+
+
+def bridge_payload(root, inventory, producer, builder):
+    manifest = read_json(root / BRIDGE_MANIFEST)
+    recipe = read_json(root / 'source-recipe.json')
+    expected_sources = {name:item['distributed_sha256'] for name, item in recipe['changed_files'].items()}
+    expected_sources.update({'Package.swift':recipe['package_manifest_sha256'], 'Package.resolved':recipe['package_resolved_sha256']})
+    dependencies = {name:item['revision'] for name, item in recipe['dependencies'].items()}
+    require(producer.get('status') == 'staged_build_only' and producer.get('exit_code') == 0,
+            'Bridge requires a successful staged build record')
+    require(re.fullmatch(r'[0-9a-f]{64}', producer.get('builder_sha256', '')) is not None,
+            'Bridge producer has no builder digest; rebuild with the recording builder, never retrofit the old record')
+    require(digest(regular(builder)) == producer['builder_sha256'], 'Bridge builder source differs from producer')
+    require(producer['manifest_sha256'] == digest(root / BRIDGE_MANIFEST), 'Bridge unsigned manifest differs from producer')
+    require(manifest.get('schema_version') == 1 and manifest.get('tool') == 'know-code-xcode-bridge'
+            and manifest['recipe_id'] == producer['recipe_id'] == recipe['recipe_id']
+            and manifest['cli_identity'] == recipe['cli_identity']
+            and manifest['upstream_revision'] == producer['upstream']['revision'] == recipe['upstream']['revision']
+            and manifest['swift_build_revision'] == dependencies['swift-build']
+            and manifest['recipe_sha256'] == producer['recipe_sha256'] == digest(root / 'source-recipe.json')
+            and manifest['patch_sha256'] == producer['patch_sha256'] == recipe['patch_sha256'] == digest(root / 'know-code.patch')
+            and manifest['package_resolved_sha256'] == recipe['package_resolved_sha256'] == digest(root / 'Package.resolved')
+            and manifest['source_hashes'] == producer['source_hashes'] == expected_sources
+            and manifest['dependency_revisions'] == producer['dependencies_before'] == producer['dependencies_after'] == dependencies,
+            'Bridge source/recipe/dependency identity differs')
+    files = {name:{'bytes':item['bytes'], 'sha256':item['sha256']} for name, item in inventory.items()
+             if item['kind'] == 'file' and name != BRIDGE_MANIFEST}
+    require(files == manifest['files'], 'Bridge runtime inventory differs from its manifest')
+    check_native_set(root, inventory, BRIDGE_NATIVE)
+    return manifest
+
+
+def check_bridge_changes(before, after, unsigned_manifest, signed_manifest, prefix):
+    native = {f'{prefix}/{name}' for name in BRIDGE_NATIVE}
+    check_changes(before, after, native | {f'{prefix}/{BRIDGE_MANIFEST}'})
+    expected = copy.deepcopy(unsigned_manifest)
+    for name in BRIDGE_NATIVE:
+        row = after[f'{prefix}/{name}']
+        expected['files'][name] = {'bytes':row['bytes'], 'sha256':row['sha256']}
+    require(signed_manifest == expected, 'Bridge manifest changed beyond the two signed native inventory rows')
+
+
+def bridge_sign(args):
+    source, output = args.bridge_build.resolve(strict=True), args.out.resolve()
+    require(source != output and source not in output.parents and output not in source.parents,
+            'Bridge output must be a new directory outside its build tree')
+    runtime = source / 'runtime'
+    producer = read_json(source / 'build-record.json')
+    producer_digest = digest(source / 'build-record.json')
+    original = bridge_inventory(runtime)
+    builder = Path(__file__).resolve().parents[1] / 'tooling/xcode-bridge/build.py'
+    manifest = bridge_payload(runtime, original, producer, builder)
+    require(digest(runtime / 'source-recipe.json') == digest(builder.parent / 'recipe.json'), 'Bridge is not the currently reviewed recipe')
+    prefix, filename = bridge_names(manifest['recipe_id'])
+    output.mkdir(parents=True, exist_ok=False)
+    unsigned, evidence = output / 'unsigned', output / 'signing-evidence'
+    unsigned.mkdir()
+    evidence.mkdir()
+    for origin, name in [(source / 'build-record.json', 'build-record.json'), (builder, 'bridge-builder.py')]:
+        shutil.copyfile(regular(origin), unsigned / name)
+    shutil.copyfile(unsigned / 'build-record.json', output / 'build-record.json')
+    shutil.copyfile(regular(Path(__file__).resolve()), output / 'signing-tool.py')
+    archive = unsigned / filename
+    with archive.open('xb') as stream, gzip.GzipFile(fileobj=stream, mode='wb', filename='', mtime=0) as compressed, \
+            tarfile.open(fileobj=compressed, mode='w') as tar:
+        for name in ['', *original]:
+            path = runtime / name
+            info = tar.gettarinfo(str(path), arcname=prefix + ('/' + name if name else ''))
+            require(info.isdir() or info.isfile(), 'Bridge input changed kind during archival')
+            info.uid = info.gid = info.mtime = 0
+            info.uname = info.gname = ''
+            if info.isfile():
+                with path.open('rb') as data:
+                    tar.addfile(info, data)
+            else:
+                tar.addfile(info)
+    staged = evidence / 'staged'
+    before = unpack(archive, staged)
+    nested = {name[len(prefix) + 1:]:row for name, row in before.items() if name != prefix}
+    bridge_payload(staged / prefix, nested, read_json(unsigned / 'build-record.json'), unsigned / 'bridge-builder.py')
+    transforms = []
+    for index, (name, identifier) in enumerate(sorted(BRIDGE_NATIVE.items())):
+        path = staged / prefix / name
+        run([CODESIGN, '--force', '--sign', args.identity, '--options', 'runtime', '--timestamp', '--identifier', identifier, path], evidence)
+        verification = verify_native(path, identifier, args, evidence, evidence / f'bridge-staged-{index}-')
+        transforms.append({'path':f'{prefix}/{name}', 'identifier':identifier,
+                           'unsigned_sha256':before[f'{prefix}/{name}']['sha256'], 'signed_sha256':digest(path), 'verification':verification})
+    signed_manifest = copy.deepcopy(manifest)
+    for name in BRIDGE_NATIVE:
+        path = staged / prefix / name
+        signed_manifest['files'][name] = {'bytes':path.stat().st_size, 'sha256':digest(path)}
+    write_json(staged / prefix / BRIDGE_MANIFEST, signed_manifest)
+    repack(archive, staged, output / filename)
+    signed_root = evidence / 'repacked'
+    after = unpack(output / filename, signed_root)
+    check_native_set(signed_root, after, {f'{prefix}/{name}' for name in BRIDGE_NATIVE})
+    check_bridge_changes(before, after, manifest, read_json(signed_root / prefix / BRIDGE_MANIFEST), prefix)
+    require(bridge_inventory(runtime) == original and digest(source / 'build-record.json') == producer_digest,
+            'Original bridge inputs changed during signing')
+    receipt = {'schema_version':1, 'tool':'know-code-xcode-bridge', 'recipe_id':manifest['recipe_id'],
+               'producer_sha256':digest(unsigned / 'build-record.json'), 'builder_sha256':producer['builder_sha256'],
+               'script_sha256':digest(output / 'signing-tool.py'), 'team_id':args.team_id, 'signer_sha256':args.signer_sha256,
+               'unsigned_manifest_sha256':producer['manifest_sha256'], 'signed_manifest_sha256':digest(signed_root / prefix / BRIDGE_MANIFEST),
+               'file':filename, 'unsigned_sha256':digest(archive), 'signed_sha256':digest(output / filename),
+               'unsigned_inventory':before, 'signed_inventory':after, 'native':transforms}
+    write_json(output / 'signing-transform.json', receipt)
+    final = {'schema_version':1, 'tool':'know-code-xcode-bridge', 'recipe_id':manifest['recipe_id'], 'unsigned_candidate':False,
+             'notarization':{'status':'not_performed'}, 'producer_sha256':receipt['producer_sha256'],
+             'artifact':{'file':filename, 'bytes':(output / filename).stat().st_size, 'sha256':receipt['signed_sha256']},
+             'signing':{'schema_version':1, 'team_id':args.team_id, 'signer_sha256':args.signer_sha256,
+                        'script_sha256':receipt['script_sha256'], 'receipt':{'file':'signing-transform.json', 'sha256':digest(output / 'signing-transform.json')}}}
+    write_json(output / 'manifest.json', final)
+    run([SECURITY, 'cms', '-S', '-T', '-H', 'SHA256', '-u', '6', '-N', args.identity,
+         '-i', output / 'manifest.json', '-o', output / 'manifest.cms'], evidence)
+    verification = output / 'verification-evidence'
+    verification.mkdir()
+    result = bridge_verify(output, args, verification)
+    write_json(output / 'verification.json', result)
+    names = [filename, 'manifest.json', 'manifest.cms', 'build-record.json', 'signing-transform.json', 'signing-tool.py']
+    (output / 'SHA256SUMS').write_text(''.join(f'{digest(output / name)}  {name}\n' for name in names))
+    return result
+
+
+def bridge_verify(directory, args, evidence):
+    verify_cms(directory, args, evidence)
+    final = read_json(directory / 'manifest.json')
+    binding = final['signing']
+    require(final.get('schema_version') == 1 and final.get('tool') == 'know-code-xcode-bridge'
+            and final.get('unsigned_candidate') is False and final.get('notarization') == {'status':'not_performed'}
+            and binding['schema_version'] == 1 and binding['team_id'] == args.team_id and binding['signer_sha256'] == args.signer_sha256
+            and binding['receipt']['file'] == 'signing-transform.json', 'Bridge signing policy/format differs')
+    require(digest(regular(directory / 'signing-transform.json')) == binding['receipt']['sha256'], 'Bridge receipt digest mismatch')
+    receipt, unsigned = read_json(directory / 'signing-transform.json'), directory / 'unsigned'
+    producer = read_json(unsigned / 'build-record.json')
+    prefix, filename = bridge_names(final['recipe_id'])
+    require(receipt['schema_version'] == 1 and receipt['tool'] == final['tool'] and receipt['recipe_id'] == final['recipe_id']
+            and receipt['file'] == final['artifact']['file'] == filename
+            and receipt['producer_sha256'] == final['producer_sha256'] == digest(unsigned / 'build-record.json') == digest(regular(directory / 'build-record.json'))
+            and receipt['builder_sha256'] == producer['builder_sha256']
+            and receipt['script_sha256'] == binding['script_sha256'] == digest(regular(directory / 'signing-tool.py'))
+            and receipt['team_id'] == args.team_id and receipt['signer_sha256'] == args.signer_sha256
+            and receipt['unsigned_sha256'] == digest(regular(unsigned / filename))
+            and receipt['signed_sha256'] == final['artifact']['sha256'] == digest(regular(directory / filename))
+            and final['artifact']['bytes'] == (directory / filename).stat().st_size, 'Bridge archive/producer/script binding differs')
+    before_root, after_root = evidence / 'unsigned', evidence / 'signed'
+    before, after = unpack(unsigned / filename, before_root), unpack(directory / filename, after_root)
+    require(all(name == prefix or name.startswith(prefix + '/') for name in before), 'Unexpected bridge archive root')
+    nested = {name[len(prefix) + 1:]:row for name, row in before.items() if name != prefix}
+    manifest = bridge_payload(before_root / prefix, nested, producer, unsigned / 'bridge-builder.py')
+    signed_manifest = read_json(after_root / prefix / BRIDGE_MANIFEST)
+    check_bridge_changes(before, after, manifest, signed_manifest, prefix)
+    check_native_set(after_root, after, {f'{prefix}/{name}' for name in BRIDGE_NATIVE})
+    require(receipt['unsigned_inventory'] == before and receipt['signed_inventory'] == after
+            and receipt['unsigned_manifest_sha256'] == digest(before_root / prefix / BRIDGE_MANIFEST)
+            and receipt['signed_manifest_sha256'] == digest(after_root / prefix / BRIDGE_MANIFEST), 'Bridge manifest/inventory proof differs')
+    rows = receipt['native']
+    require(len(rows) == 2 and {row['path'] for row in rows} == {f'{prefix}/{name}' for name in BRIDGE_NATIVE}, 'Expected exactly two bridge native transforms')
+    for index, row in enumerate(rows):
+        name = row['path']
+        identifier = BRIDGE_NATIVE[name[len(prefix) + 1:]]
+        require(row['identifier'] == identifier and row['unsigned_sha256'] == before[name]['sha256']
+                and row['signed_sha256'] == after[name]['sha256'], 'Bridge native transform differs')
+        verify_native(after_root / name, identifier, args, evidence, evidence / f'bridge-certificate-{index}-')
+    return {'verified':True, 'tool':final['tool'], 'recipe_id':final['recipe_id'], 'manifest_sha256':digest(directory / 'manifest.json'),
+            'producer_sha256':receipt['producer_sha256'], 'team_id':args.team_id,
+            'signer_sha256':args.signer_sha256, 'notarization':'not_performed', 'archive_root':prefix,
+            'runtime_inventory':{name[len(prefix) + 1:]:row for name, row in after.items() if name != prefix}}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest='operation', required=True)
-    for operation in ('sign', 'verify'):
+    for operation in ('sign', 'verify', 'bridge-sign', 'bridge-verify'):
         command = subparsers.add_parser(operation)
-        command.add_argument('--packages', type=Path, required=True)
+        command.add_argument('--bridge-build' if operation == 'bridge-sign' else '--packages', type=Path, required=True)
         command.add_argument('--team-id', required=True)
         command.add_argument('--signer-sha256', required=True, help='Externally pinned signer certificate DER SHA-256')
-        if operation == 'sign':
+        if operation in ('sign', 'bridge-sign'):
             command.add_argument('--out', type=Path, required=True)
             command.add_argument('--identity', required=True, help='Installed keychain signing identity name; no private-key export')
         else:
@@ -409,15 +604,15 @@ def main():
     require(re.fullmatch(r'[A-Z0-9]{10}', args.team_id) is not None, 'Expected ten-character Apple Team ID')
     args.signer_sha256 = args.signer_sha256.lower()
     require(re.fullmatch(r'[0-9a-f]{64}', args.signer_sha256) is not None, 'Expected SHA-256 of signer DER certificate')
-    if args.operation == 'sign':
-        result = sign_packages(args)
+    if args.operation in ('sign', 'bridge-sign'):
+        result = bridge_sign(args) if args.operation == 'bridge-sign' else sign_packages(args)
     else:
         packages = args.packages.resolve(strict=True)
         evidence = args.work_dir.resolve()
         require(evidence != packages and packages not in evidence.parents and evidence not in packages.parents,
                 'Verification work directory must be outside the signed packages')
         evidence.mkdir(parents=True, exist_ok=False)
-        result = verify_packages(packages, args, evidence)
+        result = bridge_verify(packages, args, evidence) if args.operation == 'bridge-verify' else verify_packages(packages, args, evidence)
         write_json(evidence / 'verification.json', result)
     print(json.dumps(result, sort_keys=True))
 

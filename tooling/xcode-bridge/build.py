@@ -93,7 +93,8 @@ def main():
     for filename, expected in expected_sources.items():
         if digest(source / filename) != expected:
             raise RuntimeError(f'Prepared source differs from recipe: {filename}')
-    record = {'status': 'prepared_only', 'recipe_id': recipe['recipe_id'], 'recipe_sha256': digest(HERE / 'recipe.json'),
+    record = {'status': 'prepared_only', 'builder_sha256': digest(Path(__file__).resolve()),
+              'recipe_id': recipe['recipe_id'], 'recipe_sha256': digest(HERE / 'recipe.json'),
               'upstream': recipe['upstream'], 'patch_sha256': recipe['patch_sha256'],
               'source_hashes': expected_sources, 'dependencies_before': heads}
     (out / 'build-record.json').write_text(json.dumps(record, indent=2) + '\n')
@@ -135,6 +136,8 @@ def main():
         if digest(source / filename) != expected:
             raise RuntimeError(f'Source changed during build: {filename}')
     check_checkout(checkout, recipe['upstream']['revision'])
+    if digest(Path(__file__).resolve()) != record['builder_sha256']:
+        raise RuntimeError('Builder source changed during build; do not package these outputs')
     if code:
         raise RuntimeError(f'Build failed ({code}); retain {out}/stderr.log')
     runtime = out / 'runtime'
