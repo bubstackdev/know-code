@@ -190,3 +190,44 @@ macro. An own-root metadata-only context may remain explicitly unsupported;
 every reachable **macro dependency** still needs its unique actual emitted
 dylib and exact consumer hash join. No correction or runtime rerun is claimed by
 this read-only analysis.
+
+## Second run and input-discovery phase correction
+
+Root-owned `production-default-02/` published current generation 4 in 127.8s,
+with 13 coverage rows under unchanged defaults, but still failed the required
+lars_core graph qualification. The eight intermediate-host-library refusals are
+gone. One real local derive context is usable/partial; no full Rust success is
+claimed. The retained cache has 79 individually captured units, including
+successful normal/test lars_core units; their dependency closure is incomplete.
+Exact output joins show the core→indexmap/serde/serde_json→serde_core metadata
+producer is missing, rather than a missing core compilation.
+
+Six dep-info artifacts absent from accepted producer units identify the input
+inventory problem: ctor/dtor-proc-macro, flate2 and zeroize include README.md;
+rustls-pki-types includes 19 DER files; serde_core includes generated
+OUT_DIR/private.rs. The current generated file's lf01 spelling resolves to the
+same physical inode; registry files use physical HOME paths. No alias mismatch
+was established. Failed wrapper records/pre-compilation snapshots were cleaned,
+so current file hashes cannot reconstruct historical before hashes.
+The read-only operand/hash packet is retained in the tooling worktree at
+`.artifacts/lars-production-default02-readonly.json`, SHA256
+`a639b529676a42bb3e0397bab67def4fd36896629e1261b2590378408f6eb664`.
+
+The collector formerly spent its single recapture on fresh Cargo artifacts with
+invalidated/missing wrapper proof. The next actual compile could discover
+non-Rust/generated includes, but had no remaining pass to snapshot them before
+compilation. Source correction `3c7951b` separates at most one stale-output
+recovery from at most one genuinely new consumed-input discovery. It allows
+three bounded checks only when both distinct phases progress; an owned output
+must actually be removed before continuing. Known changed bytes and unrelated
+proof failures do not acquire a blind retry. Existing exact before/after
+snapshots and artifact joins remain mandatory. The collection fixture now
+invalidates only derived proof while retaining Cargo artifacts, exercises
+README/generated includes, requires exact pre-compilation hashes, then verifies
+warm reuse. Syntax checks pass; runtime qualification is pending with the owner.
+
+The independent `-l` rejection belongs to ring's native library, not napi or the
+core closure. Its retained build-script output emits static ring_core_0_17_14_
+and ring_core_0_17_14__test link directives and an owned native OUT_DIR. Full
+rejected argv was cleaned. Native `-l` stays explicitly unsupported in this
+patch, and metadata-only proc-macro `.rmeta` remains insufficient dylib proof.

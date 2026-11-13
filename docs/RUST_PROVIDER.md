@@ -68,8 +68,11 @@ Build-script OUT_DIR membership labels captured generated source where known;
 this is not exhaustive expansion-origin mapping.
 
 The collector reuses content-bound metadata proof, not a resident compiler
-workspace. Bounded package snapshots cover ordinary inputs; one recapture may
-discover previously unrecorded consumed files. Cleanup removes only proven
+workspace. Bounded package snapshots cover ordinary inputs. Follow-up source `3c7951b`
+separates one recovery of fresh Cargo outputs lacking current proof from one
+recapture for newly discovered consumed inputs: only both distinct phases can
+require three bounded checks. No post-compilation hash substitutes for a
+pre-compilation snapshot. Its focused/runtime qualification remains pending. Cleanup removes only proven
 regular outputs under the owned target/build directories, refusing foreign,
 state or symlink paths. `--keep-going` permits healthy contexts after a failing
 sibling; failed units cannot borrow prior successful proof. Aggregate compiler
