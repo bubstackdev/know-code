@@ -187,6 +187,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       artifacts = messages.filter(item => item.reason === 'compiler-artifact');
       buildScripts = messages.filter(item => item.reason === 'build-script-executed').map(item => ({packageId: item.package_id, outDir: item.out_dir}));
       const records = capturedRecords(directory), current = [], discoverInputs = new Set(), staleOutputs = new Set(), unproven = [];
+      const discoveredByPackage = new Map();
       const selectedCompilers = new Set(records.filter(record => record.status === 0 && !record.error && !record.beforeInputs)
         .map(record => fs.realpathSync(record.compiler)));
       capturedCount += records.filter(record => record.beforeInputs && record.status === 0 && !record.error).length;
@@ -224,9 +225,16 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
               const consumed = compilerInputs(candidates[0]);
               const files = packages.get(artifact.manifest_path);
               let discovered = false;
-              if (files) for (const filename of consumed.files) if (!files.has(filename)) {
-                files.add(filename);
-                discovered = true;
+              if (files) {
+                if (!discoveredByPackage.has(artifact.manifest_path)) discoveredByPackage.set(artifact.manifest_path, new Set());
+                const added = discoveredByPackage.get(artifact.manifest_path);
+                for (const filename of consumed.files) {
+                  if (!files.has(filename)) { files.add(filename); added.add(filename); }
+                  // Package inventory is shared by normal/test units, but its
+                  // pre-pass snapshot was the same. Every affected unit needs
+                  // recapture even after an earlier unit added the same input.
+                  if (added.has(filename)) discovered = true;
+                }
               }
               // A missing pre-compilation include can be snapshotted before a
               // new actual compile. Changed already-known bytes or unrelated

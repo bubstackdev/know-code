@@ -49,6 +49,8 @@ function collect(label) {
 
 const cold = collect('cold-include-discovery');
 assert.equal(cold.captureAttempts, 2, 'unknown include input was not recaptured once');
+assert.equal(cold.staleRecaptures, 0, 'shared normal/test input discovery left one unit needing stale-artifact recovery');
+assert.equal(cold.inputRecaptures, 1);
 assert.equal(cold.plans.length, 2, JSON.stringify(cold.diagnostics));
 assert(cold.cargoSucceeded && fs.existsSync(path.join(workspace, 'know-code-build-ran')));
 assert(cold.plans.every(plan => plan.unit.inputs.files.includes(data)));
