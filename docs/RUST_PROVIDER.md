@@ -48,6 +48,15 @@ cfg selections remain unavailable. Extern artifact provenance joins crates;
 package IDs remain opaque. Required metadata is prepared, while unexpected
 application/test linking or code generation is refused before execution.
 Build-script/proc-macro tool roots may emit the tools needed for preparation.
+The follow-up at `cb1a6c1` also admits intermediate host lib/rlib outputs for
+typed Cargo tooling dependencies: build-kind edges seed build-script dependencies,
+normal edges seed proc-macro dependencies, and only normal dependency edges close
+that host graph. Package IDs and exact library roots are used, never names.
+Conditional metadata edges grant preparation permission only; actual compiler/
+input/artifact joins still establish semantics. Explicit-target, test and final
+application outputs retain their refusal. This source change has syntax checks
+only until the shared owner runs its focused and real-corpus gates; see
+[the Lars preflight](reviews/RUST_LARS_0_0_3_PREFLIGHT.md).
 
 Each selected unit owns only its consumed first-party Rust source. Dependency
 crates, including sibling workspace units, are lookup-only in that graph.
