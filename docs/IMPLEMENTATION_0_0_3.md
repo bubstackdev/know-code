@@ -282,3 +282,40 @@ rows; no store/framing change or second execution/storage engine is introduced.
 Protocol, settings and publication checks pass individually; assembled Swift
 workers and native/installed gates remain pending until the adapter lands.
 Earlier research checkpoints above retain their historical limits.
+
+
+## Production Xcode native checkpoint — 2026-11-13
+
+Matching Debug producer `04faec9ab4194780ae7b4c458cf98db1`, built at
+`3a82a58`, now includes the adopted optional bridge adapter, Swift-only policy 2,
+central personal-trust/cache derivation and Swift extraction-policy backfill.
+The pinned separate tool recipe is `index-only.6-notice1`; no live installation
+or release was changed. Source-only saves keep dependency preparation separate
+from compiler analysis. Exact compiler-selected missing/external configuration
+and versioned package-manifest repair inputs stay in the common watcher path.
+
+The owned production Xcode fixture passes six app/dependency/UI-test contexts
+across device and simulator, selected Test configuration, compiler-bound
+callers/callees/impact and references, retained exact UTF-8 source, generated
+asset-source labels, and CLI/Node/.NET equality. Saved body edits retain context
+and symbol identities without repeating dependency restoration. Body errors
+publish fresh partial results and repair on save. Evidence:
+`wave-01/assembled-xcode-integration-02/` and
+`.artifacts/xcode-integration/1794586873180331000/summary.json` (34-second
+fixture, not a performance benchmark). The initial test failed because its
+coverage expansion omitted the required generation/snapshot; that failed
+attempt remains retained. A read-only inspection of that publication had six
+healthy contexts; it was not relabeled a passing integration run.
+
+Quick source/toolchain and standalone Swift graph checks pass. The sandboxed
+SwiftPM attempt failed on compiler-cache writes; the supported escalated
+SwiftPM/Xcode-policy/Workspace-API batch passes, retaining both attempts:
+`wave-01/assembled-swift-providers-{09,10}/`. These receipts precede the final
+small manifest-repair watch fix; the production Xcode checkpoint above uses the
+new matching producer. The four-language native regression, missing-input
+repair and current strict Clippy checkpoint are next. See
+[Xcode integration details](XCODE_ADAPTER_IMPLEMENTATION.md) and the
+[unresolved metadata failure boundary](XCODE_METADATA_FAILURE_BOUNDARY.md).
+Optimized, installed, cleanup/cancellation and broader toolchain qualification
+remain separate gates; no full Debug, release or encoding-performance pass is
+claimed.
