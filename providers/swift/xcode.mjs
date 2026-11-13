@@ -169,10 +169,11 @@ function contextProof(buildRoot, platform, selection) {
   return {proof, closure, projects};
 }
 
-function inspectManifests({projects, state, toolchain, previous, retry}) {
+function inspectManifests({projects, state, toolchain, previous, retry, onInputs}) {
   const manifests = [...new Set(projects.filter(file => path.basename(file) === 'Package.swift'))];
   const files = [...new Set(manifests.flatMap(file => fs.readdirSync(path.dirname(file))
     .filter(name => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(name)).map(name => path.join(path.dirname(file), name))))].sort();
+  onInputs(files); // Retain repair paths even when hashing/evaluation fails.
   const inputs = Object.fromEntries(files.map(file => [file, hash(fs.readFileSync(file))]));
   if (!retry && previous?.version === 1 && previous.toolchain === toolchain.identity
       && JSON.stringify(previous.inputs) === JSON.stringify(inputs)
@@ -214,7 +215,7 @@ function restoration({root, project, selection, state, bridge, toolchain, reques
     const result = run('/usr/bin/xcrun', args, path.dirname(container(project)), env);
     if (result.status !== 0) throw Error(`${result.stdout}\n${result.stderr}`);
     const inputs = Object.fromEntries([...new Set([project, ...selection.inputs, ...toolchain.inputPaths])].filter(exists).map(file => [file, hash(fs.readFileSync(file))]));
-    plan = {inputs, analysisInputs: plan?.analysisInputs ?? [], outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
+    plan = {inputs, analysisInputs: Array.isArray(plan?.analysisInputs) ? plan.analysisInputs.filter(file => typeof file === 'string' && path.isAbsolute(file)) : [], outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
     put(planFile, plan);
   } catch (cause) { error = String(cause.message).slice(-16000); onDiagnostic(diagnostic('dependency_restore_failed', error, relative(root, project))); }
   send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
@@ -298,12 +299,12 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
       for (const file of observedInputs) jobAnalysisInputs.add(file);
       inventoryObserved = true;
       let manifestPolicy;
-      try { manifestPolicy = inspectManifests({projects: evidence.projects, state, toolchain: {...toolchain, env}, previous: plan?.manifestPolicy, retry: request.retryPreparation && platform === 'iphoneos'}); }
+      try { manifestPolicy = inspectManifests({projects: evidence.projects, state, toolchain: {...toolchain, env}, previous: plan?.manifestPolicy, retry: request.retryPreparation && platform === 'iphoneos',
+        onInputs(files) { for (const file of files) if (!within(file, work)) { observedInputs.add(file); jobAnalysisInputs.add(file); } }}); }
       catch (error) {
         if (/interrupted|resource-limited|timed out|Swift tool failed/i.test(error.message)) throw error;
         throw problem('xcode_manifest_preflight_failed', `Cannot inspect the selected package manifest policy: ${error.message}`);
       }
-      for (const file of Object.keys(manifestPolicy.inputs)) if (!within(file, work)) { observedInputs.add(file); jobAnalysisInputs.add(file); }
       plan = {...plan, manifestPolicy, inputs: {...plan?.inputs, ...manifestPolicy.inputs}, analysisInputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs])]};
       put(path.join(state, 'dependency-plan.json'), plan);
       if (manifestPolicy.unsupported) throw problem('xcode_external_codegen_required', `${manifestPolicy.unsupported.path}: ${manifestPolicy.unsupported.message}`);
