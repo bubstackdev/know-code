@@ -319,3 +319,19 @@ repair and current strict Clippy checkpoint are next. See
 Optimized, installed, cleanup/cancellation and broader toolchain qualification
 remain separate gates; no full Debug, release or encoding-performance pass is
 claimed.
+
+
+The matching four-language native regression subsequently passes all 21 checks
+(`wave-01/assembled-language-contexts-08/`, 105 seconds), including stored
+Swift/Rust graph/source parity, saved changes, empty generations and retained
+cursor/source behavior. The extended Xcode fixture passes two additional gates:
+a declared source deletion produces typed unavailable device/simulator contexts
+without current prior bodies; restoring those exact saved bytes automatically
+repairs all six contexts and graph queries. Evidence:
+`wave-01/assembled-xcode-integration-03/` and
+`.artifacts/xcode-integration/1794587115036710000/summary.json` (53 seconds).
+Formatting and strict workspace/all-targets Clippy also pass at `e1d1f12`
+(`wave-01/assembled-{format,clippy}-08/`). A narrow separately versioned bridge
+follow-up is now being implemented for the remaining metadata command-rejection
+boundary; it has no runtime evidence yet and does not replace these `.6`
+receipts.
