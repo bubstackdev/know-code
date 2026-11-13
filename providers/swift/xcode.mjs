@@ -256,13 +256,22 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
         sourcesByTarget.set(target.id.uri, response.items.flatMap(item => item.sources));
       }
       send('progress', {stage: 'preparing', projectPath: relative(root, project), message: `Preparing selected ${platform} modules; scripts and product builds stay disabled`});
-      await extensionRequest(client, 'buildTarget/prepare', {targets: targets.map(target => target.id)});
-      const prepared = json(path.join(buildRoot, 'know-code-last-preparation.json'));
-      if (!Array.isArray(prepared.requestedTargetURIs) || !Array.isArray(prepared.configuredRootGUIDs) || prepared.pifSha256 !== evidence.proof.pifSha256 || prepared.configurationName !== evidence.proof.selection.configuration || prepared.succeeded !== true
+      let preparationError;
+      try { await extensionRequest(client, 'buildTarget/prepare', {targets: targets.map(target => target.id)}); }
+      catch (error) { preparationError = error; }
+      let prepared;
+      try { prepared = json(path.join(buildRoot, 'know-code-last-preparation.json')); }
+      catch (error) { error.fatal = true; throw error; }
+      const invalidProof = () => Object.assign(problem('xcode_preparation_proof_invalid', 'Bridge preparation did not supply a coherent terminal result for the exact PIF/targets; update the bridge and refresh.'), {fatal: true});
+      if (!Array.isArray(prepared.requestedTargetURIs) || !Array.isArray(prepared.configuredRootGUIDs) || prepared.pifSha256 !== evidence.proof.pifSha256 || prepared.configurationName !== evidence.proof.selection.configuration
           || JSON.stringify([...prepared.requestedTargetURIs].sort()) !== JSON.stringify(targets.map(target => target.id.uri).sort())
-          || JSON.stringify([...prepared.configuredRootGUIDs].sort()) !== JSON.stringify([...evidence.closure.selectedRootGUIDs].sort())
-          || prepared.operationState !== 'succeeded' || JSON.stringify(prepared.typedTerminalResults) !== '["ok"]' || !(prepared.typedPreparationCompleteCount > 0) || prepared.droppedDiagnostics)
-        throw problem('xcode_module_preparation_failed', 'Xcode module preparation did not supply a complete typed successful terminal result');
+          || JSON.stringify([...prepared.configuredRootGUIDs].sort()) !== JSON.stringify([...evidence.closure.selectedRootGUIDs].sort()) || prepared.droppedDiagnostics)
+        throw invalidProof();
+      if (client.failure || (preparationError && !Number.isInteger(preparationError.rpcCode))) throw preparationError ?? invalidProof();
+      if (prepared.succeeded === false && prepared.operationState === 'failed' && JSON.stringify(prepared.typedTerminalResults) === '["failed"]')
+        throw problem('xcode_module_preparation_failed', `Xcode reported a failed module preparation: ${JSON.stringify(prepared.diagnostics ?? []).slice(-14000)}`);
+      if (preparationError || prepared.succeeded !== true || prepared.operationState !== 'succeeded'
+          || JSON.stringify(prepared.typedTerminalResults) !== '["ok"]' || !(prepared.typedPreparationCompleteCount > 0)) throw invalidProof();
       const observedInputs = new Set([project, ...selection.inputs, ...toolchain.inputPaths, ...Object.keys(evidence.proof.selection.inputSha256)]);
       for (const filename of evidence.projects) {
         if (path.basename(filename) === 'Package.swift' && !within(filename, state)) observedInputs.add(filename);
