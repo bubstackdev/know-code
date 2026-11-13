@@ -81,3 +81,66 @@ This does **not** implement semantic cross-repository callers/impact. Those path
 6. Run the required core plus relevant language/estate matrices, then one matching distribution/signing/platform checkpoint. Extend the existing harnesses instead of adding a parallel validation framework. The user-deferred real video-encoding benchmark remains unmeasured; this audit does not turn it into a pass or silently reimpose it as a release blocker.
 
 **Current direction:** deliver TS7 compatibility and useful, explicitly scoped Swift/Rust graph support with production Xcode device/simulator indexing. Bounded estate symbol search remains the sole optional feature candidate after required work. There is no evidence yet for a schedule or a claim that all of it fits; native TypeScript integration, production Xcode and Rust semantic/context work determine capacity.
+
+## Remaining release integration audit — 2026-11-13
+
+Read-only review of candidate `a3cbae8`; no new build, installed, signing or
+platform pass is asserted here. Earlier sections describe the initial audit,
+not current implementation: bridge adoption is now approved, and matching
+Debug production Xcode coverage includes 16 checks for both SDKs, native graph
+parity, partial publication/repair and actual preparation cancellation. See
+[the current ledger](IMPLEMENTATION_0_0_3.md#integrated-7-metadata-rejection-and-cache-repair)
+and [its cancellation receipt](../.artifacts/implementation-0.0.3/wave-01/assembled-xcode-integration-06/).
+
+### Accepted gates still requiring a release checkpoint
+
+- Promote only the finite validated language/compiler contract, including exact
+  tested TS7 releases, useful Swift/Rust graphs and Xcode device/simulator
+  support. [The packager](../scripts/package.py) still labels Swift/Rust
+  `experimental-v0.0.3`; [README](../README.md) and package versions still
+  describe 0.0.2. Update prerequisites and honest unsupported/partial forms
+  alongside that promotion, rather than treating shipped adapter bytes as
+  supported-language evidence.
+- Run one matching optimized core/relevant-language checkpoint and the existing
+  installed/native/CLI/MCP workflow on final artifacts. The expanded
+  [installed SwiftPM/Cargo checks](../tests/package_install.py) remain **unrun**;
+  nested SwiftPM manifest sandboxing under the outer offline/checkout-denial
+  policy is an explicit integration risk. Installed selected-native TS7 and
+  new-language MCP graphs also lack current artifact-bound evidence; the
+  existing MCP section precedes the opt-in language section and covers TS/C#.
+- Complete final distribution signing/notarization, normal-security install,
+  actual 0.0.2 upgrade/rollback/native-contract and declared-platform checks
+  using the existing [packaging](PACKAGING.md), [local-install](LOCAL_INSTALL.md)
+  and [validation](VALIDATION.md) mechanisms. Preserve exact producer/artifact
+  identity, extraction-policy backfill, retained data and compatibility errors.
+
+**Concrete separate-tool packaging gap:** the
+[bridge builder](../tooling/xcode-bridge/build.py) inventories unsigned staged
+CLI/service bytes in `know-code-xcode-bridge.json`, and
+[the adapter](../providers/swift/xcode.mjs) checks those exact hashes. Developer
+ID signing changes the bytes. The final tool inventory must describe the
+signed payload, retain the unsigned-to-signed provenance and pass installed
+verification without weakening those checks.
+[Common signing](../scripts/sign_packages.py) currently handles exactly the
+runtime/npm/NuGet archives; it does not package/sign this separate bridge.
+The bridge's deployment target alone also does not establish older Xcode/macOS
+compatibility; qualify and state its toolchain boundary separately.
+
+### Auditor recommendations, not additional accepted feature scope
+
+- Use one representative installed new-language MCP graph and the existing
+  real-HOME lifecycle/native-contract drivers, rather than multiplying every
+  language by every transport or rerunning all historical matrices. Final
+  artifact evidence remains necessary; this is a proposed economical route.
+- Finish bounded real-corpus qualification with current implementations. The
+  [full current Atelier attempt](IMPLEMENTATION_0_0_3.md#full-current-atelier-run-explicit-resource-limit)
+  stopped honestly at the unchanged 2 GiB limit, with generation zero; its warm
+  diagnostic retry also stopped. A temporary isolated 4 GiB diagnostic run is
+  awaiting the user's decision and has **not** changed the default or produced
+  a pass. Older Lars navigation evidence predates the selected-context/macro
+  implementation. Preserve external-input/resource gaps; this recommendation
+  does not require every unsupported nested package to become complete.
+
+The real encoding-performance gate remains explicitly deferred. Optional estate
+search and unaccepted initial audit proposals do not become release blockers
+through this checklist.
