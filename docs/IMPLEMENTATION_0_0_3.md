@@ -705,3 +705,43 @@ no real-corpus pass is claimed yet.
 The [exact-settings grouping research](reviews/SWIFT_INDEXING_GROUPS.md) now
 has a finite three-file parity pass through the unchanged reader and ingestion
 path. This remains research, with no production grouping or performance claim.
+
+### Dependency restoration budget follow-up
+
+Saved-file attempt 06 hit the separate two-minute SwiftPM dependency-download
+timeout while filling the new Library cache. Several packages were fetched,
+but restoration failed before all downloads completed. This is neither a cache
+compatibility pass nor a repeated compiler crash. The owner interrupted that
+attempt before retrying; the stop signal selected the receipt wrapper rather
+than its child, so automatic cleanup did not run. Explicit owner cleanup then
+restored exact source bytes/mode/mtime and two-core/2-GiB settings. A refused
+isolated socket connection plus an unheld coordinator writer lock confirmed
+shutdown; a remaining socket file alone was not treated as a running service.
+The original running receipts, interruption and cleanup evidence are retained,
+and attempt 06 is recorded as interrupted, never passed.
+
+The user then explicitly approved ten minutes for **dependency restoration**
+as well. `163bd6a` uses the existing shared Swift process helper's optional
+timeout only for SwiftPM `resolve` and Xcode package resolution. Metadata,
+per-file compiler and reader commands remain at two minutes; query/CPU/RAM
+budgets are unchanged. Existing failed preparation checkpoints still require
+explicit refresh. The next owned replay therefore explicitly retries setup
+before checking ordinary saved-source restoration, rather than silently
+bypassing the failed-checkpoint policy.
+
+Evidence: `atelier-production-full-01/saved-xcode-qualification-06/`
+(`preparation-before-stop.json`, `operator-stop.json`, `manual-cleanup.json`,
+`cleanup-confirmation-02.json`) and
+`wave-01/assembled-swift-restore-budget-build-01/`. The matching build passes;
+all three affected provider checks also pass in 49 seconds
+(`wave-01/swift-restore-budget-consumers-01/`), including real-child timeout
+forwarding, retained default behavior and actual SwiftPM progress/cache reuse.
+Matching producer is `0be3d8a559f04daa81f8da32c5c48e61`.
+
+Attempt 07 failed the test driver's 30-second subprocess guard around blocking
+CLI `index`, before corpus qualification. Its normal finally block restored
+source/settings and stopped the isolated coordinator. Attempt 08 instead uses
+the existing nonblocking Node `Workspace.refresh()` to submit the explicit
+retry, then polls bounded status. The CLI's own two-minute initial wait is
+unchanged; no product timeout was increased to repair the harness. Attempt 08
+is running at this checkpoint. Neither failed attempt is relabeled as passing.
