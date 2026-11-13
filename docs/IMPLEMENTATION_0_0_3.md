@@ -221,3 +221,19 @@ library-evolution checks on both platforms, without a second research-layer
 flag removal (`xcode-evolution-normalizer-01/` and
 `xcode-evolution-normalizer-body-error-01/`). Matching assembled artifacts and
 SwiftPM/native regression checks remain the next integration checkpoint.
+
+Matching Debug producer `9aa4dcffb1aa441dabd4545b65c67032`, built at `8155a11`,
+passes the expanded four-language native integration check (21 assertions,
+approximately 109 seconds) and the focused Swift/SwiftPM/Xcode-selection batch
+(approximately 42 seconds). Evidence:
+`wave-01/{assembled-debug-build-04,assembled-language-contexts-06,assembled-swift-provider-batch-04}/`.
+This is an assembled Debug checkpoint, not optimized/installed/release or
+encoding-performance certification.
+
+The generic Xcode package-cache gate now passes after correcting a canonical
+cache-alias denial and separating normal preparation from strict offline
+analysis. See [the durable cache qualification findings](XCODE_PACKAGE_CACHE_QUALIFICATION.md)
+for exact evidence and failed attempts. Wired07 adds central paths but is still
+under qualification. Proc-macro replay remains unintegrated: independent review
+identified asynchronous loader-diagnostic proof and same-kind attribute-origin
+cases requiring stronger evidence before its bindings can be published.
