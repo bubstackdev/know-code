@@ -536,3 +536,172 @@ with timestamps preceding `production-4g-04`; it does not certify a now-identica
 live checkout or attribute those changes to a writer. No originals were
 restored, edited or refreshed into the approved copy. Evidence:
 `atelier-production-full-01/original-census-after-4g-06.json`.
+
+
+## Real retained graphs and cache-path qualification
+
+`production-4g-07` published Atelier generation 7 after 1,111.83 seconds with
+105 compilation contexts (89 complete, 16 partial). A follow-up analysis began
+while the workspace remained stale. The owner cancelled at 1,303.38 seconds
+to address a proven generated-input enrollment defect; the driver restored
+2 GiB and stopped its coordinator. That run remains a **failed current-index
+qualification**. Two central generated asset files were present in the saved
+Xcode input list because physical cache paths failed lexical alias checks.
+One follow-up was observed; an endless loop or attribution of every freshness
+event to those files was not measured. See
+`atelier-production-full-01/generation-7-observation.json`.
+
+A separate explicitly stale generation-7 read probe passes CLI/Node/.NET
+parity for real `CanonicalJSON.encode(_:)` → `encoder()` callees, reverse
+callers, impact and exact complete saved source in SwiftPM, iPhone device and
+simulator contexts (`wave-01/atelier-generation-7-native-02/`). All 105 coverage
+rows were present, while the bounded expanded-detail budget omitted details
+for 84 rows and marked truncation. Its first attempt exceeded the API's
+256-KiB detail cap and remains failed. These are useful retained-graph results,
+not current freshness, cold-index performance or distribution certification.
+
+The Swift cache boundary correction at `c28865d` canonicalizes the work root
+once and filters old physical/aliased central outputs from retained input
+plans, preserving missing authored external inputs. Matching producer
+`3e5bdf885a014c36a32e0c3d6d409bf2` passes Swift, SwiftPM, Xcode provider and
+all 17 aliased-storage Xcode integration checks. Both SDKs retain generated
+source facts while published input lists exclude central output paths.
+Evidence: `wave-01/swift-canonical-cache-contexts-01/`.
+
+The real saved-source check then stopped after 26.27 seconds with a Swift
+frontend SIGSEGV during Library SwiftPM analysis. Generation 7, exact edited
+source bytes/mode/mtime and the 2-GiB setting were preserved/restored; no
+current result is asserted. Eighteen matching-time crash reports were retained
+alongside read-only cache metadata. Their Clang ASTReader stacks narrow the
+failure to module loading, but do not establish corrupt cache data, exact
+failed arguments or upstream-only fault ownership. The older cache and mixed
+path-spelling build plans remain intact. Evidence:
+`wave-01/atelier-saved-xcode-convergence-01/` and its corresponding corpus
+`compiler-crashes/` directory. Bounded operational compiler diagnostics and a
+controlled follow-up remain pending.
+
+Rust's host-library and bounded input-discovery fixes pass the existing
+managed/context/macro checks and the expanded actual-Cargo collection case:
+cold discovery 2 checks, invalidated warm proof 3, then steady warm reuse 1
+check with zero captures. A per-package normal/test scheduling bug exposed by
+the first new test was corrected; its failed attempt remains retained.
+Evidence: `wave-01/{rust-tooling-host-contexts-01,rust-stale-include-discovery-02}/`.
+
+The third real Lars run reached current generation 6 with 19 coverage rows at
+2 GiB after 192.87 seconds. Normal/test core contexts and their exact dependency
+proofs are present; the old driver's `StopIteration` occurs on a call inside a
+closure, a documented unsupported deferred-body form. It is not a missing core
+context or remaining input-snapshot failure. That run remains failed under its
+original expectation. A new read-only probe passes CLI/Node/.NET equality for
+an actual direct `softmax` → `pairwise_sum` call, callers, impact and full saved
+UTF-8 source against the retained generation, honestly flagged stale after the
+coordinator stopped (`wave-01/lars-published-direct-01/`). Native-link flags and
+metadata-only macro forms remain explicit gaps; no broader support or closure
+fallback was invented. Matching producer for this probe is
+`22ac387bedec4b4a9680dd35170ae41d` at `6aa7ae2`.
+
+
+## Compiler failure diagnostics and pending preparation budget
+
+Signal diagnostics now retain bounded UTF-8 stderr and append exact source,
+compiler and module-cache context at the end of the message, so the existing
+8-KiB shared diagnostic tail preserves them. The lightweight existing
+SIGTERM/ENOTDIR checks pass. Controlled saved-source attempts 02 and 03 remain
+failed, with original source and 2 GiB restored. Attempt 03 identifies
+`atelier-app/Library/Sources/AtelierLibraryApp/main.swift`, the owned Library
+`build/out/ModuleCache.noindex`, and `_DarwinFoundation1` duplicate-module
+text preceding the SIGSEGV. This establishes the actual compiler context;
+it does not establish which serialized artifact is responsible.
+
+The 465 owned PCM files (502,063,368 logical bytes) were preserved by a
+copy-on-write copy with matching SHA-256 hashes before the later diagnostic
+replay. The entire Library `build/out` was then moved intact to
+`quarantine-library-out-01`; checkouts, source and serving index were not
+removed. The clean-output attempt 04 remains failed after 209.06 seconds with
+a BSP child SIGTERM. It does **not** certify a cache repair or prove that the
+original crash disappeared: a request/cleanup timeout can mask the primary
+error. Old output and cache evidence remain durable.
+
+The shared JSON-RPC timer now records its original timeout as failure before
+terminating, rejecting all pending requests with that same cause. All 15
+transport checks pass, including cause identity after child exit. SwiftPM now
+performs graceful shutdown only after successful analysis and always
+terminates its child, preventing a secondary cleanup RPC from replacing a
+primary failure. The 120-second duration remains unchanged. The user has been
+asked whether heavy Swift module preparation may use up to ten minutes while
+metadata stays at two minutes and query/CPU/RAM budgets remain unchanged;
+that preference is pending, not silently granted.
+
+Evidence: `wave-01/jsonrpc-timeout-cause-01/`,
+`swift-operational-diagnostics-{01,02}/`,
+`wave-01/atelier-saved-xcode-diagnostic-{02,03}/`,
+`wave-01/atelier-fresh-derived-cache-04/`, and the corpus cache/crash manifests.
+Matching causal-failure Debug producer is
+`c0a52d35308044578c46e4e2363cfce5` at `0c4db23`.
+The relevant compiler-transport consumer checks are a separate recorded run;
+no release, installed or encoding qualification is implied.
+
+
+The user subsequently approved ten minutes **only** for heavy Swift module
+preparation. `f20f90b` adds a per-request timer override and passes it solely
+at SwiftPM/Xcode `buildTarget/prepare`; metadata remains 120 seconds and
+query/CPU/RAM budgets are unchanged. All 16 transport checks pass, including
+a short delayed-response override followed by the unchanged default timeout.
+
+The transport-consumer run at `0c4db23` remains failed overall: its individual
+transport, Rust navigation/provider, Swift toolchain/provider/SwiftPM and
+Xcode-provider checks pass, but the four-language fixture expires its
+120-second initial wait while C# is still analyzing, without a reported
+provider failure. The initial correctness-only setup guard is now 300 seconds;
+saved-update waits and product deadlines remain unchanged. This is not a
+latency pass or a reinterpretation of the failed run.
+
+An executable-name/CPU-only observation records load average about 103 on
+18 logical CPUs with active AV1 encoders. Their jobs were not modified.
+These functional checks under load do not certify the deferred real-encoding
+performance gate. Evidence: `validation-load-01.json`,
+`wave-01/{compiler-transport-consumers-01,jsonrpc-prepare-budget-01}/`.
+
+## SwiftPM cache compatibility qualification
+
+The fifth saved-Xcode attempt remains failed after 680.30 seconds. After the
+Library output quarantine, analysis advanced to Native, where its untouched
+legacy module cache produced a CoreAudio duplicate-module diagnostic and a
+compiler SIGSEGV while indexing `AtelierLeaseSignalProbe/main.swift`. Generation
+7 stayed available; the owned edited file's bytes/mode/mtime, two-core/2-GiB
+settings, and stopped coordinator were restored. This comparison supports a
+derived-cache compatibility boundary; it does not identify a corrupt PCM or
+certify an upstream-only fault.
+
+`874f110` adds one compatibility tag and the canonical work root to both the
+existing SwiftPM state key and preparation fingerprint. Incompatible old trees
+are retained, not deleted or retried. First use creates fresh derived state
+and may refresh compiler context identities once; subsequent warm/saved
+analysis must preserve identities within the new layout. Old-tree disk cost
+remains, and no new cleanup mechanism is claimed.
+
+Matching Debug producer `1cf420a3ade042bcb3920701c4bf6e69` built successfully.
+The targeted SwiftPM check passes legacy failed-checkpoint bypass, retained
+old-cache bytes, successful new preparation, warm reuse, saved repair and
+stable new-layout identities. The combined run also passes all 16 transport checks, all 17 Xcode
+device/simulator integration checks, and the 21-check four-language/native
+workflow, including scoped saves and empty publication. These are focused
+development checks, not release, installed or encoding acceptance.
+
+Evidence: `atelier-production-full-01/saved-xcode-qualification-05/`,
+`wave-01/assembled-swift-cache-fence-build-01/`, and
+`wave-01/swift-cache-fence-consumers-01/`. The next owned saved-file replay
+allows the one-time layout transition, then requires exact context/caller/
+callee identity stability between its changed and restored generations.
+
+`f49e57f` separately reports body compilation and IndexStore reading as
+`analyzing` through the existing progress protocol. Its matching producer is
+`1faad96f329c42398a496c8340a0edd3`; the existing SwiftPM fixture passes actual
+body/reader/publication event ordering and cache-reuse assertions
+(`wave-01/swift-analysis-progress-01/`). No new progress tracker or query
+behavior was added. The owned saved-file attempt 06 is running on this source;
+no real-corpus pass is claimed yet.
+
+The [exact-settings grouping research](reviews/SWIFT_INDEXING_GROUPS.md) now
+has a finite three-file parity pass through the unchanged reader and ingestion
+path. This remains research, with no production grouping or performance claim.
