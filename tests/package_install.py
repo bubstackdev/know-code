@@ -322,20 +322,75 @@ finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp
 checks.append('installed_MCP_shared_queries_and_EOF')
 if args.experimental:
  before=ready(node)['generation']
- (WORKSPACE/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n')
- (WORKSPACE/'lib.rs').write_text('pub fn packaged_rust() -> i32 { 42 }\n')
- (WORKSPACE/'Sample.swift').write_text('struct PackagedSwiftType { let value: Int }\n')
+ rust_package=WORKSPACE/'rust-package';rust_package.mkdir()
+ swift_package=WORKSPACE/'swift-package';swift_sources=swift_package/'Sources/PackagedSwift';swift_sources.mkdir(parents=True)
+ (rust_package/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n[workspace]\n')
+ rust_file=rust_package/'lib.rs';swift_file=swift_sources/'Model.swift'
+ rust_text='// café 🦀 installed offline source\npub fn packaged_rust_leaf(value: i32) -> i32 { value + 1 }\npub fn packaged_rust_entry() -> i32 { packaged_rust_leaf(41) }\npub fn packaged_rust_reference() -> fn(i32) -> i32 { packaged_rust_leaf }\n'
+ swift_text='// café 🦀 installed offline source\npublic func packagedSwiftLeaf(_ value: Int) -> Int { value + 1 }\npublic func packagedSwiftEntry() -> Int { packagedSwiftLeaf(41) }\npublic func packagedSwiftReference() -> (Int) -> Int { packagedSwiftLeaf }\n'
+ (swift_package/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "PackagedSwift", targets: [.target(name: "PackagedSwift")])\n')
+ rust_file.write_text(rust_text);swift_file.write_text(swift_text)
  ready(node,before+1)
  # More saves can queue while discovery reconciles; wait for both names.
  until=time.monotonic()+90
  while time.monotonic()<until:
   ready(node)
-  rust=query({'op':'symbols','name':'packaged_rust'})
-  swift=query({'op':'symbols','name':'PackagedSwiftType'})
+  rust=query({'op':'symbols','name':'packaged_rust_entry'})
+  swift=query({'op':'symbols','name':'packagedSwiftEntry()'})
   if rust.get('symbols') and swift.get('symbols'):break
  else:raise AssertionError((rust,swift))
- assert any(c['status']=='partial' for c in rust['coverage'])
- checks.append('experimental_packaged_Swift_reader_and_Rust_adapter')
+ MIN_GENERATION=ready(node)['generation']
+ def language_symbol(name,language,compilation=None):
+  request={'op':'symbols','name':name}
+  if compilation is None:request.update(coverage_detail='full',detail_max_bytes=262144)
+  else:request['compilation_id']=compilation
+  found=query(request)
+  reports={row['compilation_id']:row for row in found['coverage'] if row['language']==language}
+  if language=='rust' and compilation is None:
+   reports={key:row for key,row in reports.items() if isinstance(row.get('analysis_options',{}).get('context'),dict)
+            and row['analysis_options']['context']['profile']['test'] is False}
+  values=[symbol for symbol in found.get('symbols',[]) if not symbol['external'] and symbol['compilation_id'] in reports
+          and (compilation is None or symbol['compilation_id']==compilation)]
+  assert len(values)==1,(name,values,found)
+  return values[0],reports[values[0]['compilation_id']]
+ def language_graph(language,entry_name,leaf_name,reference_name,filename):
+  entry,report=language_symbol(entry_name,language);compilation=entry['compilation_id']
+  assert report['capabilities']['calls']=='partial' and report['capabilities']['dependencies']=='partial',report
+  if language=='swift':assert report['analysis_options']['origin']=='swiftpm_build_server',report
+  else:assert report['status']=='partial' and report['analysis_options']['rustContextPolicy']==2,report
+  leaf,_=language_symbol(leaf_name,language,compilation);reference,_=language_symbol(reference_name,language,compilation)
+  callees=query({'op':'callees','symbol_id':entry['id'],'max_depth':1})['graph']
+  called=next(finding for finding in callees['findings'] if finding['symbol']['id']==leaf['id'])
+  assert called['paths'] and all(edge['kind']=='call' and edge['resolution']=='compiler_bound' for path in called['paths'] for edge in path),called
+  callers=query({'op':'callers','symbol_id':leaf['id'],'max_depth':1})['graph']
+  assert entry['id'] in {finding['symbol']['id'] for finding in callers['findings']},callers
+  assert reference['id'] not in {finding['symbol']['id'] for finding in callers['findings']},callers
+  impact=query({'op':'impact','symbol_id':leaf['id']})['graph']
+  assert {entry['id'],reference['id']}<={finding['symbol']['id'] for finding in impact['findings']},impact
+  occurrences=query({'op':'references','symbol_id':leaf['id']})
+  assert any(item['role']=='reference' for item in occurrences['occurrences']),occurrences
+  for occurrence in occurrences['occurrences']:
+   location=occurrence['location']
+   source=query({'op':'source','artifact_id':location['artifact_id'],'snapshot':occurrences['snapshot'],
+                 'content_hash':location['content_hash'],'max_bytes':4096})['source']
+   exact_source(source,filename)
+   assert filename.read_bytes()[location['start_byte']:location['end_byte']].decode()==leaf_name.split('(')[0],occurrence
+ language_cases=[('rust','packaged_rust_entry','packaged_rust_leaf','packaged_rust_reference',rust_file,rust_text,
+                  '\npub fn broken_package() -> i32 { missing_package_value }\n'),
+                 ('swift','packagedSwiftEntry()','packagedSwiftLeaf(_:)','packagedSwiftReference()',swift_file,swift_text,
+                  '\npublic func brokenPackage() -> Int { missingPackageValue }\n')]
+ for language,entry_name,leaf_name,reference_name,filename,text,broken in language_cases:
+  language_graph(language,entry_name,leaf_name,reference_name,filename)
+  previous=ready(node)['generation'];filename.write_text(text+broken)
+  MIN_GENERATION=ready(node,previous+1)['generation']
+  status=query({'op':'symbols','limit':1})
+  reports=[row for row in status['coverage'] if row['language']==language]
+  assert reports and any(row['status']=='partial' and row['diagnostic_counts'].get('error',0) for row in reports),status
+  previous=ready(node)['generation'];filename.write_text(text)
+  MIN_GENERATION=ready(node,previous+1)['generation']
+  language_graph(language,entry_name,leaf_name,reference_name,filename)
+ checks+=['installed_offline_SwiftPM_Cargo_direct_calls_value_impact_exact_source_native_parity',
+          'installed_offline_SwiftPM_Cargo_saved_compiler_partial_repair']
 final_generation=ready(node)['generation'];node.close();net.close();checks.append('packaged_saved_file_updates')
 command(HOST,'coordinator','stop');until=time.monotonic()+20
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
