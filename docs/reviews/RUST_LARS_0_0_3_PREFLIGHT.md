@@ -23,6 +23,24 @@ personal-data sibling make a new, narrowly scoped personal grant reviewable;
 opening it alone cannot grant execution. Do not write grants from a test script
 or reuse unrelated Swift fixture grants.
 
+## Fresh reviewable copy prepared
+
+The new main-checkout artifact
+`.artifacts/implementation-0.0.3/lars-production-full-01/snapshot` now retains
+3,934 regular files / 179,968,172 bytes, root plus all nine member manifests,
+vendored native inputs and test resources, with zero retained symlinks and no
+source rewrites. Its sibling `personal-data` was created empty/untrusted.
+Full source SHA256/stat/membership before/after checks match; copied file hashes,
+mode and mtime match. Exact exclusions and selected copy-process HOME/tool/env
+inputs are recorded; other ambient values are hashed. No compiler/restore/index
+or external target-artifact copying occurred. Historical evidence is untouched.
+
+The preparation manifest is
+`.artifacts/implementation-0.0.3/lars-production-full-01/manifest.json`, SHA256
+`9491a34a6da6d6fb9cb59d8ce3a12148d190238ef27c16659ed0599895e503d9`.
+It binds the original-before/after, copied census and environment receipts.
+This prepares a concrete trust scope; it is not a grant or a qualification run.
+
 ## What the existing results prove
 
 `.artifacts/rust-real/summary.json` records a successful **partial combined
