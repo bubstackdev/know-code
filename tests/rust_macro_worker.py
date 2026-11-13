@@ -101,6 +101,7 @@ def validate(payload):
         assert owned_sources == ['src/lib.rs'], owned_sources
         report = next(frame['report'] for frame in payload['messages'] if frame.get('report', {}).get('compilationId') == identity)
         assert any(item['code'] == 'rust_unproven_definition_origin' for item in report['diagnostics']), report
+        assert len([item for item in report['diagnostics'] if item['code'] == 'rust_lookup_syntax_unavailable' and 'macro-api/src/lib.rs' in item.get('path', '')]) == 1, report
 
 
 positive_environment, positive_log = analyzer_proxy('positive-proxy')
@@ -152,6 +153,6 @@ assert any(item.get('method') == 'textDocument/diagnostic' and item.get('result'
     'ordinary and attribute-preserved body calls', 'same-kind attribute rename omitted without breaking aliases', 'unproven generated declarations omitted',
     'macro implementation is not a runtime call target', 'dependency source remains lookup-only',
     'Cargo-selected compiler/sysroot independent of unrelated PATH rustc',
-    'synchronous full diagnostics gate replay', 'healthy server with actual dylib-load failure publishes no fallback facts'],
+    'synchronous full diagnostics gate replay', 'lookup-only syntax presentation panic omits unproved targets', 'healthy server with actual dylib-load failure publishes no fallback facts'],
     'limits': ['no expanded-source identity promises', 'arbitrary macro runtime file/environment input tracking remains partial']}, indent=2))
 print(ARTIFACTS)

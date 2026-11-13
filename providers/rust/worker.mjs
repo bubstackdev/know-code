@@ -210,7 +210,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
   const canonicalCallables = new Map();
   let originAnchors = 0, omittedOrigins = 0;
   function rememberOrigins(target, syntax) {
-    const key = `${target.uri}@${target.artifact.sha256}`, anchors = syntax.declarationAnchors();
+    const key = `${target.uri}@${target.artifact.sha256}`, anchors = syntax?.declarationAnchors() ?? new Map();
     if (anchors.size > 65536) return undefined;
     if (declarationOrigins.has(key)) { originAnchors -= declarationOrigins.get(key).size; declarationOrigins.delete(key); }
     while (declarationOrigins.size && (declarationOrigins.size >= 64 || originAnchors + anchors.size > 65536)) {
@@ -229,8 +229,13 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
       // remain an explicit identity gap instead of threatening the bounded RPC
       // connection needed to finish this unit's own source facts.
       if (!sources.has(target.uri) && target.artifact.utf8.length > 64 * 1024) return false;
-      const syntax = await syntaxGraph(analyzer, target);
-      if (!syntax) return false;
+      const syntax = await syntaxGraph(analyzer, target, !sources.has(target.uri) ? {
+        onPresentationUnavailable: error => {
+          if (diagnostics.length < 100) diagnostics.push({code: 'rust_lookup_syntax_unavailable', severity: 'warning',
+            path: relative(root, target.filename), message: `Lookup-only authored-origin proof is unavailable because the analyzer syntax presentation failed (${error.rpcCode}); affected targets were omitted without reusing invocation anchors.`});
+        }
+      } : {});
+      if (!syntax) { rememberOrigins(target, undefined); return false; }
       anchors = rememberOrigins(target, syntax);
       if (!anchors) return false;
     } else { declarationOrigins.delete(key); declarationOrigins.set(key, anchors); }
@@ -329,9 +334,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
     // callee's module. Outline declarations select request sites; only a unique
     // analyzer definition enrolls another file. No path/name convention does.
     const outlines = new Map();
-    const macroTokens = new Map();
     const macroDiagnostics = [];
-    let cachedTokenValues = 0;
     for (const current of sources.values()) {
       analyzer.notify('textDocument/didOpen', {textDocument: {uri: current.uri, languageId: 'rust', version: 1, text: current.text}});
       const outline = initialized.capabilities.documentSymbolProvider ?
@@ -341,16 +344,6 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         const actual = await analyzer.request('rust-analyzer/viewFileText', {uri: current.uri});
         if (actual !== current.text && actual !== current.text.replace(/\r\n/g, '\n'))
           throw new Error('Macro diagnostic source differs from its saved compiler-context snapshot');
-        const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
-        cachedTokenValues += tokens?.data?.length ?? 0;
-        if (cachedTokenValues > 1000000) {
-          send('report', {compilationId, status: 'partial', diagnostics: [...diagnostics,
-            {code: 'rust_macro_replay_limited', severity: 'error', path: projectPath,
-              message: 'Macro-enabled semantic preflight exceeds its bounded token allowance; no fallback bindings were published.'}],
-            capabilities: {calls: 'partial', dependencies: 'partial', dispatch: 'partial', project_links: 'partial'}});
-          return;
-        }
-        macroTokens.set(current.uri, tokens);
         const pulled = await analyzer.request('textDocument/diagnostic', {textDocument: {uri: current.uri},
           ...(typeof pullDiagnostics.identifier === 'string' ? {identifier: pullDiagnostics.identifier} : {})});
         if (pulled?.kind !== 'full' || !Array.isArray(pulled.items))
@@ -432,8 +425,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         }};
         collect(outline);
       }
-      const tokens = macroTokens.get(current.uri) ?? await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
-      macroTokens.delete(current.uri);
+      const tokens = await analyzer.request('textDocument/semanticTokens/full', {textDocument: {uri: current.uri}});
       function* positions() {
        let line = 0, character = 0;
        for (let i = 0; i < (tokens?.data.length ?? 0); i += 5) {

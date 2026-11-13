@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {writeDerivedFile} from '../providers/rust/preparation.mjs';
 import {removeCapturedOutput} from '../providers/rust/cargo-contexts.mjs';
 import {externArguments} from '../providers/rust/contexts.mjs';
+import {syntaxGraph} from '../providers/rust/graph.mjs';
 
 const macroCommand = {cwd: process.cwd(), args: ['--crate-type', 'proc-macro', '-L', 'dependency=/owned/deps', '--extern', 'proc_macro']};
 assert.deepEqual(externArguments(macroCommand), {dependencies: [], sysroot: ['proc_macro']});
@@ -18,6 +19,23 @@ for (const args of [
 ]) assert.throws(() => externArguments({...macroCommand, args}), /pathless extern/);
 assert.deepEqual(externArguments({...macroCommand, args: ['--extern', 'renamed=/owned/dependency']}),
   {dependencies: [{name: 'renamed', filename: '/owned/dependency'}], sysroot: []});
+
+const proofSource = {uri: 'file:///owned/saved.rs', text: 'fn saved() {}'};
+const presentationError = Object.assign(new Error('owned synthetic syntax presentation failure'), {rpcCode: -32603});
+const presentationAnalyzer = {request: async method => {
+  if (method === 'rust-analyzer/viewFileText') return proofSource.text;
+  throw presentationError;
+}};
+let omittedProofs = 0;
+assert.equal(await syntaxGraph(presentationAnalyzer, proofSource, {onPresentationUnavailable: () => omittedProofs++}), undefined);
+assert.equal(omittedProofs, 1);
+await assert.rejects(syntaxGraph(presentationAnalyzer, proofSource), error => error === presentationError);
+await assert.rejects(syntaxGraph({request: async () => { throw presentationError; }}, proofSource,
+  {onPresentationUnavailable: () => assert.fail('source-read errors are not presentation gaps')}), error => error === presentationError);
+await assert.rejects(syntaxGraph({request: async method => {
+  if (method === 'rust-analyzer/viewFileText') return proofSource.text;
+  throw new Error('owned synthetic transport failure');
+}}, proofSource, {onPresentationUnavailable: () => assert.fail('transport errors must remain fatal')}), /transport failure/);
 
 const repository = fileURLToPath(new URL('..', import.meta.url));
 const directory = path.join(repository, '.artifacts/rust-context-io', `${Date.now()}-${process.pid}`);
@@ -84,6 +102,7 @@ fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify({passed: t
   'FIFO setup/source/artifact reads fail without blocking', 'derived FIFO target replaced atomically',
   'partial-write ENOSPC simulation cleans the owned temporary file', 'unsupported jobserver format refused before tool execution',
   'bare Cargo proc_macro requires a proc-macro unit and sysroot-only direct lookup; unknown/conflicting search forms rejected',
+  'only an explicitly allowed syntax-presentation RPC failure omits proof; owned source-read and transport failures remain fatal',
   'fake artifact cleanup preserves foreign/state/symlink sentinels and removes only owned target/build files'],
   simulatedWriteFailure: {ownedFilesBeforeFailure: ownedBeforeFailure, retainedFilesAfterCleanup: 0}}, null, 2));
 process.stdout.write(`${directory}\n`);

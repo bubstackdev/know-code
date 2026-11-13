@@ -114,12 +114,21 @@ export class RustGraph {
   }
 }
 
-export async function syntaxGraph(analyzer, source) {
+export async function syntaxGraph(analyzer, source, {onPresentationUnavailable} = {}) {
   try {
     const actual = await analyzer.request('rust-analyzer/viewFileText', {uri: source.uri});
     if (typeof actual !== 'string' || actual !== source.text && actual !== source.text.replace(/\r\n/g, '\n'))
       throw new Error('Rust analyzer source differs from the retained saved snapshot');
-    return new RustGraph(source, await analyzer.request('rust-analyzer/viewSyntaxTree', {textDocument: {uri: source.uri}}), actual);
+    let encoded;
+    try { encoded = await analyzer.request('rust-analyzer/viewSyntaxTree', {textDocument: {uri: source.uri}}); }
+    catch (error) {
+      // The presentation extension can panic while expanding Rust-looking
+      // strings. A lookup-only caller may omit identity proof for that file;
+      // required owned syntax, source equality and transport failures stay fatal.
+      if (error.rpcCode === -32603 && onPresentationUnavailable) { onPresentationUnavailable(error); return undefined; }
+      throw error;
+    }
+    return new RustGraph(source, encoded, actual);
   } catch (error) {
     if (error.rpcCode === -32601) return undefined;
     throw error;
