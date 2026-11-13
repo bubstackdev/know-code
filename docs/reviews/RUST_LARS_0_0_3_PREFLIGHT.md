@@ -142,3 +142,51 @@ budgets still apply. Do not widen policies, skip members, silently swap tools,
 raise limits or add a new validation framework to turn this corpus green.
 No current exact-context Lars run or installed/release/performance result is
 claimed here.
+
+## First current production run: measured failure and narrow correction
+
+Root-owned `lars-production-full-01/production-default-01/` completed in 109.44s
+under the unchanged 2 CPU / 2 GiB defaults. The coordinator published generation
+2 with 12 contexts, including healthy C#/TypeScript projects and an explicit Rust
+unavailable summary; no Rust graph qualified. Owned source checks passed and the
+owned coordinator stopped. This is a failed Rust qualification, not success from
+the healthy siblings. The unavailable Moedex.Lars NuGet package is a separate
+repository dependency problem.
+
+Read-only follow-up retained `failure-analysis-readonly.json` beside that run.
+Its exact `.fingerprint/*/output-*` files identify eight library codegen refusals:
+`dtor-30fe02138d717190`, `find-msvc-tools-3b2cebe2cc9a9ec4`,
+`napi-build-d618bda998d72d86`, `semver-1aa84e9ae4fd67c7`,
+`shlex-655b58d0674bbf02`, `unicode-ident-61ce588b7457064a`,
+`unicode-segmentation-5e808ecb7d5a4ff3`, `version_check-b27f711fdcf7628f`.
+The retained dependency-plan's typed resolve graph places these on actual
+build-script/proc-macro dependency chains: cc→find-msvc-tools/shlex,
+generic-array build→version_check, napi/lars-node build→napi-build,
+derive→proc-macro2/syn→unicode-ident, napi-derive→convert_case→unicode-segmentation,
+→ctor→dtor and →napi-derive-backend→semver. They are ordinary library dependencies
+needed to build executable tooling, not requested final applications.
+
+`cargo-contexts.mjs` supplies only direct custom-build/proc-macro source roots to
+`capture.mjs`, whose emit guard permits link only for those roots. A narrow fix
+can admit intermediate **lib/rlib** codegen for typed tooling-dependency roots,
+while continuing to reject application/test executable, cdylib/staticlib and
+other unsupported outputs. Retain all exact source/extern-before, emitted-output,
+compiler/cfg/environment and Cargo artifact joins; a permission whitelist is not
+semantic producer evidence. Failed raw command records are scratch-cleaned by
+`collectCargoContexts` finally, so these fingerprint operands do not recover the
+deleted complete argv. Preserve that evidence limit; do not invent measured args.
+
+The ninth fingerprint refusal is `moedex-lars-derive-7f9bf401d0d2d45e`'s **test**
+library: `externArguments` currently allows bare sysroot proc_macro only for an
+explicit proc-macro crate type. A narrow metadata/test extension must preserve
+its no general crate/all search path, no explicit same-name alias and exact
+compiler/sysroot-source proof; never guess a user artifact by crate name.
+
+The surviving local derive unit is separately proven status 0 with
+`--crate-type proc-macro --emit=dep-info,metadata`, a Cargo `.rmeta` filename and
+only dep-info/metadata artifact messages. Its no-dylib warning is honest: it is
+not an observed loader failure. It must never become a fabricated executable
+macro. An own-root metadata-only context may remain explicitly unsupported;
+every reachable **macro dependency** still needs its unique actual emitted
+dylib and exact consumer hash join. No correction or runtime rerun is claimed by
+this read-only analysis.
