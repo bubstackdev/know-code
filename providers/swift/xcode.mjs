@@ -188,7 +188,7 @@ function restoration({root, project, selection, state, bridge, toolchain, reques
     const result = run('/usr/bin/xcrun', args, path.dirname(container(project)), env);
     if (result.status !== 0) throw Error(`${result.stdout}\n${result.stderr}`);
     const inputs = Object.fromEntries([...new Set([project, ...selection.inputs, ...toolchain.inputPaths])].filter(exists).map(file => [file, hash(fs.readFileSync(file))]));
-    plan = {inputs, outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
+    plan = {inputs, analysisInputs: plan?.analysisInputs ?? [], outputs: [planFile, path.join(state, 'clones'), path.join(state, 'cache')], bridgeManifest: bridge.manifestSha256, configuration};
     put(planFile, plan);
   } catch (cause) { error = String(cause.message).slice(-16000); onDiagnostic(diagnostic('dependency_restore_failed', error, relative(root, project))); }
   send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
@@ -209,8 +209,9 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
   for (const dir of [state, path.join(state, 'clones'), path.join(state, 'cache')]) fs.mkdirSync(dir, {recursive: true});
   const key = `xcode:${project}`, fingerprint = hash(`${request.preparationFingerprint}:${toolchain.identity}:${bridge.manifestSha256}:${selection.schemePath}:xcode-preparation-1`);
   let previous = request.preparations.find(item => item.key === key);
-  if (previous?.fingerprint === fingerprint && !previous.succeeded && !request.retryPreparation) return gap({root, project, toolchain, selection, error: problem('dependency_restore_failed', previous.error)});
   let plan; try { plan = json(path.join(state, 'dependency-plan.json')); } catch { /* First preparation is explicit below. */ }
+  if (previous?.fingerprint === fingerprint && !previous.succeeded && !request.retryPreparation) return gap({root, project, toolchain, selection,
+    inputs: plan?.analysisInputs ?? [], error: problem('dependency_restore_failed', previous.error)});
   // The fixed bridge's factory sets these same service keys. Supply one
   // coherent child environment to normal preparation and metadata as well.
   const env = {...toolchain.env, TMPDIR: path.join(state, 'tmp'), SWBBUILDSERVICE_PATH: bridge.service,
@@ -323,14 +324,14 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
       // Only compiler-selected saved inputs enter the shared watcher manifest.
       // Job/module/generated output paths never trigger a save/restore loop.
       const setupInputs = [...new Set([...observedInputs, ...evidence.projects.filter(file => path.basename(file) === 'Package.swift')])].filter(file => /(?:^|\/)(?:Package(?:@swift-[0-9.]+)?\.swift|Package\.resolved|project\.pbxproj|contents\.xcworkspacedata|\.swift-version|\.tool-versions|\.xcode-version)$|\.(?:xcscheme|xcconfig)$/.test(file));
-      plan = {inputs: Object.fromEntries(setupInputs.filter(exists).map(file => [file, hash(fs.readFileSync(file))])),
+      plan = {inputs: Object.fromEntries(setupInputs.filter(exists).map(file => [file, hash(fs.readFileSync(file))])), analysisInputs: [...observedInputs],
         outputs: [path.join(state, 'dependency-plan.json'), path.join(state, 'clones'), path.join(state, 'cache'), ...evidence.projects.filter(file => within(file, state))], bridgeManifest: bridge.manifestSha256, configuration: evidence.proof.selection.configuration};
       put(path.join(state, 'dependency-plan.json'), plan);
     } catch (error) {
       if (error.code === 'dependency_restore_failed') preparationFailed = error;
       if (analyzing || error.fatal || client?.failure || error.code === 'xcode_saved_inputs_changed') throw error;
       if (!error.code && /interrupted|resource-limited|timed out|oversized|truncated|frame|compiler\/driver failed|Swift tool failed|IndexStore reader failed/i.test(error.message)) throw error;
-      gap({root, project, toolchain, selection, platform, error, inputs: plan ? Object.keys(plan.inputs) : []});
+      gap({root, project, toolchain, selection, platform, error, inputs: plan?.analysisInputs ?? (plan ? Object.keys(plan.inputs) : [])});
     } finally { if (client) await close(client); }
   }
 }
