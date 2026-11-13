@@ -1,208 +1,212 @@
 # Experimental Rust analysis
 
-The first Rust adapter uses the repository-selected **rust-analyzer semantic
-engine**, through LSP, and publishes into Know Code's existing worker contract.
-It does not invoke rustc to obtain resolved compiler facts, and it is not full
-Rust language support. Every compilation is explicitly `partial`, with the
-reason retained in coverage. This work begins the planned v0.0.3 language slice;
-it does not change the v0.0.1 acceptance requirements.
+Rust source analysis remains experimental in shipped v0.0.2. The v0.0.3
+integration branch now captures actual Cargo/rustc compilation contexts and
+uses rust-analyzer for semantic extraction within each selected context. All
+Rust graph capabilities remain explicitly partial. Rust as Know Code's core
+implementation language does not establish Rust source-language support.
 
-## Shared boundaries
+| State | Evidence and boundary |
+| --- | --- |
+| Shipped v0.0.2 | Experimental adapter; no v0.0.3 language-release claim. |
+| Integrated at `8155a11` | Managed compiler-captured contexts, selected-root ownership, direct calls/dependencies, native parity and policy backfill. |
+| Unintegrated macro candidate `dbf6e54` | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Environment/I/O collection checks pass; updated macro-origin fixture qualification is still pending. |
 
-`providers/rust/worker.mjs` imports the same Protobuf schema/codec as the other
-workers. It sends provider identity, compilation scope, retained UTF-8 source,
-symbols, occurrences, reports and completion. Source payload hashing and
-publication remain in the existing Rust core; this adapter contains no SQLite
-or query engine. Node is a worker runtime, not a required embedded query RPC.
+## One provider contract and one core
 
-Discovered `Cargo.toml` files are evaluated with `cargo metadata --offline
---no-deps --format-version 1`. Member manifests canonicalize to
-`workspace_root/Cargo.toml`, and multiple discovered members produce one
-workspace compilation. Its ID is `rust:<root-relative-workspace-manifest>`.
-Incremental requests for that same manifest replace that same compilation
-scope. All workspace members contribute sources, including test targets. The
-enclosing Cargo workspace must be inside the registered root. Registering only
-a member directory whose Cargo workspace is outside that root fails with an
-actionable instruction to register the enclosing workspace/repository root;
-the worker does not emit ownership scopes the host cannot later refresh. The
-source inventory begins at Cargo target roots and enrolls additional modules only from unique analyzer-resolved module declarations. Orphan/vendor files are excluded. This is still a combined analyzer view rather than exhaustive per-unit compiler ownership. Definitions outside retained first-party source stay external.
+The Node worker shares `providers/shared/protocol.mjs` and the versioned bounded
+Protobuf contract with other providers. It emits compilation identities, saved
+UTF-8 source, symbols, occurrences, relationships and analysis reports. The Rust
+core owns storage, atomic publication, updates and bounded queries; the adapter
+contains no SQLite or graph-query engine. Native .NET/Node queries stay
+in-process. Rust-specific package/compiler planning stays in narrow adapter
+modules rather than another scheduler or validation framework.
 
-Input paths include member/workspace manifests, an existing Cargo lockfile and
-ancestor Cargo configuration/toolchain selection files. The coordinator still
-owns change reconciliation and scheduling. These are not complete Cargo input
-or environment fingerprints: external path dependencies, configuration changes
-outside these paths and generated inputs need further work.
+Cargo manifests canonicalize to the evaluated workspace manifest, deduplicating
+member requests. A workspace outside the registered root is rejected with an
+actionable registration error. Standalone Rust files are not supported. Managed
+requests carry the shared Rust analysis policy. Historical direct-worker
+requests without policy retain a combined analyzer view for focused legacy
+fixtures; that view is never relabeled as an exact captured context.
 
-## Compiler-context implementation checkpoint
+## Managed compiler contexts and ownership
 
-The user accepted Cargo-check capture followed by separate rust-analyzer
-selected-root graphs as the production direction. The finite probe receipts
-in the current integration documentation establish only their declared fixture
-cases; they do not certify general cfg/input replay or production publication.
+The coordinator resolves repository/default target platforms, selected features
+and the default-features setting. For each selection the adapter performs
+`cargo check --offline --workspace --all-targets --keep-going --jobs 1` with
+bounded JSON output and its private compiler wrapper. Actual ordinary/test
+library, binary and integration contexts remain distinct. It does not enumerate
+every feature combination or select a Cargo profile from the workspace's C#
+configuration label. Non-`Debug` labels carry the current unmapped-profile
+warning.
 
-Managed policy requests now route through `cargo-contexts.mjs`, `contexts.mjs`
-and the compiler-only `capture.mjs`. Absent-policy direct requests retain the
-historical experimental combined view described elsewhere in this document.
-Captured units require successful
-compiler status, exact Cargo/rustc artifact joins, emitted dep-info membership,
-matching pre-compilation input hashes and content-bound outputs. Unknown
-argument/dep-info forms are explicit gaps. Actual compiler queries determine
-effective cfg and the corresponding target baseline; a graph is refused when
-reachable crates need different global cfg removals or consume the same Rust
-source under different contexts. The compiler must match its analyzer sysroot
-compiler. A Cargo package ID remains opaque; extern artifact paths supply
-dependency joins. Each selected workspace unit owns only its consumed Rust
-source; reachable dependencies are semantic lookup, including other workspace
-units. Independently indexed dependency bodies are not linked without exact
-context/snapshot pointers. Source payload sharing remains core-owned.
+A context requires successful compiler status, an exact Cargo-output/rustc-output
+join, emitted dep-info membership, matching pre-compilation source bytes,
+content-bound extern artifacts and the actual compiler/cfg/sysroot identity.
+Unknown arguments, wrappers, escaped dep-info forms or incompatible reachable
+cfg selections remain unavailable. Extern artifact provenance joins crates;
+package IDs remain opaque. Required metadata is prepared, while unexpected
+application/test linking or code generation is refused before execution.
+Build-script/proc-macro tool roots may emit the tools needed for preparation.
 
-The initial capture helper refuses unexpected application/test linking before
-execution, while metadata-selected build-script/proc-macro tooling roots may
-produce required tools. The collector hashes a bounded saved inventory once,
-keeps package-specific pre-compilation snapshots and retains only actual
-dep-info consumption in each record. Unknown include inputs or missing proof
-permit one controlled recapture of owned metadata/required macro tools. Artifact
-hashing streams fixed-size buffers rather than allocating metadata-sized blobs.
-Cargo `--keep-going` lets healthy units finish after sibling failures; failed
-units never borrow prior successful body proof. Wrapper/configuration forms that
-cannot be preserved are unavailable. Nonstandard Cargo-injected environment
-origins can conservatively prevent warm proof reuse; no TOML evaluator is added.
+Each selected unit owns only its consumed first-party Rust source. Dependency
+crates, including sibling workspace units, are lookup-only in that graph.
+Dependency sources are not published as owned artifacts, and no cross-unit body
+link is inferred from names or paths. Identical source storage across contexts
+remains core-owned. Known saved inputs are rechecked before extraction; changed
+compiler-consumed bytes fail the job rather than acquire stale ranges.
+Build-script OUT_DIR membership labels captured generated source where known;
+this is not exhaustive expansion-origin mapping.
 
-Selected and unavailable managed rows stamp `rustContextPolicy=1` for the
-existing readiness/backfill path. Workspace compiler diagnostics remain on a
-workspace-summary/unavailable coverage row rather than marking healthy units
-as failed. Saved source reads are checked against captured input bytes.
-Generated/expansion identities require authored syntax declaration kinds and
-exact anchors; unproven targets are omitted. Lookup-only files above the
-64 KiB syntax-proof allowance are an explicit early coverage limit.
+The collector reuses content-bound metadata proof, not a resident compiler
+workspace. Bounded package snapshots cover ordinary inputs; one recapture may
+discover previously unrecorded consumed files. Cleanup removes only proven
+regular outputs under the owned target/build directories, refusing foreign,
+state or symlink paths. `--keep-going` permits healthy contexts after a failing
+sibling; failed units cannot borrow prior successful proof. Aggregate compiler
+diagnostics remain on workspace-summary/unavailable rows rather than being
+copied as failures into every healthy unit.
 
-The shared build owner passed the focused I/O/planning/collection catalog at
-`ab992a6` (`.artifacts/implementation-0.0.3/wave-01/rust-contexts-catalog-03/`)
-and the actual selected-worker fixture at `4ea97fa`
-(`.artifacts/implementation-0.0.3/wave-01/rust-context-worker-01/`). Those receipts
-retain earlier failed attempts. They do not establish installed/native parity,
-real-corpus performance or complete Rust support.
+Integrated rows stamp `optionsJson.rustContextPolicy=1`. The existing common
+readiness/backfill path requests bounded reanalysis for older combined-view
+rows, including unchanged repositories after restart. Current unavailable rows
+carry the marker too, avoiding expensive retry loops.
 
-The next source slice supplies captured proc-macro dylibs to the matching public
-analyzer graph only after exact emitted-output/extern-content joins. It retains
-the authored-origin guard and lookup-only dependency boundary, and defers
-rust-src validation to the actual Cargo-selected compiler rather than an
-unrelated PATH rustc. Its owned function/attribute/derive binding fixture is
-prepared for runtime qualification; source checks alone do not certify replay.
-Arbitrary macro runtime file/environment inputs, expanded-source identities,
-cross-unit body links and incompatible cfg-removal cases remain limits.
+## Semantic and graph evidence
 
-## Semantic evidence
+One analyzer at a time receives the selected crate graph, effective cfg and
+compiler-selected sysroot. Saved semantic tokens supply request positions;
+exactly one supported `textDocument/definition` selects a symbol. Its identity
+combines the compilation, definition path and UTF-8 anchor. Authored declaration
+kind/range evidence is required in managed contexts; unproved expansion anchors
+are omitted. Distinct locals and parameters remain queryable. Moves/preceding
+edits can change IDs; refactoring continuity is not implemented here.
 
-The adapter initializes a local rust-analyzer process for each selected Cargo
-workspace, waits for its quiescent status and asks for semantic tokens in saved
-source snapshots. Identifier-like semantic tokens are resolved with LSP
-`textDocument/definition`. Exactly one supported definition is required; missing
-or ambiguous results do not become invented exact references. The symbol ID
-uses the compilation plus definition path and UTF-8 byte anchor. A location
-matching that definition's selection range is a declaration; other locations
-are references. This resolves ordinary types, methods, functions, parameters,
-locals and cross-file uses in the focused fixture. It is navigation evidence,
-not call-graph or runtime-dispatch evidence.
+The analyzer syntax extension supplies grammar roles and source ownership;
+outgoing-call evidence is additionally required before emitting a call.
+References remain distinct from calls. Explicit source-module and
+constant/static initializer nodes preserve execution ownership. Deferred
+closures/async bodies, trait/dynamic dispatch, broad implicit calls and
+cross-unit links remain partial; no runtime execution claim follows from a
+compiler-bound edge. Shared Rust callers/callees/impact operators consume these
+ordinary relationships.
 
-Canonical-definition hover supplies signatures, with documentation and memory
-layout disabled so large dependency documentation does not become a signature.
-External identities/signatures are published without dependency source
-artifacts. External source is read locally when necessary to translate its
-definition anchor. IDs currently include local toolchain/dependency paths and
-are not ready-made cross-repository package identities.
+Canonical-definition hover supplies display signatures; documentation/memory
+layout are disabled. Hover text is not parsed to establish semantic identity.
+External identities/signatures may be retained without dependency source
+artifacts. Their local toolchain/package paths are not a finished estate-wide
+package identity. LSP UTF-16 positions and syntax UTF-8 byte columns are converted
+against the exact saved UTF-8 source/SHA-256, including CRLF normalization.
 
-LSP positions are negotiated as UTF-16 and converted using one offset map per
-saved source snapshot to half-open UTF-8 byte ranges. Source text is validated
-as UTF-8 and retained with its exact SHA-256. Distinct same-named locals remain
-distinct through definition anchors. Moves or preceding edits can change IDs;
-refactoring continuity is not implemented here.
+## Trust, restoration and toolchains
 
-## Toolchain and execution policy
+Managed compiler/dependency execution requires the existing separate personal
+repository trust grant. Opening/registering does not grant trust. Cargo build
+scripts and procedural macros are covered by that accepted grant and shared
+resource limits; no additional Rust-only grant is introduced. Package-manager
+lifecycle-script grants remain a separate policy.
 
-Accepted v0.0.3 policy: Cargo build scripts and procedural macros may run under
-the existing personal repository trust grant and shared resource limits. They
-execute project/dependency code; untrusted workspaces must not run them. Reuse
-the common execution-grant path, with generated/configuration provenance and
-cancellation. The current 0.0.3 source implements this managed preparation policy; the shipped 0.0.2 adapter and absent-policy legacy direct workers keep scripts/macros disabled.
+Managed preparation first evaluates offline resolved metadata. Missing packages
+can trigger Cargo fetch through the common preparation/checkpoint path,
+respecting an existing lockfile and repository Cargo selections. Cargo owns its
+credentials/cache. Source-only saves reuse successful setup; failed setup needs
+changed dependency inputs or explicit refresh to retry. Fetch does not build
+products or execute build scripts/macros. Compiler-context preparation itself
+may execute those trusted compiler tools.
 
-The worker runs `cargo`, `rustc` and `rust-analyzer` in each selected workspace
-directory, allowing rustup's repository selection to apply. It records `rustc
--Vv`, rust-analyzer identity, Node runtime identity and effective analysis
-options. Missing tools/components fail with an actionable installation message;
-the product never installs a toolchain. Development testing used user-scoped
-rust-analyzer and rust-src components matching Rust 1.99.1.
+All ordinary analysis forces Cargo offline and `RUSTUP_AUTO_INSTALL=0`; only the
+explicit dependency-fetch phase drops Know Code's forced offline value, while
+preserving user-selected offline settings. Node, Cargo/rustc, rust-analyzer and
+matching rust-src are separate prerequisites, never auto-installed by the
+product. Effective compiler identities stay separate from the worker runtime.
+The candidate macro path validates rust-src against Cargo's actual captured
+compiler rather than an unrelated PATH rustc. Unsupported wrappers/custom
+compiler equivalence remain explicit gaps.
 
-All adapter tool commands and the analyzer subtree force
-`RUSTUP_AUTO_INSTALL=0`, retaining the selected toolchain and other environment
-settings. An unavailable repository pin therefore produces a prerequisite
-error instead of letting a rustup shim download a compiler. Before launching
-rust-analyzer, the adapter asks the selected rustc for its sysroot and checks
-for the rust-src library manifest/core source; missing sources require separate
-component installation. This also prevents the analyzer's missing-source setup
-path from installing rust-src. The focused regression uses real rustup shims,
-an isolated missing pin and a local download trap: no installation command or
-download request is permitted, even if the embedding host enables auto-install.
+## Candidate procedural-macro replay
 
-Managed dependency setup probes the full resolved graph offline, fetching missing dependencies through Cargo only under the personal execution grant. Existing lockfiles are honored with `--locked`; user-selected offline settings and disabled Rustup installation remain authoritative. Shared checkpoints deduplicate setup and preserve failed attempts until explicit refresh. Saved source changes reuse dependency setup while fresh analyzer preparation follows Cargo invalidation. Trusted workers enable build scripts and procedural macros with central target outputs, one Cargo build job and one analyzer thread. The analyzer's own wrapper replacement is disabled so selected repository/environment wrappers survive. No final application or test product is requested. Legacy direct requests remain offline with script/macro execution disabled.
+This section describes unintegrated source, not shipped or integrated support.
+The candidate supplies an actual compiler-emitted macro dylib only when exact
+Cargo provenance and every consumer's extern-content hash agree. It checks the
+matching compiler/sysroot and runs one analyzer/macro process at a time. It does
+not rerun Cargo build scripts inside the analyzer or silently disable failed
+macro replay.
 
-One analyzer lives at a time. Definition requests run in ordered windows of
-four; the external-source cache accounts up to 16 MiB of retained payload and
-at most 64 entries ([adapter bounds](../providers/rust/navigation.mjs)). Other
-requests remain sequential and frames are bounded at 8 MiB; tool commands,
-project loading and individual requests time out after 120 seconds. Process
-failures/timeouts fail the worker job so the coordinator can preserve prior
-publication. Shared coordinator resource controls still apply; these adapter
-bounds do not establish actual peak RSS or large-workspace throughput. Owned
-source buffers/maps are still materialized for the workspace. Measure that
-residency and cold analyzer startup before claiming large-workspace support.
+Readiness requires healthy analyzer status and full synchronous document
+pull-diagnostics over the exact owned saved text. A healthy status notification
+alone cannot prove that a dylib loaded. A loader/error report yields explicit
+partial/unavailable coverage with no macro-disabled fallback facts. Function
+and method identities additionally require matching typed canonical
+call-hierarchy descriptors at use and declaration, including the authored name;
+alias spellings do not substitute for declaration names.
 
-## Honest limits and verification
+Noncallable names lack equivalent universal typed canonical proof. The newest
+candidate therefore omits them beneath attributed syntax or unproved module
+ancestry, including fields/locals/parameters beneath transformed owners and
+out-of-line module descendants. This is deliberately conservative for built-in
+or inert attributes too. Proven callable identities remain available; plain
+unattributed type/field identities retain ordinary authored proof. Lookup-only
+non-root module ancestry is also an explicit omission boundary, not guessed
+from filenames. Runtime qualification of the module-kind correction and these newest macro
+origin cases is pending.
 
-Accepted v0.0.3 selection policy: use repository-configured target platforms,
-or the host when unset, and default features, with workspace target/feature
-overrides. Include libraries, binaries and tests with distinct compilation
-contexts; do not enumerate every possible feature combination. The current
-single-view implementation below does not satisfy that context policy yet.
+Cargo-injected environment sets/overrides and required dep-info values are
+retained for replay, with a bounded hashed parent baseline for warm proof.
+Unchanged arbitrary ambient values are not dumped into index/cache records.
+Warm reuse binds the entire hashed parent baseline, detecting changed ambient
+inputs without retaining their raw values. Public per-crate replay cannot
+represent inherited-variable deletion, so those macro contexts are refused.
+Wrapper/jobserver/capture controls are excluded. Arbitrary macro runtime file
+reads, environment-dependent/nondeterministic expansion and expanded-source
+identities remain explicitly uncertified; this is not proof of exhaustive
+compiler/analyzer equivalence.
 
-The current workspace view combines rust-analyzer's default Cargo features and
-all-target discovery; it does not produce a separate complete compilation for
-every cfg/feature/target combination. `Debug` is a development label, not a
-validated Cargo profile mapping; other requested configurations have an
-additional coverage warning. Build-script output, procedural macros, generated
-sources, standalone Rust files and exhaustive unresolved/diagnostic coverage
-remain unsupported. Macro-string or expanded-code references may be absent.
-Published analyzer diagnostics are retained when available, but their absence
-does not establish a clean rustc build. The adapter always reports this partial
-scope, even for a fixture with no errors. No new relationships are emitted.
+## Bounds and actual validation
 
-Run `python3 tests/rust_provider.py` with Node, Cargo, rustc, rust-analyzer and
-rust-src available in PATH/its selected toolchain. It checks cross-file method
-and function references, Unicode byte coordinates, distinct same-named locals,
-test symbols, external identities without dependency source publication, saved
-source replacement, unresolved-call behavior, workspace-member deduplication,
-out-of-root workspace rejection, build-script non-execution, missing-pin
-non-installation, missing rust-src before analyzer startup and actionable
-missing prerequisites. The download-trap test needs local loopback permission,
-like the coordinator integration's local socket permission. All fixtures run
-under `.artifacts/rust-provider/`; the
-checked-in fixture is not built.
-[Latest focused evidence](../.artifacts/rust-provider/latest.json) records actual
-counts and toolchain identity. Host publication/native parity and saved-change
-integration belong to the shared integration suite.
+Definition requests use ordered windows of four. The external-source cache
+accounts at most 16 MiB of retained payload and 64 entries. Lookup-only files
+above 64 KiB omit syntax-origin proof. A direct lookup-only syntax-presentation
+RPC failure can likewise omit proof; owned syntax, source mismatch and transport
+failures remain fatal. Origin/canonical caches and module-uncertainty traversal
+are bounded. Worker frames are bounded at 8 MiB; command/project/request
+timeouts are 120 seconds. Shared coordinator limits still apply. These bounds
+are not true peak-RSS, large-corpus or responsiveness guarantees; owned source
+buffers/maps are still materialized for the selected unit.
 
-The mechanism follows the upstream [rust-analyzer configuration
-contract](https://rust-analyzer.github.io/book/configuration.html) and standard
-[LSP semantic-token and definition
-operations](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/).
-The alternative batch SCIP command was considered, but its [CLI explicitly
-disclaims subcommand
-stability](https://rust-lang.github.io/rust-analyzer/src/rust_analyzer/cli/flags.rs.html)
-and would require an additional schema/import boundary. LSP keeps this first
-adapter on supported semantic navigation operations; batch extraction remains a
-possible measured optimization, not a second storage/query system.
+- Integrated source: the context catalog passed at `ab992a6` and selected-worker
+  fixture at `4ea97fa`. Exact receipts are under
+  `.artifacts/implementation-0.0.3/wave-01/rust-contexts-catalog-03/` and
+  `rust-context-worker-01/`.
+- Matching Debug producer `9aa4dcffb1aa441dabd4545b65c67032` at `8155a11`
+  passed `assembled-language-contexts-06` (21 assertions, about 109 seconds),
+  including Rust normal/test coverage, shared source artifacts, stored graph
+  and native parity, saved changes, empty publication and pinned reads. This
+  is not optimized/installed/release or real-corpus performance certification.
+- Unintegrated snapshot05 at `f84f5cf` passed 11 finite macro assertions,
+  including an actual invalid-dylib negative case. The receipt is
+  `.artifacts/implementation-0.0.3/rust-macro-source-05/source/.artifacts/rust-macro-worker/1794529710699404000/summary.json`.
+  It predates the environment and noncallable/module-origin changes at
+  `2b9e95b`, `23eca86` and `1371d24`; the updated I/O and actual Cargo collection checks pass in snapshot06, but
+  its macro check failed to preserve an ordinary nested-module type. The cause
+  was using `MOD` instead of the analyzer grammar
+  [`MODULE`](https://github.com/rust-lang/rust-analyzer/blob/master/crates/syntax/src/ast/generated/nodes.rs)
+  for owner/declaration matching. `dbf6e54` corrects those three literals without
+  weakening the fixture and records bounded actual syntax kinds for the next
+  runtime check. The failed snapshot06 remains retained; that correction and
+  the updated macro-origin/environment fixture still require qualification.
 
-## Real repository: lars-sdk snapshot
+Focused checks are `tests/rust_context_io.mjs`, `rust_contexts.mjs`,
+`rust_context_collection.mjs`, `rust_context_worker.py`, `rust_macro_worker.py`
+and the existing `rust_provider.py`/four-language native integration. Choose the
+relevant cases and matching source/artifacts through the shared validation
+owner; do not run a full suite for every adapter edit. Preserve failed attempts.
+The historical direct-worker tests still verify scripts-off behavior; their
+success must not be relabeled as managed build-script/macro qualification.
+
+## Historical combined-view corpus: lars-sdk snapshot
+
+This earlier run used the scripts-off, combined-view adapter. It does not
+qualify the current captured-context or candidate macro-replay paths.
 
 Read-only testing used the supplied local `lars-sdk` repository. No Cargo,
 rustc, rust-analyzer, Git, build or restore command ran against the original.
@@ -231,7 +235,8 @@ The original Cargo registry cache was copied into an isolated durable test
 `cmake` and returned an honest partial graph. `cargo fetch --locked` then fetched
 the snapshot's dependencies into that isolated cache. No build, tests, build
 script or procedural macro ran; no target build directory was created. The
-provider itself remains offline and does not yet implement this restoration.
+adapter at that checkpoint had no automatic Cargo restoration; current managed
+preparation is described above.
 
 | Accepted stable-toolchain run | Before dependency fetch | After locked fetch |
 | --- | ---: | ---: |
@@ -275,47 +280,3 @@ Retained evidence: [summary](../.artifacts/rust-real/summary.json),
 [pre-fetch output](../.artifacts/rust-real/before-fetch.json),
 [dependency fetch log](../.artifacts/rust-real/fetch.stderr.log), and
 [original after-test inventory](../.artifacts/rust-real/original-after-test.json).
-
-
-## 0.0.3 managed preparation checkpoint
-
-The focused owned fixture passed at `a5bd126`: missing dependency restoration
-is denied without execution permission; a local Git dependency is restored;
-trusted build-script cfg/marker and real proc-macro compilation occur centrally;
-repository and environment wrappers reach actual compilation with one Cargo
-job; ordinary saves reuse setup; an external macro submodule save recompiles;
-missing/malformed/oversized derived plans recover; failed setup needs explicit
-retry. Dependency source stays outside published first-party facts. Evidence:
-`.artifacts/implementation-0.0.3/wave-01/rust-managed-preparation-01/` and
-`.artifacts/rust-managed/1794519920221947000/summary.json`.
-
-Compilation inputs now include resolved manifests, local target/build-script
-roots and a bounded watch-only source superset for external path crates. This
-is invalidation input, not semantic extraction from filesystem matches. The
-fixture proves provider input exposure and manual refreshed-source behavior;
-coordinator scheduling still needs assembled acceptance. Arbitrary rerun,
-include/generated and environment inputs remain explicit coverage gaps. Setup
-cache/config reads and writes have bounds; malformed derived plans are rebuilt
-rather than trusted by matching fingerprints alone.
-
-Compiler-backed direct calls, value/type dependencies and ancestor evidence now
-use the shared graph fact/query path, with partial capabilities. Stored
-Swift/Rust graph and native parity assertions passed before a later unrelated
-sibling-invalidation assertion failed; the combined fixture is still under
-verification. Exact ordinary/test/binary compiler contexts remain required for
-promotion. A finite compiler-artifact-to-separate-analyzer-graph probe passed
-five owned no-wrapper contexts; it has not been adopted as the production
-context planner. Historical real-corpus measurements above retain their original
-scripts-disabled/restoration-external scope.
-
-
-The user subsequently accepted **compiler-captured contexts** as the production
-direction: Cargo check records actual library/binary/test compiler units, then
-rust-analyzer analyzes separately selected proven graphs. The second owned probe
-passes exact renamed/dev dependency joins, known-fixture cache reuse,
-source/artifact invalidation and failed-unit exclusion:
-`.artifacts/implementation-0.0.3/rust-context-feasibility-02/summary.json`.
-Implementation is in progress, not promoted. Effective implicit cfg and removal
-of analyzer defaults, ordinary module/include inputs, content-bound artifacts,
-shared-source ambiguity, selected wrappers and generated inputs still need
-production proof; paths/root hashes alone do not establish it.
