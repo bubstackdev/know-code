@@ -51,7 +51,7 @@ denials, run09 preserves the nested-manifest-sandbox failure, and run10 is the
 passing stage-corrected result. A passing suffix does not make earlier attempts
 successful.
 
-## Next gate
+## Actual bridge qualification
 
 The separately frozen wired07 candidate accepts explicit central clone/cache
 paths and strict saved-lock/no-update flags, retaining their effective paths in
@@ -66,6 +66,33 @@ global Xcode DerivedData and re-evaluated manifests in a context different from
 the generic preparation. Its expected-unavailable result alone does not qualify
 the missing-cache case; the positive counterpart failed, and the batch stopped
 before simulator. Those receipts remain inside the generic10 run directory.
-Wired08 now proposes owned metadata DerivedData plus the same saved scheme and
-Test configuration before export, with retained pre/post-selection hashes.
-Its structural/build/actual paired gates remain separate pending checks.
+Wired08 uses owned metadata DerivedData plus the same saved scheme and Test
+configuration before export, with retained pre/post-selection hashes. Its
+actual protected metadata and typed module checks now pass on both platforms:
+
+| Check | Retained receipt beneath `.artifacts/implementation-0.0.3/` |
+| --- | --- |
+| Restored device and simulator metadata | `xcode-controlled-replay-metadata-{iphoneos,iphonesimulator}-02/result.json` |
+| Missing-cache device and simulator boundaries | `xcode-controlled-negative-{iphoneos,iphonesimulator}-01/result.json` |
+| Device and simulator typed module readiness | `xcode-controlled-module-{iphoneos,iphonesimulator}-02/result.json` |
+
+The CLI/service hashes, unchanged analysis profiles, saved inputs, script
+markers, selected target identities and real package module outputs are bound
+to those receipts. Missing-cache checks establish an unavailable outcome with
+fallback denied; they do not uniquely identify every diagnostic's cause.
+
+The first historical-environment replay stopped before launching the bridge:
+the current launcher hash differed. A fresh pair then used one current
+environment for normal metadata preparation and protected actual analysis.
+Each later module invocation likewise performs its own separately recorded
+cheap metadata preparation before entering the unchanged analysis policy.
+This matters because the upstream manifest cache includes environment inputs,
+and session variables can change between tool calls. See
+[the source investigation and controlled comparison](XCODE_MANIFEST_CACHE.md).
+Normal preparation is not OS-network-denied; protected analysis is. No private
+cache options, source changes or broader analysis permissions were needed.
+
+These owned-fixture passes do not establish real-project completeness,
+production integration, native queries, installed behavior or bridge adoption.
+The protected Atelier snapshot and subsequent body-graph integration remain
+separate gates.

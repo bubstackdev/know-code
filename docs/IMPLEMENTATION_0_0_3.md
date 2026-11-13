@@ -237,3 +237,36 @@ for exact evidence and failed attempts. Wired07 adds central paths but is still
 under qualification. Proc-macro replay remains unintegrated: independent review
 identified asynchronous loader-diagnostic proof and same-kind attribute-origin
 cases requiring stronger evidence before its bindings can be published.
+
+## Integrated macro and protected Xcode checkpoint — 2026-11-13
+
+The Rust macro bundle is integrated at `7e10a53`. Immutable snapshot07 passed
+14 assertions, including actual Cargo-injected binding selection, canonical
+callables, same-kind type/field omissions, attributed-module ancestry and real
+loader-failure refusal. Snapshot06 exposed a `MOD` versus `MODULE` grammar
+mismatch; the narrow fix preserves plain nested-module symbols. Those failures
+remain retained. [Rust provider documentation](RUST_PROVIDER.md) now replaces
+the stale combined-view description with exact implementation boundaries.
+
+The existing readiness path now backfills pre-macro policy-1 Rust rows with
+policy 2, including old unavailable rows, without looping on current gaps.
+All 20 publication tests, formatting and strict workspace Clippy pass.
+Matching Debug producer `a76e4dfb22004262906f6620102a48de` is built at `2009f5f`;
+the updated managed/context catalog passes at `9ead59b`
+(`wave-01/assembled-rust-providers-07/`). Unsupported wrappers remain explicit
+gaps. The older fixture's expectations were corrected rather than adding
+unproven wrapper support. Matching native integration subsequently passes all
+21 assertions across CLI/Node/.NET
+(`wave-01/assembled-language-contexts-07/`, approximately 135 seconds). The
+producer verifies before and after the run; optimized/installed/release
+validation remains separate.
+
+Actual wired08 package metadata, missing-cache boundaries and typed package
+module preparation now pass on both device and simulator with the existing
+analysis profiles and saved inputs unchanged. Each normal preparation and
+protected positive analysis pair shares one current environment; historical
+launcher fingerprints cannot safely be assumed across tool calls. See
+[the package-cache receipts and boundaries](XCODE_PACKAGE_CACHE_QUALIFICATION.md).
+No bridge rebuild, production adoption, installation or live-service change
+was needed. A separately protected Atelier snapshot is prepared for the next
+metadata/module check; its known omitted resources remain explicit.

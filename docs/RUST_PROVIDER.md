@@ -10,7 +10,7 @@ implementation language does not establish Rust source-language support.
 | --- | --- |
 | Shipped v0.0.2 | Experimental adapter; no v0.0.3 language-release claim. |
 | Integrated at `8155a11` | Managed compiler-captured contexts, selected-root ownership, direct calls/dependencies, native parity and policy backfill. |
-| Macro source integrated at `7e10a53` (from `dbf6e54`) | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Snapshot07 passes all 14 finite macro assertions; I/O and actual Cargo collection checks pass separately. Matching assembled/native and installed candidate checks remain pending. |
+| Macro source integrated at `7e10a53` (from `dbf6e54`) | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Snapshot07 passes all 14 finite macro assertions; I/O and actual Cargo collection checks pass separately. Matching assembled/native checks pass; installed and release checks remain pending. |
 
 ## One provider contract and one core
 
@@ -67,7 +67,9 @@ sibling; failed units cannot borrow prior successful proof. Aggregate compiler
 diagnostics remain on workspace-summary/unavailable rows rather than being
 copied as failures into every healthy unit.
 
-Integrated rows stamp `optionsJson.rustContextPolicy=2`. Both earlier combined views and policy-1 selected/unavailable rows require ordinary bounded backfill for the macro policy; current policy-2 unavailable rows avoid retry loops. The existing common
+Integrated rows stamp `optionsJson.rustContextPolicy=2`. Earlier combined views
+and policy-1 selected/unavailable rows require ordinary bounded backfill for the
+macro policy; current policy-2 unavailable rows avoid retry loops. The existing common
 readiness/backfill path requests bounded reanalysis for older combined-view
 rows, including unchanged repositories after restart. Current unavailable rows
 carry the marker too, avoiding expensive retry loops.
@@ -163,6 +165,20 @@ identities remain explicitly uncertified; this is not proof of exhaustive
 compiler/analyzer equivalence.
 
 ## Bounds and actual validation
+
+The integrated macro/backfill candidate at `2009f5f` has matching Debug producer
+`a76e4dfb22004262906f6620102a48de`. The focused managed/context catalog passes
+at test revision `9ead59b`, including actual restored dependencies, trusted
+build scripts, macro edits, explicit wrapper refusal and the 14 macro-origin
+checks. Evidence: `.artifacts/implementation-0.0.3/wave-01/assembled-rust-providers-07/`.
+All 20 publication tests, formatting and strict workspace Clippy pass for the
+policy-2 backfill change. The preceding catalog failures retain obsolete
+wrapper and policy-1 fixture assumptions; neither is relabeled successful.
+Matching four-language native integration also passes all 21 assertions
+(`wave-01/assembled-language-contexts-07/`), including policy-2 normal/test
+coverage, stored calls/impact, saved changes and pinned source/empty-generation
+behavior. This remains Debug integration evidence; optimized, installed, real
+corpus and release certification are separate.
 
 Definition requests use ordered windows of four. The external-source cache
 accounts at most 16 MiB of retained payload and 64 entries. Lookup-only files
