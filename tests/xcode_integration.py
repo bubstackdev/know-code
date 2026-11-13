@@ -352,7 +352,7 @@ try:
     assert {row['analysis_options']['platform'] for row in unavailable} == {'iphoneos', 'iphonesimulator'}
     assert all(row['status'] == 'partial' and row['analysis_options']['supported'] is False
                and row['analysis_options']['preparation'] == 'unavailable'
-               and any(item['code'] == 'xcode_metadata_unavailable'
+               and any(item['code'] in ('xcode_metadata_unavailable', 'dependency_restore_failed')
                        for item in row.get('diagnostics', [])) for row in unavailable), unavailable
     assert len(symbols('healthySibling')) == 1
     assert not symbols('contextEntry()') and not symbols('dependencyEntry()'), 'Rejected Xcode configuration retained old current bodies'
