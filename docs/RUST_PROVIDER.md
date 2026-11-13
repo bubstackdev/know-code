@@ -10,7 +10,7 @@ implementation language does not establish Rust source-language support.
 | --- | --- |
 | Shipped v0.0.2 | Experimental adapter; no v0.0.3 language-release claim. |
 | Integrated at `8155a11` | Managed compiler-captured contexts, selected-root ownership, direct calls/dependencies, native parity and policy backfill. |
-| Unintegrated macro candidate `dbf6e54` | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Environment/I/O collection checks pass; updated macro-origin fixture qualification is still pending. |
+| Unintegrated macro candidate `dbf6e54` | Captured dylib replay, synchronous diagnostic barrier, environment-delta/cache proof and conservative macro-origin omissions. Snapshot07 passes all 14 finite macro assertions; I/O and actual Cargo collection checks pass separately. Integrated/native/installed candidate checks remain pending. |
 
 ## One provider contract and one core
 
@@ -147,8 +147,9 @@ out-of-line module descendants. This is deliberately conservative for built-in
 or inert attributes too. Proven callable identities remain available; plain
 unattributed type/field identities retain ordinary authored proof. Lookup-only
 non-root module ancestry is also an explicit omission boundary, not guessed
-from filenames. Runtime qualification of the module-kind correction and these newest macro
-origin cases is pending.
+from filenames. The corrected module ancestry, transformed-type/field
+omissions and ordinary nested-module preservation pass the owned snapshot07
+fixture; broader expansion-origin coverage remains partial.
 
 Cargo-injected environment sets/overrides and required dep-info values are
 retained for replay, with a bounded hashed parent baseline for warm proof.
@@ -182,18 +183,32 @@ buffers/maps are still materialized for the selected unit.
   including Rust normal/test coverage, shared source artifacts, stored graph
   and native parity, saved changes, empty publication and pinned reads. This
   is not optimized/installed/release or real-corpus performance certification.
-- Unintegrated snapshot05 at `f84f5cf` passed 11 finite macro assertions,
-  including an actual invalid-dylib negative case. The receipt is
-  `.artifacts/implementation-0.0.3/rust-macro-source-05/source/.artifacts/rust-macro-worker/1794529710699404000/summary.json`.
-  It predates the environment and noncallable/module-origin changes at
-  `2b9e95b`, `23eca86` and `1371d24`; the updated I/O and actual Cargo collection checks pass in snapshot06, but
-  its macro check failed to preserve an ordinary nested-module type. The cause
-  was using `MOD` instead of the analyzer grammar
+- Unintegrated immutable snapshot07 at `dbf6e54` passes all 14 macro
+  assertions: both captured library contexts, forced Cargo environment selecting
+  the correct valid binding, ordinary/attribute-preserved and aliased calls,
+  same-kind renamed function/type/field omissions, attributed module ancestry,
+  plain nested-module identities, generated-identity omissions, lookup-only
+  dependencies, actual captured compiler selection, synchronous diagnostics,
+  optional syntax-presentation failure and actual dylib-loader failure with no
+  fallback facts. Exact receipt:
+  `.artifacts/implementation-0.0.3/rust-macro-source-07/source/.artifacts/rust-macro-worker/1794579719177751000/summary.json`.
+  Source/dependency manifests remained unchanged. The root process receipt at
+  `rust-macro-worker-snapshot-07-processes.json` records 14.68 seconds and
+  838,096 KiB maximum sampled aggregate descendant RSS. That approximately
+  818 MiB sum is a sampled lower bound, not unique memory, a true peak, a hard
+  cap or a repeatable performance target; cache warmth was not controlled for
+  timing comparisons.
+- The updated pure I/O/environment guards and actual Cargo warm-cache/
+  failure checks passed separately in
+  `wave-01/{rust-context-io-snapshot-06,rust-context-collection-snapshot-06}/`.
+  The original macro snapshot06 failure remains retained: it exposed `MOD`
+  instead of the analyzer grammar
   [`MODULE`](https://github.com/rust-lang/rust-analyzer/blob/master/crates/syntax/src/ast/generated/nodes.rs)
-  for owner/declaration matching. `dbf6e54` corrects those three literals without
-  weakening the fixture and records bounded actual syntax kinds for the next
-  runtime check. The failed snapshot06 remains retained; that correction and
-  the updated macro-origin/environment fixture still require qualification.
+  in owner/declaration matching. `dbf6e54` corrects those three literals without
+  weakening the fixture; snapshot07 records actual grammar kinds as well.
+  Earlier snapshot05 passed its narrower 11-assertion fixture. None of these
+  worker-only receipts certifies the assembled candidate's native, installed,
+  real-corpus, optimized or release behavior.
 
 Focused checks are `tests/rust_context_io.mjs`, `rust_contexts.mjs`,
 `rust_context_collection.mjs`, `rust_context_worker.py`, `rust_macro_worker.py`
