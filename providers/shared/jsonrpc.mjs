@@ -15,15 +15,18 @@ export class JsonRpcProcess {
     this.writeHead = 0;
     this.queuedBytes = 0;
     this.stderr = '';
+    this.receivedBytes = 0;
     this.child = spawn(program,args,{cwd,env,stdio:['pipe','pipe','pipe']});
     this.child.stderr.on('data', b => { this.stderr = (this.stderr + b.toString()).slice(-16384); });
     this.child.on('error', e => this.fail(new Error(`cannot start ${program}: ${e.message}; install the selected language toolchain`)));
-    this.child.on('exit', (code, signal) => this.fail(new Error(`${program} exited (${signal ?? code}): ${this.stderr}`)));
+    this.child.on('exit', (code, signal) => this.fail(Object.assign(
+      new Error(`${program} exited (${signal ?? code}): ${this.stderr}`), {processExit: {code, signal}})));
     this.child.stdin.on('error', e => this.fail(e));
     this.child.stdin.on('drain', () => {
       try { this.flush(); } catch (error) { this.fail(error); this.terminate(); }
     });
     this.child.stdout.on('data', b => {
+      this.receivedBytes += b.length;
       try {
         let offset = 0;
         while (offset < b.length) {

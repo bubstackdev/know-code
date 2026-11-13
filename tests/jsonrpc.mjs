@@ -121,12 +121,25 @@ checks.push('RPC error preserves code and data');
 for (const [mode,pattern] of [['exit',/exited \(7\)/], ['truncated',/exited/],
   ['zero',/invalid\/oversized/], ['oversized',/invalid\/oversized/],
   ['large-header',/oversized JSON-RPC header/], ['bad-json',/JSON|Unexpected|Expected/]]) {
-  await withChild(mode, async rpc => { await assert.rejects(rpc.request('start', {}), pattern); });
+  await withChild(mode, async rpc => {
+    await assert.rejects(rpc.request('start', {}), error => {
+      assert.match(error.message, pattern);
+      if (mode === 'exit' || mode === 'truncated') {
+        assert.deepEqual(error.processExit, {code: mode === 'exit' ? 7 : 0, signal: null});
+      } else assert.equal(error.processExit, undefined);
+      return true;
+    });
+    assert.equal(rpc.receivedBytes === 0, mode === 'exit');
+  });
   checks.push(mode);
 }
 
 await withChild('hang', async (rpc, exit) => {
-  await assert.rejects(rpc.request('never', {}), /timed out: never/);
+  await assert.rejects(rpc.request('never', {}), error => {
+    assert.match(error.message, /timed out: never/);
+    assert.equal(error.processExit, undefined);
+    return true;
+  });
   await exit;
 }, {timeout:100});
 checks.push('request timeout terminates child');
