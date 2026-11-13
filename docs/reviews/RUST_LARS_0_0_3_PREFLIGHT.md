@@ -231,3 +231,23 @@ core closure. Its retained build-script output emits static ring_core_0_17_14_
 and ring_core_0_17_14__test link directives and an owned native OUT_DIR. Full
 rejected argv was cleaned. Native `-l` stays explicitly unsupported in this
 patch, and metadata-only proc-macro `.rmeta` remains insufficient dylib proof.
+
+## Third run: captured core is available; closure expectation failed
+
+Root-owned `production-default-03/` published current generation 6 in 192.87s
+with 19 coverage rows, seven selected Rust contexts and 85 captured producer
+units. Normal/test lars_core and four core integration-test contexts are present;
+all exact dependency-output joins reachable from normal lars_core are now
+available. The six missing-input warnings are gone. No further generated-input
+snapshot change is supported by this evidence. Ring's native `-l` refusal and
+two metadata-only macro/dylib gaps remain explicit.
+
+The run remains **failed**: its qualification driver selected logaddexp0 called
+inside logistic_loss's `.map` closure. Exact symbols and saved source succeeded,
+then callers returned no findings. `RustGraph.enclosing` deliberately omits
+CLOSURE_EXPR/deferred execution ownership, an existing declared coverage gap.
+The StopIteration was in the callers assertion, not core-context selection.
+Preserve the failed receipt. A separate prepared read-only three-client probe
+uses the authored `softmax`→`pairwise_sum` call in primitives.rs line 14, outside
+closures, against the same existing generation/snapshot; it makes no compiler,
+restore, refresh or coordinator request. Its runtime result remains pending.
