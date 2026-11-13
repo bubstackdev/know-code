@@ -63,8 +63,8 @@ registered = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)
 DATABASE = registered['database']
 
 
-def wait(after=0, allow_failed=False):
-    until = time.monotonic() + 120
+def wait(after=0, allow_failed=False, timeout_seconds=120):
+    until = time.monotonic() + timeout_seconds
     while time.monotonic() < until:
         status = json.loads(run([HOST, 'coordinator', 'status']).stdout)['workspaces'][0]
         assert allow_failed or status['phase'] != 'failed', status
@@ -111,7 +111,9 @@ def check_ranges(name, provider, target=None):
     return count
 
 
-generation = wait()
+# Initial SDK evaluation/compilation is a correctness setup bound, not an
+# indexing-latency gate. Saved-update waits keep their existing shorter bound.
+generation = wait(timeout_seconds=300)
 # Request workspace coverage explicitly; symbol inventory size must not turn
 # this cross-provider coverage/parity check into an oversized response.
 coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full', 'detail_max_bytes': 65536}, equivalent=True)['coverage']
