@@ -378,3 +378,26 @@ manifest promotion or new installed test harness was introduced. Optimized,
 installed, broader interruption/cleanup and platform gates remain ahead; the
 real video-encoding performance gate stays deferred. Required languages retain
 priority over optional estate work.
+
+
+The actual Xcode cancellation extension also passes at `e16caf6`: observation
+of active preparation precedes the CLI cancellation acknowledgement, generation
+and exact source/graph remain coherent and explicitly stale, then a new save
+after durable cancellation resumes both SDK graphs beside the TypeScript
+sibling. All 16 fixture checks pass with the unchanged matching producer
+(`wave-01/assembled-xcode-integration-06/`, 85 seconds;
+`.artifacts/xcode-integration/1794589193943965000/summary.json`). A separate
+post-fixture census found no process with the exact owned `.7` runtime prefix
+and no isolated coordinator socket. That single census does not certify every
+cancelled compiler descendant or continuous process lifetime.
+
+Read-only real-corpus preflight found that the live Atelier repositories have
+changed since the earlier frozen copies: a new Aether2 package increases the
+current roots to nine, and 12 of the 13 resources omitted by the old selective
+copies now exist. The RefineEncoder resource remains absent. Sibling app/core
+paths preserve local references; the Lars HOME/environment-selected library
+remains an explicit external boundary. A new complete owned source copy is
+being prepared separately; no old grant, snapshot, index or receipt is silently
+reused or changed. It will require its own personal trust grant before compiler
+or dependency execution. The exact preflight/copy manifest, rather than these
+historical package counts, governs the next production run.
