@@ -8,7 +8,7 @@ import {boundedRead, writeDerivedFile} from './preparation.mjs';
 import {compilerEnvironment} from './lsp.mjs';
 import {cargoSelection} from './policy.mjs';
 import {cargoArtifactIdentity, capturedUnit, capturedUnitCurrent, compilerCfg, compilerInputs,
-  connectCapturedUnits, selectedProject, fileEvidence, environmentBaseline} from './contexts.mjs';
+  connectCapturedUnits, selectedProject, fileEvidence, environmentBaseline, toolingRoots} from './contexts.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const LIMIT = 8 * 1024 * 1024, CACHE_LIMIT = 32 * 1024 * 1024;
@@ -143,8 +143,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
     const cache = JSON.parse(boundedRead(cacheFile, CACHE_LIMIT).toString('utf8'));
     if (cache.version === 1 && cache.fingerprint === fingerprint && Array.isArray(cache.units)) previous = cache.units;
   } catch { /* Missing/malformed evidence requires actual recapture, never invented proof. */ }
-  const diagnostics = [], packages = packageSources(metadata), toolRoots = metadata.packages.flatMap(item => item.targets
-    .filter(target => target.kind.some(kind => ['custom-build', 'proc-macro'].includes(kind))).map(target => target.src_path));
+  const diagnostics = [], packages = packageSources(metadata), toolRoots = toolingRoots(metadata);
   // Prior actual dep-info supplies include/generated inputs for a new saved
   // snapshot, even when their changed bytes invalidate the prior unit proof.
   for (const unit of previous) {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {boundedRead, writeDerivedFile} from './preparation.mjs';
-import {contextArguments, externArguments, fileEvidence, flagValues, capturedEnvironment} from './contexts.mjs';
+import {preparationEmits, externArguments, fileEvidence, capturedEnvironment} from './contexts.mjs';
 
 const LIMIT = 8 * 1024 * 1024;
 const [compiler, ...args] = process.argv.slice(2);
@@ -30,14 +30,10 @@ try {
   configuration = JSON.parse(boundedRead(process.env.KNOW_CODE_RUST_CAPTURE_CONFIG, LIMIT).toString('utf8'));
   if (!path.isAbsolute(configuration.directory ?? '') || !(configuration.snapshots || Array.isArray(configuration.inputs)) ||
       configuration.inputs && (configuration.inputs.length > 16000 || !configuration.inputs.every(item => typeof item === 'string' && path.isAbsolute(item))) ||
-      !Array.isArray(configuration.toolRoots) || !configuration.toolRoots.every(item => typeof item === 'string' && path.isAbsolute(item)))
+      !configuration.toolRoots || typeof configuration.toolRoots !== 'object')
     throw new Error('Rust context unavailable: invalid bounded compiler capture configuration');
   if (args.some(item => !item.startsWith('-') && item.endsWith('.rs'))) {
-    const parsed = contextArguments(record);
-    const emit = flagValues(args, '--emit').flatMap(item => item.split(',').map(value => value.split('=', 1)[0]));
-    const tooling = configuration.toolRoots.includes(parsed.root);
-    if (!emit.length || emit.some(item => !['dep-info', 'metadata', ...(tooling ? ['link'] : [])].includes(item)))
-      throw new Error('Rust context unavailable: final-product/codegen output is outside compiler preparation');
+    preparationEmits(record, configuration.toolRoots);
     if (configuration.snapshots) {
       const snapshot = configuration.snapshots[process.env.CARGO_MANIFEST_PATH];
       if (!snapshot || !path.isAbsolute(snapshot.filename ?? '')) throw new Error('Rust context unavailable: no package input snapshot');

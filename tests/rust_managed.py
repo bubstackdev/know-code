@@ -56,13 +56,19 @@ command(['git', 'add', 'Cargo.toml', 'src/lib.rs'], dependency)
 command(['git', '-c', 'user.name=Know Code fixture', '-c', 'user.email=fixture@example.invalid',
          '-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Owned preparation dependency'], dependency)
 
+# Host tooling needs real intermediate rlib codegen, not only metadata.
+tool_dependency = ARTIFACTS / 'tool-dependency'
+(tool_dependency / 'src').mkdir(parents=True)
+(tool_dependency / 'Cargo.toml').write_text('[package]\nname="managed-tool-dependency"\nversion="0.1.0"\nedition="2024"\n[workspace]\n')
+(tool_dependency / 'src/lib.rs').write_text('pub const fn host_value() -> usize { 5 }\n')
+
 local_macro = ARTIFACTS / 'local-macro'
 (local_macro / 'src').mkdir(parents=True)
 (local_macro / 'Cargo.toml').write_text('[package]\nname="local-macro"\nversion="0.1.0"\nedition="2024"\n'
-                                      '[lib]\nproc-macro=true\n[workspace]\n')
+                                      '[lib]\nproc-macro=true\n[workspace]\n[dependencies]\nmanaged-tool-dependency={path=' + json.dumps(str(tool_dependency)) + '}\n')
 (local_macro / 'src/lib.rs').write_text('extern crate proc_macro;\nmod implementation;\n'
     '#[proc_macro] pub fn literal_value(_: proc_macro::TokenStream) -> proc_macro::TokenStream { implementation::literal() }\n')
-(local_macro / 'src/implementation.rs').write_text('pub fn literal() -> proc_macro::TokenStream { "41".parse().unwrap() }\n')
+(local_macro / 'src/implementation.rs').write_text('pub fn literal() -> proc_macro::TokenStream { let _ = managed_tool_dependency::host_value(); "41".parse().unwrap() }\n')
 (local_macro / 'build.rs').write_text('fn main() { println!("cargo:rerun-if-changed=src/lib.rs"); }\n')
 
 # Unsupported selected wrappers must remain explicit gaps. Metadata may invoke
@@ -84,8 +90,10 @@ workspace = ARTIFACTS / 'workspace'
 
 (workspace / 'Cargo.toml').write_text('[package]\nname="managed-fixture"\nversion="0.1.0"\nedition="2024"\n'
                                       '[workspace]\n[dependencies]\nmanaged-dependency={git=' + json.dumps(dependency.as_uri()) + '}\n'
-                                      'local-macro={path=' + json.dumps(str(local_macro)) + '}\n')
+                                      'local-macro={path=' + json.dumps(str(local_macro)) + '}\n'
+                                      '[build-dependencies]\nmanaged-tool-dependency={path=' + json.dumps(str(tool_dependency)) + '}\n')
 (workspace / 'build.rs').write_text('fn main() {\n'
+    'let _ = managed_tool_dependency::host_value();\n'
     'std::fs::write(std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("build-script-ran"), "trusted").unwrap();\n'
     'println!("cargo:rustc-cfg=managed_generated");\n}\n')
 (workspace / 'src/lib.rs').write_text('pub fn entry() -> usize { managed_dependency::restored_value() }\n'
@@ -161,6 +169,13 @@ def captured_macro():
     assert any(item['emit'] == 'link' for item in unit['record']['artifacts']), unit
     return unit
 
+tool_units = [unit for filename in (ARTIFACTS / 'cache/contexts').glob('*/units.json')
+              for unit in json.loads(filename.read_text())['units']
+              if unit['cfg']['root'] == str(tool_dependency / 'src/lib.rs')]
+assert tool_units and any(any(item['emit'] == 'link' and item['artifact'].endswith('.rlib')
+                             for item in unit['record']['artifacts']) for unit in tool_units), tool_units
+assert all(not unit['cfg']['test'] and not unit['cfg'].get('target') for unit in tool_units), tool_units
+assert not any(frame.get('source', {}).get('path', '').startswith('../tool-dependency/') for frame in first['messages'])
 macro_before = captured_macro()
 assert macro_before['inputHashes'][str(local_macro / 'src/implementation.rs')] == hashlib.sha256((local_macro / 'src/implementation.rs').read_bytes()).hexdigest()
 

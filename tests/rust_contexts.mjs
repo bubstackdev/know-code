@@ -44,7 +44,7 @@ function check(label, success = true, previous = []) {
   const directory = path.join(state, label);
   fs.mkdirSync(directory);
   const configuration = path.join(directory, 'configuration.json');
-  fs.writeFileSync(configuration, JSON.stringify({directory, inputs, toolRoots: []}));
+  fs.writeFileSync(configuration, JSON.stringify({directory, inputs, toolRoots: {buildScripts: [], procMacros: [], libraries: []}}));
   const result = spawnSync('cargo', ['check', '--offline', '--all-targets', '--jobs', '1', '--message-format=json'],
     {cwd: workspace, env: {...env, KNOW_CODE_RUST_CAPTURE_CONFIG: configuration}, encoding: 'utf8', timeout: 120000, maxBuffer: 8 * 1024 * 1024});
   fs.writeFileSync(path.join(directory, 'stdout'), result.stdout ?? '');

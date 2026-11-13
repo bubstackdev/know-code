@@ -6,11 +6,13 @@ import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import {writeDerivedFile} from '../providers/rust/preparation.mjs';
 import {removeCapturedOutput} from '../providers/rust/cargo-contexts.mjs';
-import {externArguments, environmentBaseline, capturedEnvironment, capturedEnvironmentCurrent, selectedProject} from '../providers/rust/contexts.mjs';
+import {externArguments, environmentBaseline, capturedEnvironment, capturedEnvironmentCurrent, selectedProject, toolingRoots, preparationEmits} from '../providers/rust/contexts.mjs';
 import {syntaxGraph} from '../providers/rust/graph.mjs';
 
 const macroCommand = {cwd: process.cwd(), args: ['--crate-type', 'proc-macro', '-L', 'dependency=/owned/deps', '--extern', 'proc_macro']};
 assert.deepEqual(externArguments(macroCommand), {dependencies: [], sysroot: ['proc_macro']});
+assert.deepEqual(externArguments({...macroCommand, args: ['--test', '-L', 'dependency=/owned/deps', '--extern', 'proc_macro']}),
+  {dependencies: [], sysroot: ['proc_macro']});
 for (const args of [
   ['--crate-type', 'lib', '--extern', 'proc_macro'],
   ['--crate-type', 'proc-macro', '--extern', 'unknown'],
@@ -19,6 +21,51 @@ for (const args of [
 ]) assert.throws(() => externArguments({...macroCommand, args}), /pathless extern/);
 assert.deepEqual(externArguments({...macroCommand, args: ['--extern', 'renamed=/owned/dependency']}),
   {dependencies: [{name: 'renamed', filename: '/owned/dependency'}], sysroot: []});
+
+// Package names deliberately collide: only resolve package IDs select roots.
+const target = (filename, kind = 'lib', types = [kind]) => ({src_path: filename, kind: [kind], crate_types: types});
+const packageItem = (id, targets) => ({id, name: 'same-name', targets});
+const edge = (pkg, kind = null) => ({pkg, dep_kinds: [{kind, target: null}]});
+const toolingMetadata = {packages: [
+  packageItem('build-owner', [target('/owned/build.rs', 'custom-build', ['bin']), target('/owned/app.rs')]),
+  packageItem('macro-owner', [target('/owned/macro.rs', 'proc-macro')]),
+  packageItem('build-dep', [target('/owned/helper.rs'), target('/owned/helper-test.rs', 'test', ['bin'])]),
+  packageItem('macro-dep', [target('/owned/macro-helper.rs')]),
+  packageItem('transitive', [target('/owned/transitive.rs', 'rlib')]),
+  packageItem('normal-app', [target('/owned/not-tooling.rs')]),
+  packageItem('dev-only', [target('/owned/dev-only.rs')]),
+  packageItem('mixed', [target('/owned/mixed.rs', 'lib', ['rlib', 'cdylib'])]),
+], resolve: {nodes: [
+  {id: 'build-owner', deps: [edge('build-dep', 'build'), edge('normal-app'), edge('dev-only', 'dev')]},
+  {id: 'macro-owner', deps: [edge('macro-dep'), edge('dev-only', 'dev')]},
+  {id: 'build-dep', deps: [edge('transitive'), edge('mixed'), edge('dev-only', 'dev')]},
+  {id: 'macro-dep', deps: [edge('transitive')]},
+  {id: 'transitive', deps: [edge('build-dep')]}, // cycle is visited once
+  ...['normal-app', 'dev-only', 'mixed'].map(id => ({id, deps: []})),
+]}};
+const roots = toolingRoots(toolingMetadata);
+assert.deepEqual(roots.buildScripts, ['/owned/build.rs']);
+assert.deepEqual(roots.procMacros, ['/owned/macro.rs']);
+assert.deepEqual([...roots.libraries].sort(), ['/owned/helper.rs', '/owned/macro-helper.rs', '/owned/transitive.rs']);
+assert.throws(() => toolingRoots({...toolingMetadata, resolve: {nodes: []}}), /missing tooling/);
+assert.throws(() => toolingRoots({...toolingMetadata, packages: [...toolingMetadata.packages, toolingMetadata.packages[0]]}), /ambiguous tooling/);
+assert.throws(() => toolingRoots({...toolingMetadata, packages: Array(16001).fill(null)}), /bounds/);
+const compilerCommand = (root, type, extra = [], emit = 'dep-info,metadata,link') => ({compiler: '/owned/rustc', cwd: '/owned',
+  args: ['--crate-name', 'owned', '--edition=2024', root, '--crate-type', type, '--emit=' + emit, ...extra]});
+for (const [root, type] of [['/owned/build.rs', 'bin'], ['/owned/macro.rs', 'proc-macro'],
+  ['/owned/helper.rs', 'lib'], ['/owned/transitive.rs', 'rlib']])
+  assert.equal(preparationEmits(compilerCommand(root, type), roots).root, root);
+for (const [root, type, extra] of [
+  ['/owned/not-tooling.rs', 'lib', []], ['/owned/dev-only.rs', 'lib', []],
+  ['/owned/helper-test.rs', 'bin', []], ['/owned/helper.rs', 'bin', []],
+  ['/owned/helper.rs', 'lib', ['--test']], ['/owned/helper.rs', 'lib', ['--target', 'aarch64-apple-darwin']],
+  ['/owned/helper.rs', 'cdylib', []], ['/owned/helper.rs', 'staticlib', []], ['/owned/helper.rs', 'lib,cdylib', []],
+  ['/owned/build.rs', 'proc-macro', []], ['/owned/macro.rs', 'bin', []],
+  ['/owned/build.rs', 'bin', ['--test']], ['/owned/macro.rs', 'proc-macro', ['--test']],
+]) assert.throws(() => preparationEmits(compilerCommand(root, type, extra), roots), /final-product\/codegen/);
+assert.throws(() => preparationEmits(compilerCommand('/owned/helper.rs', 'lib', [], 'llvm-ir'), roots), /final-product\/codegen/);
+assert.throws(() => preparationEmits(compilerCommand('/owned/helper.rs', 'lib'), {...roots, libraries: ['/relative'.slice(1)]}), /tooling root/);
+assert.equal(preparationEmits(compilerCommand('/owned/not-tooling.rs', 'bin', ['--test'], 'dep-info,metadata'), roots).test, true);
 
 const proofSource = {uri: 'file:///owned/saved.rs', text: 'fn saved() {}'};
 const presentationError = Object.assign(new Error('owned synthetic syntax presentation failure'), {rpcCode: -32603});
@@ -92,7 +139,7 @@ assert(!fs.existsSync(failedTarget));
 assert(!fs.readdirSync(directory).some(name => name.endsWith('.next')), 'partial-write scratch file was left behind');
 
 const configuration = path.join(directory, 'configuration.json'), marker = path.join(directory, 'compiler-must-not-run');
-fs.writeFileSync(configuration, JSON.stringify({directory, inputs: [], toolRoots: []}));
+fs.writeFileSync(configuration, JSON.stringify({directory, inputs: [], toolRoots: {buildScripts: [], procMacros: [], libraries: []}}));
 const rejected = spawnSync(process.execPath, [path.join(repository, 'providers/rust/capture.mjs'), '/usr/bin/touch', marker], {
   cwd: repository, encoding: 'utf8', timeout: 2000,
   env: {...process.env, KNOW_CODE_RUST_CAPTURE_CONFIG: configuration, CARGO_MAKEFLAGS: '--jobserver-auth=fifo:/unsupported'}});
@@ -122,7 +169,8 @@ removeCapturedOutput(cache, ownedOutput); assert(!fs.existsSync(ownedOutput));
 fs.writeFileSync(path.join(directory, 'summary.json'), JSON.stringify({passed: true, assertions: [
   'FIFO setup/source/artifact reads fail without blocking', 'derived FIFO target replaced atomically',
   'partial-write ENOSPC simulation cleans the owned temporary file', 'unsupported jobserver format refused before tool execution',
-  'bare Cargo proc_macro requires a proc-macro unit and sysroot-only direct lookup; unknown/conflicting search forms rejected',
+  'bare Cargo proc_macro permits macro/test units only with sysroot-only direct lookup; unknown/conflicting search forms rejected',
+  'typed host-tool dependency closure permits only intermediate host lib/rlib link outputs and excludes dev/normal-app/test/final products',
   'only an explicitly allowed syntax-presentation RPC failure omits proof; owned source-read and transport failures remain fatal',
   'Cargo environment sets/overrides and removals bind hashed parent origins without dumping unchanged ambient values',
   'fake artifact cleanup preserves foreign/state/symlink sentinels and removes only owned target/build files'],

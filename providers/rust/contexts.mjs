@@ -56,7 +56,8 @@ export function capturedEnvironmentCurrent(record, baseline) {
     (Object.hasOwn(record.environment, name) ? environmentHash(record.environment[name]) : null) === origin.value);
 }
 
-// Bare proc_macro is Cargo's sysroot prelude injection, not an artifact join.
+// Bare proc_macro in macro units and their test harnesses is Cargo's sysroot
+// prelude injection, not an artifact join.
 // Direct extern lookup uses crate/all search paths; Cargo's typed dependency
 // paths cannot replace this sysroot crate. Refuse broader paths rather than
 // guessing which same-named binary the compiler selected.
@@ -67,7 +68,7 @@ export function externArguments(record) {
   for (const value of values) {
     const separator = value.indexOf('=');
     if (separator < 1) {
-      if (value !== 'proc_macro' || !flagValues(record.args, '--crate-type').some(value => value.split(',').includes('proc-macro')) ||
+      if (value !== 'proc_macro' || !(record.args.includes('--test') || flagValues(record.args, '--crate-type').some(value => value.split(',').includes('proc-macro'))) ||
           values.some(other => other.startsWith('proc_macro=')) ||
           search.some(value => typeof value !== 'string' || !/^(?:dependency|native|framework)=.+/.test(value)))
         gap('pathless extern dependency lacks an unambiguous sysroot selection');
@@ -79,6 +80,77 @@ export function externArguments(record) {
     }
   }
   return {dependencies, sysroot: [...new Set(sysroot)]};
+}
+
+// Permission for Cargo's host-tool preparation, never semantic dependency proof.
+// Resolve IDs are opaque keys. Conditional edges may over-approximate permission;
+// only actual successful compiler/artifact joins can create analyzer units.
+export function toolingRoots(metadata) {
+  const packages = metadata.packages, nodes = metadata.resolve?.nodes;
+  if (!Array.isArray(packages) || !Array.isArray(nodes) || packages.length > 16000 || nodes.length > 16000)
+    gap('tooling dependency graph exceeds supported metadata bounds');
+  const byPackage = new Map(), byNode = new Map(), buildScripts = [], procMacros = [], pending = [];
+  for (const item of packages) {
+    if (typeof item.id !== 'string' || byPackage.has(item.id) || !Array.isArray(item.targets)) gap('ambiguous tooling package metadata');
+    byPackage.set(item.id, item);
+    for (const target of item.targets) {
+      if (!path.isAbsolute(target.src_path ?? '') || !Array.isArray(target.kind) || !Array.isArray(target.crate_types))
+        gap('unsupported tooling target metadata');
+      if (target.kind.includes('custom-build')) buildScripts.push(target.src_path);
+      if (target.kind.includes('proc-macro')) procMacros.push(target.src_path);
+    }
+  }
+  let edges = 0;
+  for (const node of nodes) {
+    if (!byPackage.has(node.id) || byNode.has(node.id) || !Array.isArray(node.deps)) gap('ambiguous tooling resolve metadata');
+    byNode.set(node.id, node);
+    for (const dependency of node.deps) {
+      if (++edges > 64000 || !byPackage.has(dependency.pkg) || !Array.isArray(dependency.dep_kinds) ||
+          dependency.dep_kinds.some(item => ![null, 'build', 'dev'].includes(item.kind)))
+        gap('unsupported tooling dependency metadata');
+    }
+  }
+  for (const item of packages) {
+    const node = byNode.get(item.id);
+    if (!node) gap('missing tooling resolve node');
+    const build = item.targets.some(target => target.kind.includes('custom-build'));
+    const macro = item.targets.some(target => target.kind.includes('proc-macro'));
+    for (const dependency of node.deps)
+      if (dependency.dep_kinds.some(kind => build && kind.kind === 'build' || macro && kind.kind === null)) pending.push(dependency.pkg);
+  }
+  const visited = new Set(), libraries = [];
+  while (pending.length) {
+    const id = pending.pop();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const item = byPackage.get(id), node = byNode.get(id);
+    if (!node) gap('missing tooling dependency resolve node');
+    for (const target of item.targets)
+      if (target.kind.length === 1 && ['lib', 'rlib'].includes(target.kind[0]) &&
+          target.crate_types.length && target.crate_types.every(kind => ['lib', 'rlib'].includes(kind))) libraries.push(target.src_path);
+    for (const dependency of node.deps)
+      if (dependency.dep_kinds.some(kind => kind.kind === null)) pending.push(dependency.pkg);
+  }
+  const roots = {buildScripts: [...new Set(buildScripts)], procMacros: [...new Set(procMacros)], libraries: [...new Set(libraries)]};
+  if (Object.values(roots).reduce((count, value) => count + value.length, 0) > 16000) gap('tooling source roots exceed supported bounds');
+  return roots;
+}
+
+export function preparationEmits(record, roots) {
+  if (!roots || Object.keys(roots).sort().join(',') !== 'buildScripts,libraries,procMacros' ||
+      Object.values(roots).some(values => !Array.isArray(values) || values.length > 16000 ||
+        values.some(value => typeof value !== 'string' || !path.isAbsolute(value)))) gap('invalid compiler tooling root permission');
+  const parsed = contextArguments(record);
+  const emits = flagValues(record.args, '--emit').flatMap(value => value.split(',').map(item => item.split('=', 1)[0]));
+  const types = flagValues(record.args, '--crate-type').flatMap(value => value.split(','));
+  const host = !parsed.test && !parsed.target;
+  const link = host && types.length === 1 && (
+    types[0] === 'bin' && roots.buildScripts.includes(parsed.root) ||
+    types[0] === 'proc-macro' && roots.procMacros.includes(parsed.root) ||
+    ['lib', 'rlib'].includes(types[0]) && roots.libraries.includes(parsed.root));
+  if (!emits.length || emits.some(item => !['dep-info', 'metadata', ...(link ? ['link'] : [])].includes(item)))
+    gap('final-product/codegen output is outside compiler preparation');
+  return parsed;
 }
 
 export function cargoArtifactIdentity(artifact) {
