@@ -24,6 +24,24 @@ export function checked(command, args, cwd, env = process.env) {
   if (result.status !== 0) throw new Error(`${command} failed: ${result.stderr.trim()}`);
   return result.stdout.trim();
 }
+// SwiftPM and Xcode use the same full-body primary compiler/diagnostic path.
+export function compileSources({compiler, options, store, root, env}) {
+  const diagnostics = [];
+  let partial = false;
+  for (const option of options) {
+    const compile = run(compiler, ['-index-file', '-index-file-path', option.file,
+      '-index-store-path', store, '-index-include-locals', '-index-ignore-system-modules',
+      '-index-unit-output-path', path.join(store, `${hash(option.file)}.o`), ...option.args], option.workingDirectory, env);
+    const items = compilerDiagnostics(compile.stderr, root);
+    if (/Stack dump:|Please submit a bug report|signal [0-9]+|LLVM ERROR|Assertion failed/i.test(compile.stderr)
+        || (compile.status !== 0 && !items.some(item => item.severity === 'error' && item.path)))
+      throw new Error(`Swift compiler/driver failed: ${compile.stderr.slice(0, 16000)}`);
+    partial ||= compile.status !== 0 || items.some(item => item.severity === 'error');
+    for (const item of items) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
+  }
+  return {partial, diagnostics};
+}
+
 // IndexStore uses one-based UTF-8 byte columns. Its occurrence has a start only;
 // recover just that token in the exact retained text, never search by symbol name.
 function tokenRange(source, line, column) {

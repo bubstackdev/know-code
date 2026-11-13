@@ -3,7 +3,7 @@ import path from 'node:path';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {send} from '../shared/protocol.mjs';
-import {checked, run, hash, relative, sourceFile, compilerDiagnostics, ingestStore} from './index.mjs';
+import {checked, hash, relative, sourceFile, compileSources, ingestStore} from './index.mjs';
 import {unavailableGraphCapabilities} from './graph.mjs';
 import {semanticArguments} from './compiler.mjs';
 
@@ -19,7 +19,7 @@ function gap(root, project, toolchain, configuration, diagnostics) {
   const {version, compiler, sdk} = toolchain;
   const projectPath = relative(root, project), id = `swift:${projectPath}`;
   send('compilation', {id, language: 'swift', projectPath, configuration, compilerVersion: version,
-    inputPaths: [...manifests(path.dirname(project)), ...toolchain.inputPaths], optionsJson: JSON.stringify({origin: 'swiftpm', supported: false, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection})});
+    inputPaths: [...manifests(path.dirname(project)), ...toolchain.inputPaths], optionsJson: JSON.stringify({swiftExtractionPolicy: 1, origin: 'swiftpm', supported: false, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection})});
   send('report', {compilationId: id, status: 'partial', diagnostics, capabilities: unavailableGraphCapabilities});
 }
 function packageArguments(directory, state, configuration, sdk) {
@@ -240,23 +240,15 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       let partial = diagnostics.some(item => item.severity === 'error');
       const compilerInputs = new Set([...inputs, ...toolchain.inputPaths]);
       const toolchainRoot = path.resolve(path.dirname(compiler), '..', '..');
-      for (const option of options) {
-        const compile = run(compiler, ['-index-file', '-index-file-path', option.file,
-          '-index-store-path', store, '-index-include-locals', '-index-ignore-system-modules',
-          '-index-unit-output-path', path.join(store, `${hash(option.file)}.o`), ...option.args], option.workingDirectory, env);
-        const items = compilerDiagnostics(compile.stderr, root);
-        if (/Stack dump:|Please submit a bug report|signal [0-9]+|LLVM ERROR|Assertion failed/i.test(compile.stderr)
-            || (compile.status !== 0 && !items.some(item => item.severity === 'error' && item.path)))
-          throw new Error(`Swift compiler/driver failed: ${compile.stderr.slice(0, 16000)}`);
-        partial ||= compile.status !== 0 || items.some(item => item.severity === 'error');
-        for (const item of items) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
-      }
+      const compiled = compileSources({compiler, options, store, root, env});
+      partial ||= compiled.partial;
+      for (const item of compiled.diagnostics) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
       const library = path.resolve(path.dirname(compiler), '..', 'lib', 'libIndexStore.dylib');
       const facts = ingestStore({id, root, sources, store, library, scratch, onInputs: indexInputs => {
         for (const file of indexInputs)
           if (!within(file, work) && !within(file, toolchainRoot) && !within(file, fs.realpathSync(sdk)) && exists(file)) compilerInputs.add(file);
         send('compilation', {id, language: 'swift', projectPath, target: target.displayName, configuration, compilerVersion: version,
-        dependencies, inputPaths: [...compilerInputs], optionsJson: JSON.stringify({origin: 'swiftpm_build_server',
+        dependencies, inputPaths: [...compilerInputs], optionsJson: JSON.stringify({swiftExtractionPolicy: 1, origin: 'swiftpm_build_server',
           bspVersion: initialized.bspVersion, buildServerVersion: initialized.version, bspTarget: target.id.uri,
           compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection, effectiveTarget, signatures: 'compiler_index_names_only',
           indexIncludeLocals: true, jobs: 1, preparation: 'modules_only', compilerConfigurations: [...configurations.values()],
