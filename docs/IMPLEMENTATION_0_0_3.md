@@ -436,3 +436,37 @@ were stopped by their drivers. [The source audit](reviews/SWIFTPM_PREPARATION_ME
 finds no demonstrated lost `--jobs 1` forwarding or preparation overlap; it is
 not an exact installed-SwiftPM binary proof. No compiler flag, resource default
 or limit has been changed to manufacture a pass.
+
+
+## Atelier retry: failed completion and empty compiler records
+
+The user approved a temporary 4 GiB limit for this isolated full-copy test;
+the shared default and live installation remain 2 GiB. Every attempt's driver
+restores its isolated setting and stops its owned coordinator in `finally`.
+The first lifted-limit attempt failed after 223 seconds with a native reader
+error masked by `unexpected message during staging`. An intermediate retry
+only replayed the saved failed-input guard and is retained as a harness
+failure, not another compiler run. The corrected driver acknowledges startup
+cancellation before issuing one explicit public SDK refresh.
+
+The next actual attempt (`production-4g-03`, 92.86 seconds, generation zero)
+identified an IndexStore traversal failure for `ClipLiveTests.swift`, whose
+contents are entirely excluded by the selected conditional-compilation
+context. A separate owned two-file reproduction failed the same way. The
+reader now uses the public symbol enumeration API to establish a valid empty
+record before skipping its absent occurrence cursor. Nonempty record traversal
+and corrupt-record errors remain required; see
+[the narrow fix and focused qualification](reviews/SWIFT_EMPTY_INDEX_RECORDS.md).
+
+The common update path now explicitly rejects `Complete { success: false }`
+without staging it as facts, preserving the previous generation and useful
+worker diagnostics. The TypeScript fault path now emits this existing failed
+completion consistently with Swift. Existing publication regressions pass all
+20 assertions (`reader-completion-publication-01`); the `provider-failures`
+check passes inside the retained selected run `reader-completion-providers-02`,
+whose later Swift fixture failure means that overall run did **not** pass.
+The corrected focused Swift/SwiftPM checks pass against matching Debug
+producer `190ffd3a92a3473fa1b28a9dac6761ae` at test source `747d0e7`
+(`empty-record-swift-providers-03`). Failed build/provenance and fixture attempts
+remain retained. A full-corpus retry is a separate qualification, not implied
+by these passes.
