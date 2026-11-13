@@ -139,5 +139,6 @@ try {
   send('complete', {success: true});
 } catch (error) {
   console.error(`TypeScript analysis failed: ${error.stack ?? error}`);
+  try { send('complete', {success: false}); } catch { /* No valid request or a failed output pipe. */ }
   process.exitCode = 1;
 }
