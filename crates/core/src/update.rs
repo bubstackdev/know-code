@@ -487,7 +487,12 @@ pub(crate) fn index_published(
                         );
                         hello = true;
                     }
-                    Some(Payload::Complete(done)) if hello && done.success => {
+                    Some(Payload::Complete(done)) if hello => {
+                        if !done.success {
+                            return Err(Error::Provider(
+                                "worker reported failure; previous generation preserved".into(),
+                            ));
+                        }
                         if !saw_compilation {
                             return Err(Error::Protocol("worker completed without any compilation; previous generation preserved".into()));
                         }

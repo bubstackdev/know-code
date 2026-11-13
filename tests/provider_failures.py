@@ -214,6 +214,8 @@ try:
  (GOOD_TS/'code.ts').write_text((GOOD_TS/'code.ts').read_text()+'export function TsShouldNotPublish() { return 3; }\n')
  failed=wait(lambda s:s['phase']=='failed','unexpected worker extraction failure')
  assert failed['generation']==repaired['generation'],failed
+ assert 'worker reported failure' in failed['error'] and 'owned unexpected extraction fault' in failed['error'],failed
+ assert 'unexpected staging message' not in failed['error'],failed
  retained=query({'op':'symbols','name':'TsFresh'})
  assert retained['freshness']=='stale' and retained['generation']==repaired['generation'] and not symbols('TsShouldNotPublish'),retained
  DETAILS['fatal_worker_status']=failed
