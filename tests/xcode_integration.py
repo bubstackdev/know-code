@@ -182,12 +182,16 @@ def query(request, equivalent=False):
     return response['result']
 
 
-def coverage():
+def expanded_coverage():
     anchor = query({'op': 'symbols', 'limit': 1}, equivalent=True)
     expanded = query({'op': 'coverage', 'generation': anchor['generation'],
                       'snapshot': anchor['snapshot'], 'max_bytes': 262144}, equivalent=True)
     assert expanded['generation'] == anchor['generation'] and expanded['snapshot'] == anchor['snapshot']
-    rows = expanded['coverage']
+    return expanded['coverage']
+
+
+def coverage():
+    rows = expanded_coverage()
     assert len(rows) == 6, rows
     assert all(row['language'] == 'swift' and row['project_path'] == 'Probe.xcodeproj/project.pbxproj'
                and row['configuration'] == 'Debug' and row['analysis_options']['swiftExtractionPolicy'] == 1
@@ -294,6 +298,37 @@ assert all(not row['diagnostic_counts'].get('error', 0) for row in repaired.valu
 graph_checks(contexts)
 guards()
 CHECKS.append('saved_compiler_error_repair')
+
+# A missing compiler-declared input is a typed preparation failure, not an
+# invitation to keep old bodies in a newly current generation. Repair through
+# the existing saved-file watcher, without an explicit refresh or new client.
+dependency_source = WORKSPACE / 'Dependency.swift'
+saved_dependency = dependency_source.read_bytes()
+try:
+    dependency_source.unlink()
+    generation = ready('missing-compiler-source', generation)
+    unavailable = expanded_coverage()
+    assert len(unavailable) == 2, unavailable
+    assert {row['analysis_options']['platform'] for row in unavailable} == {'iphoneos', 'iphonesimulator'}
+    assert all(row['status'] == 'partial' and row['diagnostic_counts'].get('error', 0)
+               and row['analysis_options']['origin'] == 'xcode'
+               and row['analysis_options']['supported'] is False
+               and row['analysis_options']['preparation'] == 'unavailable'
+               and any(item['code'] == 'xcode_module_preparation_failed'
+                       for item in row.get('diagnostics', [])) for row in unavailable), unavailable
+    assert not symbols('dependencyEntry()') and not symbols('contextEntry()'), 'Prior bodies appeared in the current unavailable graph'
+    guards()
+    CHECKS.append('missing_compiler_source_publishes_typed_unavailable_SDK_contexts_without_prior_bodies')
+finally:
+    dependency_source.write_bytes(saved_dependency)
+generation = ready('missing-compiler-source-repair', generation)
+restored = coverage()
+assert restored.keys() == contexts.keys()
+assert all(not row['diagnostic_counts'].get('error', 0) for row in restored.values()), restored
+assert dependency_source.read_bytes() == saved_dependency
+graph_checks(contexts)
+guards()
+CHECKS.append('recreated_compiler_source_automatically_repairs_both_SDK_graphs')
 
 result = {'passed': True, 'profile': PROFILE, 'run': str(RUN), 'database': DATABASE,
           'bridge': str(BRIDGE), 'generation': generation, 'checks': CHECKS,
