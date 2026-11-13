@@ -155,26 +155,30 @@ def stop():
 atexit.register(stop)
 
 
-def ready(label, after=0):
-    deadline = time.monotonic() + 240
+def wait_status(label, predicate, timeout=240):
+    deadline = time.monotonic() + timeout
     with (RUN / (label + '-status.jsonl')).open('x') as stream:
         while time.monotonic() < deadline:
             status = json.loads(run([HOST, 'coordinator', 'status']).stdout)['workspaces'][0]
             stream.write(json.dumps(status) + '\n')
             stream.flush()
             assert status['phase'] not in ('failed', 'resource_limited'), status
-            if (status['phase'] == 'idle' and status['generation'] > after
-                    and status['observed_epoch'] == status['published_epoch']):
-                return status['generation']
+            if predicate(status):
+                return status
             time.sleep(.1)
     raise AssertionError(('Xcode indexing did not settle', status))
 
 
-def query(request, equivalent=False):
+def ready(label, after=0):
+    return wait_status(label, lambda status: status['phase'] == 'idle' and status['generation'] > after
+                       and status['observed_epoch'] == status['published_epoch'])['generation']
+
+
+def query(request, equivalent=False, freshness='current'):
     request = {'response_max_bytes': 2 * 1024 * 1024, **request}
     encoded = json.dumps(request)
     response = json.loads(run([HOST, 'query', DATABASE, encoded]).stdout)
-    assert 'result' in response and response['result']['freshness'] == 'current', response
+    assert 'result' in response and response['result']['freshness'] == freshness, response
     if equivalent:
         for argv in (['node', ROOT / f'.artifacts/build/{PROFILE}/node/smoke.mjs'],
                      ['dotnet', ROOT / f'bindings/dotnet/Smoke/bin/{PROFILE.capitalize()}/net10.0/Smoke.dll']):
@@ -368,6 +372,46 @@ assert pbx.read_bytes() == saved_project and len(symbols('healthySibling')) == 1
 graph_checks(contexts)
 guards()
 CHECKS.append('saved_Xcode_project_repair_restores_both_SDK_graphs_beside_healthy_sibling')
+
+# Observe real preparation before cancelling through the ordinary CLI. A
+# cancellation that loses the commit race is not evidence that an active job
+# was aborted; keep that outcome visible instead of silently retrying it.
+retained = query({'op': 'symbols', 'name': 'contextEntry()'}, equivalent=True)
+before_cancel = APP.read_bytes()
+baseline = retained['generation']
+APP.write_bytes(before_cancel + b'\npublic func cancelledCandidate() -> Int { contextEntry() }\n')
+active = wait_status('cancel-active', lambda status:
+    (status['generation'] == baseline and status['observed_epoch'] > status['published_epoch']
+     and (status.get('progress') or {}).get('stage') == 'preparing')
+    or status['generation'] > baseline, timeout=60)
+assert active['generation'] == baseline, ('Cancellation window was not observed before publication', active)
+acknowledged = json.loads(run([HOST, 'cancel', WORKSPACE]).stdout)
+(RUN / 'cancel-acknowledgement.json').write_text(json.dumps(acknowledged, indent=2) + '\n')
+assert acknowledged['phase'] in ('cancelling', 'cancelled'), ('Cancellation lost the commit race; no aborted-job gate is claimed', acknowledged)
+assert acknowledged['generation'] == baseline, acknowledged
+stopped = wait_status('cancel-complete', lambda status: status['phase'] == 'cancelled', timeout=30)
+assert stopped['outcome_code'] == 'cancelled' and stopped['generation'] == baseline, stopped
+assert all(json.loads(line)['generation'] == baseline
+           for line in (RUN / 'cancel-complete-status.jsonl').read_text().splitlines())
+stale = query({'op': 'symbols', 'name': 'contextEntry()', 'freshness_wait_ms': 0}, equivalent=True, freshness='stale')
+assert stale['generation'] == baseline and stale['symbols'] == retained['symbols'], stale
+assert not query({'op': 'symbols', 'name': 'cancelledCandidate()', 'freshness_wait_ms': 0}, equivalent=True, freshness='stale').get('symbols')
+location = retained['symbols'][0]['locations'][0]
+old_source = query({'op': 'source', 'artifact_id': location['artifact_id'], 'snapshot': retained['snapshot'],
+                    'content_hash': location['content_hash'], 'max_bytes': 65536, 'freshness_wait_ms': 0},
+                   equivalent=True, freshness='stale')['source']
+assert old_source['text'].encode() == before_cancel and old_source['content_hash'] == hashlib.sha256(before_cancel).hexdigest(), old_source
+guards()
+CHECKS.append('CLI_active_Xcode_cancellation_preserves_generation_and_stale_graph_without_partial_publication')
+# Save only after the durable cancelled acknowledgement; edits racing its final
+# baseline check are deliberately outside this assertion's snapshot boundary.
+APP.write_bytes(before_cancel + b'\npublic func resumedAfterCancellation() -> Int { contextEntry() }\n')
+generation = ready('cancel-new-save-recovery', baseline)
+assert coverage(expected_total=7).keys() == contexts.keys()
+assert len(symbols('resumedAfterCancellation()')) == 2 and not symbols('cancelledCandidate()')
+graph_checks(contexts)
+guards()
+CHECKS.append('new_save_after_acknowledged_cancellation_resumes_both_SDK_graphs')
 
 result = {'passed': True, 'profile': PROFILE, 'run': str(RUN), 'database': DATABASE,
           'bridge': str(BRIDGE), 'generation': generation, 'checks': CHECKS,
