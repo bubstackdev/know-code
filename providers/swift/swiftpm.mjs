@@ -7,6 +7,7 @@ import {checked, hash, relative, sourceFile, compileSources, ingestStore} from '
 import {unavailableGraphCapabilities} from './graph.mjs';
 import {semanticArguments} from './compiler.mjs';
 
+export const PREPARATION_TIMEOUT_MS = 600000;
 const packageManifest = file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file));
 export const canonicalManifest = file => packageManifest(file) ? path.join(path.dirname(file), 'Package.swift') : file;
 const exists = file => { try { return fs.statSync(file).isFile() || fs.statSync(file).isDirectory(); } catch { return false; } };
@@ -80,9 +81,9 @@ function prepareDependencies({request, root, project, swift, toolchain, state, c
   send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
   return error ? {error: diagnostic('dependency_restore_failed', error, relative(root, project))} : {plan};
 }
-export async function extensionRequest(client, method, params) {
-  try { return await client.request(`sourcekit/${method}`, params); }
-  catch (error) { if (error.rpcCode !== -32601) throw error; return client.request(method, params); }
+export async function extensionRequest(client, method, params, options) {
+  try { return await client.request(`sourcekit/${method}`, params, options); }
+  catch (error) { if (error.rpcCode !== -32601) throw error; return client.request(method, params, options); }
 }
 function verifyToolchain(target, compiler) {
   const uri = target.data?.toolchain;
@@ -186,7 +187,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       const items = sourcesByTarget.get(target.id.uri);
       const preparationStart = buildDiagnostics.length;
       send('progress', {stage: 'preparing', projectPath, message: `Preparing Swift modules for ${target.displayName}; no product/object build`});
-      await extensionRequest(client, 'buildTarget/prepare', {targets: [target.id]});
+      await extensionRequest(client, 'buildTarget/prepare', {targets: [target.id]}, {timeout: PREPARATION_TIMEOUT_MS});
       const sourceResponse = await client.request('buildTarget/sources', {targets: [target.id]});
       const currentItems = sourceResponse.items.flatMap(item => item.sources);
       const swiftItems = currentItems.filter(source => source.uri.startsWith('file:') && source.uri.endsWith('.swift'));

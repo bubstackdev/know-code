@@ -8,7 +8,7 @@ import {send, MAX_FRAME} from '../shared/protocol.mjs';
 import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {sourceBoundary} from '../shared/source.mjs';
 import {relative, hash, run, sourceFile, compileSources, ingestStore} from './index.mjs';
-import {extensionRequest, loadManifest, unsupportedManifest} from './swiftpm.mjs';
+import {extensionRequest, loadManifest, unsupportedManifest, PREPARATION_TIMEOUT_MS} from './swiftpm.mjs';
 import {semanticArguments} from './compiler.mjs';
 import {unavailableGraphCapabilities} from './graph.mjs';
 
@@ -394,7 +394,7 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
       if (manifestPolicy.unsupported) throw problem('xcode_external_codegen_required', `${manifestPolicy.unsupported.path}: ${manifestPolicy.unsupported.message}`);
       send('progress', {stage: 'preparing', projectPath: relative(root, project), message: `Preparing selected ${platform} modules; scripts and product builds stay disabled`});
       let preparationError;
-      try { await extensionRequest(client, 'buildTarget/prepare', {targets: targets.map(target => target.id)}); }
+      try { await extensionRequest(client, 'buildTarget/prepare', {targets: targets.map(target => target.id)}, {timeout: PREPARATION_TIMEOUT_MS}); }
       catch (error) { preparationError = error; }
       let prepared;
       try { prepared = json(path.join(buildRoot, 'know-code-last-preparation.json')); }

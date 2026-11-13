@@ -33,6 +33,7 @@ process.stdin.on('data', chunk => {
       continue;
     }
     if (mode === 'hang') continue;
+    if (mode === 'delayed') { setTimeout(() => process.stdout.write(frame({id:message.id,result:message.params})), 150); continue; }
     if (mode === 'slow-reader') { process.stdout.write(frame({id:message.id,result:message.params.number})); continue; }
     if (mode === 'exit') process.exit(7);
     if (mode === 'rpc-error') { process.stdout.write(frame({id:message.id,error:{code:-32601,message:'Method not found',data:{method:message.method}}})); continue; }
@@ -149,6 +150,20 @@ await withChild('hang', async (rpc, exit) => {
   await assert.rejects(rpc.request('after-exit', {}), rejected => rejected === error);
 }, {timeout:100});
 checks.push('request timeout fails all pending and preserves its cause after child exit');
+
+await withChild('delayed', async (rpc, exit) => {
+  assert.equal(rpc.timeout, 50);
+  assert.deepEqual(await rpc.request('longer-override', {accepted:true}, {timeout:1000}), {accepted:true});
+  assert.equal(rpc.timeout, 50);
+  await assert.rejects(rpc.request('default-deadline', {}), error => {
+    assert.match(error.message, /timed out: default-deadline/);
+    assert.equal(error, rpc.failure);
+    return true;
+  });
+  await exit;
+  assert.match(rpc.failure.message, /timed out: default-deadline/);
+}, {timeout:50});
+checks.push('per-request deadline override leaves the default deadline and causal failure unchanged');
 
 await withChild('hang', async rpc => {
   await assert.rejects(rpc.request('too-large', {text:'x'.repeat(8*1024*1024)}), /outgoing JSON-RPC frame exceeds/);

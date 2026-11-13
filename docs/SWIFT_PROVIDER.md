@@ -50,6 +50,12 @@ matching build/run evidence must be supplied by the integration owner.
 
 The adapter uses the selected toolchain's `swift package` commands to evaluate manifests and restore dependencies, then starts `experimental-build-server`. It requests the target/source inventory, indexing-only `buildTarget/prepare`, and per-file `textDocument/sourceKitOptions`. SwiftPM owns target membership, compiler flags, platform deployment settings, feature switches, dependency-module planning, and working directories. Know Code does not reconstruct those from a hand-written build engine.
 
+The accepted module-preparation request budget is ten minutes for SwiftPM and
+Xcode `buildTarget/prepare` only. Metadata, initialization, source/options and
+shutdown requests retain their 120-second default. Query deadlines and shared
+CPU/memory limits are unchanged. A longer preparation budget does not establish
+successful preparation or relax compiler/transport failure handling.
+
 Installed Swift 6.4.2 uses unprefixed BSP extension methods; newer upstream definitions use `sourcekit/`. The client attempts the newer method and falls back only for structured JSON-RPC error `-32601` (method not found). Actual setup/protocol failures are not masked by fallback. The requested target's canonical compiler path must match the selected compiler; there is no silent toolchain substitution.
 
 Dependency restoration uses the existing `PreparationResult`/progress contract. Checkpoints cover the request's configuration fingerprint, compiler/SDK identity, workspace state, resolved package paths, and manifest/lock hashes. Source-only saves reuse valid successful setup and retain failed setup until changed inputs or explicit retry. Compiler module preparation still runs through SwiftPM's incremental machinery so a saved API change cannot leave dependents using an old module. The focused regression renames an exported API while introducing a compiler error: the consumer becomes partial and does not resolve the removed API from cached output; repair restores complete coverage.

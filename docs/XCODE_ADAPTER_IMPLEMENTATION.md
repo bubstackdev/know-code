@@ -125,6 +125,12 @@ and checks actual stored compilation inputs alongside generated-source facts.
 This source correction still needs matching runtime validation; the interrupted
 full Atelier run's stale generation does not establish current convergence.
 
+Heavy `buildTarget/prepare` requests use the accepted ten-minute Swift preparation
+budget. Metadata, initialization, source/options and shutdown retain 120 seconds;
+query deadlines and shared CPU/memory controls are unchanged. Timeout remains a
+fatal causal transport failure, not a typed compiler rejection or successful
+module-readiness receipt.
+
 ## Gates before promoting this checkpoint
 
 - Run the updated focused policy/ambiguity/prerequisite/invalidation fixture and
