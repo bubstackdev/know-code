@@ -1,7 +1,7 @@
 // Rust syntax/semantic evidence only; traversal and storage remain in the core.
 // The analyzer's syntax-tree extension supplies grammar roles and byte ranges.
 // A reference is never promoted to a call without outgoing-call evidence too.
-const OWNERS = new Set(['FN', 'CONST', 'STATIC', 'STRUCT', 'ENUM', 'TRAIT', 'TYPE_ALIAS', 'MOD']);
+const OWNERS = new Set(['FN', 'CONST', 'STATIC', 'STRUCT', 'ENUM', 'TRAIT', 'TYPE_ALIAS', 'MODULE']);
 const TYPES = new Set(['PATH_TYPE', 'REF_TYPE', 'PTR_TYPE', 'ARRAY_TYPE', 'SLICE_TYPE', 'TUPLE_TYPE', 'FN_PTR_TYPE', 'IMPL_TRAIT_TYPE', 'DYN_TRAIT_TYPE']);
 const POSITIONAL = new Set(['CALL_EXPR', 'METHOD_CALL_EXPR']);
 const callable = node => node.kind === 'FN' || node.kind === 'CONST' || node.kind === 'STATIC';
@@ -13,7 +13,7 @@ const DECLARATIONS = {
   typeParameter: ['TYPE_PARAM'], constParameter: ['CONST_PARAM'], property: ['RECORD_FIELD'], enumMember: ['VARIANT'],
   variable: ['IDENT_PAT'], parameter: ['IDENT_PAT', 'SELF_PARAM'], selfKeyword: ['SELF_PARAM'],
   selfTypeKeyword: ['STRUCT', 'ENUM', 'TRAIT', 'TYPE_ALIAS', 'TYPE_PARAM', 'UNION'],
-  namespace: ['MOD', 'SOURCE_FILE'], macro: ['MACRO_RULES', 'MACRO_DEF', 'FN'], procMacro: ['FN'], derive: ['FN']
+  namespace: ['MODULE', 'SOURCE_FILE'], macro: ['MACRO_RULES', 'MACRO_DEF', 'FN'], procMacro: ['FN'], derive: ['FN']
 };
 
 export const authoredDeclaration = (anchors, start, end, kind) => DECLARATIONS[kind]?.includes(anchors.get(`${start}:${end}`)?.kind) ?? false;

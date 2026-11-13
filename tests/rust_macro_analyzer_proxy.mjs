@@ -58,7 +58,12 @@ function connection(input, output, request) {
           pending.set(message.id, {method: message.method, params: message.params});
       } else if (!message.method && pending.has(message.id)) {
         const original = pending.get(message.id);
-        record({...original, ...(syntaxMethods.has(original.method) ? {responseBytes: length,
+        let syntaxTopLevelKinds;
+        if (original.method === 'rust-analyzer/viewSyntaxTree' && typeof message.result === 'string') {
+          try { syntaxTopLevelKinds = JSON.parse(message.result).children?.filter(item => item.type === 'Node').map(item => item.kind).slice(0, 128); }
+          catch { /* Preserve the actual RPC result; product syntax validation owns any failure. */ }
+        }
+        record({...original, ...(syntaxMethods.has(original.method) ? {responseBytes: length, syntaxTopLevelKinds,
           resultType: typeof message.result, ...(typeof message.result === 'string' ? {resultUtf8Bytes: Buffer.byteLength(message.result)} : {})} :
           {result: message.result}), error: message.error});
         pending.delete(message.id);

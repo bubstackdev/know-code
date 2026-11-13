@@ -374,7 +374,7 @@ async function analyze(root, manifest, metadata, configuration, policy, selected
         const syntax = await syntaxGraph(analyzer, current);
         if (syntax) {
           const anchors = rememberOrigins(current, syntax);
-          for (const owner of syntax.owners) if (owner.kind === 'MOD' && owner.selection) {
+          for (const owner of syntax.owners) if (owner.kind === 'MODULE' && owner.selection) {
             moduleDeclarations.set(`${owner.selection.start}:${owner.selection.end}`, {
               attributed: anchors?.get(`${owner.selection.start}:${owner.selection.end}`)?.attributed ?? true,
               external: owner.children.some(child => child.kind === 'SEMICOLON')});
