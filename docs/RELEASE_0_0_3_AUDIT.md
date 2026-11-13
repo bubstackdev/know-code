@@ -2,6 +2,12 @@
 
 Audited 2026-11-12 against shipped source `c77f972dd9c8604cdc7a0723eae8c3ee5e2692b0` ([0.0.2 — Snow Leopard](https://github.com/bubstackdev/know-code/releases/tag/v0.0.2)). Three read-only agent audits covered Swift, Rust and estate work; the integrator checked shared publication, packaging and validation boundaries. No new builds, benchmarks, compiler runs or corpus mutations were performed. Retained results below are historical evidence, not fresh certification of a 0.0.3 candidate.
 
+Implementation-state observations in the initial audit below describe the
+shipped 0.0.2 baseline; accepted requirements remain operative. See the
+[dated Rust release addendum](#rust-release-preparation-addendum--2026-11-13)
+for current unshipped Rust evidence, superseded corpus observations and the
+remaining promotion boundary.
+
 ## Decisions and scope status
 
 - Swift and Rust source support remain the accepted 0.0.3 language goal. Both adapters already exist, are packaged, and have real semantic navigation evidence. This is completion/promotion work, not two new providers.
@@ -132,15 +138,85 @@ compatibility; qualify and state its toolchain boundary separately.
   real-HOME lifecycle/native-contract drivers, rather than multiplying every
   language by every transport or rerunning all historical matrices. Final
   artifact evidence remains necessary; this is a proposed economical route.
-- Finish bounded real-corpus qualification with current implementations. The
-  [full current Atelier attempt](IMPLEMENTATION_0_0_3.md#full-current-atelier-run-explicit-resource-limit)
-  stopped honestly at the unchanged 2 GiB limit, with generation zero; its warm
-  diagnostic retry also stopped. A temporary isolated 4 GiB diagnostic run is
-  awaiting the user's decision and has **not** changed the default or produced
-  a pass. Older Lars navigation evidence predates the selected-context/macro
-  implementation. Preserve external-input/resource gaps; this recommendation
-  does not require every unsupported nested package to become complete.
+- Finish bounded real-corpus qualification with current implementations.
+  Candidate `a3cbae8`'s earlier observations recorded the failed 2 GiB Atelier
+  attempts and an isolated 4 GiB diagnostic request then awaiting a decision.
+  That waiting state and the claim that Lars evidence is only old navigation
+  are superseded by the dated addendum below and the
+  [current implementation ledger](IMPLEMENTATION_0_0_3.md#real-retained-graphs-and-cache-path-qualification).
+  The later user-approved Atelier-only allowance did not change the 2 GiB
+  default or certify the failed earlier attempts. Preserve external-input and
+  resource gaps; this recommendation does not require every unsupported nested
+  package to become complete.
 
 The real encoding-performance gate remains explicitly deferred. Optional estate
 search and unaccepted initial audit proposals do not become release blockers
 through this checklist.
+
+
+## Rust release-preparation addendum — 2026-11-13
+
+Read-only review of candidate `f49e57f`; no new compiler, test, build or runtime
+execution. **Shipped 0.0.2 remains experimental.** The unshipped 0.0.3 source
+implements compiler-captured Cargo contexts, trusted build-script/proc-macro
+preparation and useful partial graphs. This addendum records existing proof and
+remaining release work; it does not promote support or waive artifact gates.
+
+The finite slice is Cargo workspaces with repository-selected targets/default
+features and explicit overrides; distinct library/binary/test contexts; exact
+saved-source navigation; authored direct calls and value/type dependencies;
+and bounded callers/callees/impact through the common core. Dependencies remain
+lookup-only within a selected root graph. Compiler identity, cfg, pre-compilation
+input hashes and emitted/consumed artifact joins remain mandatory.
+
+| Existing proof | Actual boundary |
+| --- | --- |
+| [Host-tool/context fixtures](../.artifacts/implementation-0.0.3/wave-01/rust-tooling-host-contexts-01/) and [expanded discovery regression](../.artifacts/implementation-0.0.3/wave-01/rust-stale-include-discovery-02/) | Intermediate host-library preparation, exact macro artifacts, selected contexts and bounded stale-output/include discovery pass. The preceding failed cold discovery attempt remains retained. |
+| [Lars production-default-03](../.artifacts/implementation-0.0.3/lars-production-full-01/production-default-03/) | At unchanged 2 CPU/2 GiB defaults, published current generation 6 with 19 coverage rows and seven selected Rust contexts, including normal/test lars_core. This run still **failed** its original closure-call expectation; it is not a full-corpus pass. |
+| [Lars direct-call/native probe](../.artifacts/implementation-0.0.3/wave-01/lars-published-direct-01/) and [result](../.artifacts/implementation-0.0.3/lars-production-full-01/published-direct-01/result.json) | Passed in 1.50 seconds against retained generation 6: actual softmax→pairwise_sum direct callers/callees/impact, complete saved UTF-8/hash/ranges and CLI/Node/.NET equality. Reads were explicitly **stale after coordinator stop**. This is neither current indexing nor installed/optimized/performance certification. |
+
+No further Rust feature blocker is established by these finite results.
+Native `-l` (ring), selected wrappers/configuration includes/escaped dep-info,
+metadata-only macros without emitted dylibs, conservative expansion-origin
+omissions, arbitrary macro file/environment/nondeterministic behavior,
+closures/async deferred bodies, implicit operations, trait/dynamic dispatch
+and cross-unit body links remain explicit gaps. Do not remove them to make Lars
+complete or relabel partial reports as exhaustive. In particular, logaddexp0's
+call inside logistic_loss's closure is deliberately outside current execution
+ownership; the direct-call probe preserves that failed expectation.
+
+Before a 0.0.3 promotion, the remaining Rust release gate is **matching final
+artifact evidence**: optimized core/relevant language checks, packaged/offline
+Cargo graph and saved-error/repair behavior, native/CLI and representative
+new-language MCP queries, followed by the shared signing/normal-security
+install/upgrade/platform checkpoint. Reuse the expanded
+[installed-package harness](../tests/package_install.py): its Cargo/SwiftPM
+section is still behind `--experimental` and must be required for this release.
+Its existing MCP section precedes that section and currently proves TS/C#;
+one representative installed new-language graph must close that gap. This
+addendum asserts no final installed or release pass.
+
+The smallest promotion changes, **after those gates**, are:
+
+- In [scripts/package.py](../scripts/package.py), change Rust's
+  `experimental-v0.0.3` label to the required-provider contract and describe
+  separately installed Cargo/rustc, rust-analyzer and matching rust-src when
+  indexing Rust. Existing evidence uses the 1.99.1 toolset; repository MSRV 1.85
+  is not a validated compiler matrix. Preserve selection/errors without silent
+  tool substitution or installation.
+- In [crates/host/src/runtime.rs](../crates/host/src/runtime.rs), extend the
+  existing required-provider presence check beyond TS/C# when Rust is promoted;
+  otherwise omitting Rust's manifest entry bypasses resource validation despite
+  a required-language claim. Reuse the existing damaged-package checks.
+- Reconcile the current contract in [README](../README.md),
+  [Rust provider](RUST_PROVIDER.md), [compiler acceptance](COMPILER_ACCEPTANCE.md),
+  [packaging](PACKAGING.md) and [validation](VALIDATION.md), plus the normal
+  coordinated Cargo/npm/NuGet version bump. AGENTS.md and
+  PRODUCT_CONSTRAINTS.md must distinguish their old disabled/single-view
+  **shipped baseline** statements from current implementation. Keep worker
+  graph capabilities `partial` and `rustContextPolicy=2`; promotion requires no
+  fabricated completeness or new fact/protocol contract.
+
+The current Swift/Xcode and TS7 gates remain independently required. Optional
+estate work and the explicitly deferred encoding benchmark acquire no new
+release requirement from this Rust review.
