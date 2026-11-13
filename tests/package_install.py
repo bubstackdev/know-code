@@ -285,7 +285,15 @@ def exact_source(source,filename):
  assert raw[source['start_byte']:source['end_byte']].decode('utf-8')==source['text'],source
 for name in ['answer','Greet']:
  result=query({'op':'symbols','name':name});assert result['freshness']=='current' and result['symbols']
- assert result['coverage'] and all(c['status']=='complete' for c in result['coverage']),result
+ # Completeness belongs to the compilations supporting these findings;
+ # the independent selected TS7 project intentionally remains partial.
+ owners={symbol['compilation_id'] for symbol in result['symbols']}
+ owners.update(support['compilation_id'] for symbol in result['symbols'] for support in symbol.get('supporting_targets',[]))
+ reports={row['compilation_id']:row for row in result['coverage']}
+ assert owners and owners<=reports.keys(),result
+ expected_language='typescript' if name=='answer' else 'csharp'
+ assert all(reports[owner]['status']=='complete' and reports[owner]['language']==expected_language for owner in owners),result
+ if name=='answer':assert all(reports[owner]['compiler_version']==json.loads((WORKSPACE/'node_modules/typescript/package.json').read_text())['version'] for owner in owners),result
  symbol=result['symbols'][0];context=query({'op':'symbol_context','symbol_id':symbol['id'],'max_bytes':1024});assert context['contexts'][0]['declarations'][0]['source']
  exact_source(context['contexts'][0]['declarations'][0]['source'],WORKSPACE/('value.ts' if name=='answer' else 'Code.cs'))
 leaf=query({'op':'symbols','name':'leaf'})['symbols'][0]
@@ -314,6 +322,7 @@ for case in selected_typescript:
  reports=[row for row in found['coverage'] if row['language']=='typescript' and row['project_path']==case['project']+'/tsconfig.json']
  assert len(reports)==1 and reports[0]['compiler_version']==case['version'],reports
  report=reports[0];options=report['analysis_options'];compilation=report['compilation_id']
+ assert not report['inferred'] and (WORKSPACE/report['project_path']).resolve()==(filename.parent/'tsconfig.json').resolve(),report
  if case['suffix']=='7':
   assert options['knowCodeNativeCompiler']=='7.0.2' and options['knowCodeNativeApi']=='unstable/sync',report
   assert report['status']=='partial' and report['capabilities']['project_links']=='unavailable',report
@@ -530,7 +539,10 @@ def npm10_step(label):
  assert not (WORKSPACE/'package-lock.json').exists(),'unlocked preparation wrote a source lockfile'
  assert {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in owned_configs}==config_hashes,'preparation rewrote selected config'
  assert cache_inventory(DATA/'package-tools')==npm10_cache_inventory,'preparation modified the primed tool distribution'
- typescript=[c for c in result['coverage'] if c['language']=='typescript'];assert typescript,result
+ # This policy probe mutates only the root TS5.9 npm10 project, not the
+ # independently pinned TS6/TS7 child projects restored before denial.
+ typescript=[c for c in result['coverage'] if c['language']=='typescript' and c['project_path']=='tsconfig.json']
+ assert len(typescript)==1,typescript
  assert all(not c['details_omitted'] for c in typescript),typescript
  for compilation in typescript:
   manager=compilation['analysis_options']['knowCodePackageManager']
