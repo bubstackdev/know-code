@@ -58,6 +58,13 @@ Git-diff guesses. Shared code changes trigger its consumers too.
 | Shared LSP/BSP JSON-RPC, Node provider source/framing/process/environment contracts | `jsonrpc rust-navigation rust-provider swift-toolchain swift-provider swiftpm-provider xcode-provider languages`, plus affected TS/C# cases. |
 | Experimental Rust/Swift/Xcode adapters or their toolchain selection | The relevant preceding adapter/toolchain cases and `languages`; no new language acceptance is implied. |
 
+The `xcode-integration` extended check runs the owned six-context Xcode fixture
+through the coordinator and CLI/Node/.NET queries. Set
+`KNOW_CODE_TEST_XCODE_BRIDGE` to the separately built qualified runtime directory
+or executable. It uses an isolated tool path and personal data directory; it
+does not install the bridge or change the live coordinator. Select it for
+production Xcode extraction, preparation, context or generated-source changes.
+
 The npm/pnpm ten-cell matrix is independent of Rust Debug/Release compilation.
 Run it once for unchanged relevant source/toolchain identities rather than twice
 solely for the native profile. A `KNOW_CODE_TEST_PACKAGE_PINS` subset is focused
