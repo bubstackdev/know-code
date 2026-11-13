@@ -25,7 +25,7 @@ function gap(root, project, toolchain, configuration, diagnostics) {
 function packageArguments(directory, state, configuration, sdk) {
   return ['package', '--sdk', sdk, '--package-path', directory, '--scratch-path', path.join(state, 'build'),
     '--cache-path', path.join(state, 'cache'), '--manifest-cache', 'local', '--jobs', '1',
-    '--configuration', configuration.toLowerCase()];
+    ...(configuration ? ['--configuration', configuration.toLowerCase()] : [])];
 }
 function loadManifest(swift, directory, state, configuration, env, sdk) {
   return JSON.parse(checked(swift, [...packageArguments(directory, state, configuration, sdk), 'dump-package'], directory, env));
@@ -264,3 +264,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
     finally { client.terminate(); }
   }
 }
+
+// Xcode inspects the compiler-selected package manifests with the same tools
+// and conservative plugin/macro policy before module preparation.
+export {loadManifest, unsupported as unsupportedManifest};

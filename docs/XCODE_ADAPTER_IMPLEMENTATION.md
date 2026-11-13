@@ -84,6 +84,17 @@ compiler-driver or transport failure must not be relabeled successful analysis.
 Healthy targets may accompany explicit unavailable context/target rows, while
 resource interruption aborts the common publication.
 
+Package-policy inspection now follows exact PIF metadata and precedes public
+module preparation. It reuses SwiftPM's existing host manifest evaluator and
+conservative plugin/custom-macro classifier; no target module configuration is
+substituted. Only the compiler-selected Package.swift projects and their
+versioned manifest variants are inspected. Results are cached by saved manifest
+hashes and effective toolchain in the existing dependency plan, so body-only
+saves do not repeat manifest compilation/restoration. Unsupported external
+codegen is an explicit coverage gap with retained repair inputs. Metadata safety
+still depends on the separate pinned-tool hostile-plugin gate; PBX script guards
+alone are not a package-plugin claim.
+
 ## Gates before promoting this checkpoint
 
 - Run the updated focused policy/ambiguity/prerequisite/invalidation fixture and

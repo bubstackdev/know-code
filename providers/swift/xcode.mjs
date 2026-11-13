@@ -7,7 +7,7 @@ import {send, MAX_FRAME} from '../shared/protocol.mjs';
 import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {sourceBoundary} from '../shared/source.mjs';
 import {relative, hash, run, sourceFile, compileSources, ingestStore} from './index.mjs';
-import {extensionRequest} from './swiftpm.mjs';
+import {extensionRequest, loadManifest, unsupportedManifest} from './swiftpm.mjs';
 import {semanticArguments} from './compiler.mjs';
 import {unavailableGraphCapabilities} from './graph.mjs';
 
@@ -168,6 +168,27 @@ function contextProof(buildRoot, platform, selection) {
   const projects = pif.filter(item => item.type === 'project').map(item => item.contents.path);
   return {proof, closure, projects};
 }
+
+function inspectManifests({projects, state, toolchain, previous, retry}) {
+  const manifests = [...new Set(projects.filter(file => path.basename(file) === 'Package.swift'))];
+  const files = [...new Set(manifests.flatMap(file => fs.readdirSync(path.dirname(file))
+    .filter(name => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(name)).map(name => path.join(path.dirname(file), name))))].sort();
+  const inputs = Object.fromEntries(files.map(file => [file, hash(fs.readFileSync(file))]));
+  if (!retry && previous?.version === 1 && previous.toolchain === toolchain.identity
+      && JSON.stringify(previous.inputs) === JSON.stringify(inputs)
+      && (previous.unsupported === null || (typeof previous.unsupported?.message === 'string' && typeof previous.unsupported?.path === 'string'))) return previous;
+  let unsupported = null;
+  for (const file of manifests) {
+    const scratch = path.join(state, 'manifest-inspection', hash(file)); fs.mkdirSync(scratch, {recursive: true});
+    // This is host manifest policy inspection, not a project configuration
+    // override. The compiler-selected Test configuration remains authoritative.
+    const manifest = loadManifest(path.join(path.dirname(toolchain.compiler), 'swift'), path.dirname(file), scratch, undefined, toolchain.env, toolchain.sdk);
+    const issue = unsupportedManifest(manifest, file);
+    if (issue) { unsupported = {message: issue.message, path: file}; break; }
+  }
+  return {version: 1, toolchain: toolchain.identity, inputs, unsupported};
+}
+
 function restoration({root, project, selection, state, bridge, toolchain, request, context, previous, key, fingerprint, onDiagnostic}) {
   const planFile = path.join(state, 'dependency-plan.json');
   let plan; try { plan = json(planFile); } catch { /* Explicit preparation will replace absent derived state. */ }
@@ -276,6 +297,16 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
       }
       for (const file of observedInputs) jobAnalysisInputs.add(file);
       inventoryObserved = true;
+      let manifestPolicy;
+      try { manifestPolicy = inspectManifests({projects: evidence.projects, state, toolchain: {...toolchain, env}, previous: plan?.manifestPolicy, retry: request.retryPreparation && platform === 'iphoneos'}); }
+      catch (error) {
+        if (/interrupted|resource-limited|timed out|Swift tool failed/i.test(error.message)) throw error;
+        throw problem('xcode_manifest_preflight_failed', `Cannot inspect the selected package manifest policy: ${error.message}`);
+      }
+      for (const file of Object.keys(manifestPolicy.inputs)) if (!within(file, work)) { observedInputs.add(file); jobAnalysisInputs.add(file); }
+      plan = {...plan, manifestPolicy, inputs: {...plan?.inputs, ...manifestPolicy.inputs}, analysisInputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs])]};
+      put(path.join(state, 'dependency-plan.json'), plan);
+      if (manifestPolicy.unsupported) throw problem('xcode_external_codegen_required', `${manifestPolicy.unsupported.path}: ${manifestPolicy.unsupported.message}`);
       send('progress', {stage: 'preparing', projectPath: relative(root, project), message: `Preparing selected ${platform} modules; scripts and product builds stay disabled`});
       let preparationError;
       try { await extensionRequest(client, 'buildTarget/prepare', {targets: targets.map(target => target.id)}); }
@@ -349,10 +380,11 @@ export async function analyzeXcode({request, root, project, toolchain, work, scr
       }
       if (!owned) throw problem('xcode_no_owned_swift_targets', 'The selected scheme supplied no owned Swift source targets; dependency sources were not indexed as project bodies.');
       for (const [file, expected] of Object.entries(evidence.proof.selection.inputSha256)) if (hash(fs.readFileSync(file)) !== expected) throw problem('xcode_saved_inputs_changed', `Saved project/scheme changed: ${file}`);
+      for (const [file, expected] of Object.entries(plan.manifestPolicy.inputs)) if (hash(fs.readFileSync(file)) !== expected) throw problem('xcode_saved_inputs_changed', `Saved package manifest changed: ${file}`);
       // Only compiler-selected saved inputs enter the shared watcher manifest.
       // Job/module/generated output paths never trigger a save/restore loop.
       const setupInputs = [...new Set([...observedInputs, ...evidence.projects.filter(file => path.basename(file) === 'Package.swift')])].filter(file => /(?:^|\/)(?:Package(?:@swift-[0-9.]+)?\.swift|Package\.resolved|project\.pbxproj|contents\.xcworkspacedata|\.swift-version|\.tool-versions|\.xcode-version)$|\.(?:xcscheme|xcconfig)$/.test(file));
-      plan = {inputs: Object.fromEntries(setupInputs.filter(exists).map(file => [file, hash(fs.readFileSync(file))])), analysisInputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs, ...observedInputs])],
+      plan = {manifestPolicy: plan?.manifestPolicy, inputs: Object.fromEntries(setupInputs.filter(exists).map(file => [file, hash(fs.readFileSync(file))])), analysisInputs: [...new Set([...previousAnalysisInputs, ...jobAnalysisInputs, ...observedInputs])],
         outputs: [path.join(state, 'dependency-plan.json'), path.join(state, 'clones'), path.join(state, 'cache'), ...evidence.projects.filter(file => within(file, state))], bridgeManifest: bridge.manifestSha256, configuration: evidence.proof.selection.configuration};
       put(path.join(state, 'dependency-plan.json'), plan);
     } catch (error) {
