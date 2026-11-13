@@ -103,10 +103,10 @@ excluded_file.write_bytes((WORKSPACE / 'Excluded.swift').read_bytes())
 probe_store = reader_probe / 'store'
 sdk = json.loads(compilations[0]['optionsJson'])['sdkPath']
 for primary, other_file in ((active_file, excluded_file), (excluded_file, active_file)):
-    compiled = subprocess.run([str(compiler), '-frontend', '-typecheck', '-sdk', sdk,
-        '-module-name', 'KnowCodeReaderRecords', '-index-store-path', str(probe_store),
-        '-index-include-locals', '-index-ignore-system-modules', '-primary-file', str(primary), str(other_file),
-        '-index-unit-output-path', str(reader_probe / f'{primary.stem}.o')],
+    compiled = subprocess.run([str(compiler), '-index-file', '-index-file-path', str(primary),
+        '-index-store-path', str(probe_store), '-index-include-locals', '-index-ignore-system-modules',
+        '-index-unit-output-path', str(probe_store / f'{primary.stem}.o'), '-sdk', sdk,
+        '-module-name', 'KnowCodeReaderRecords', str(primary), str(other_file)],
         cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=30)
     assert compiled.returncode == 0, compiled.stderr
 
