@@ -2,6 +2,13 @@
 
 Moved verbatim from AGENTS.md on 2026-11-12 to keep session instructions small. These accepted requirements remain binding; historical implementation statements describe their original checkpoint. Current release status is in [RELEASE_PLAN.md](RELEASE_PLAN.md), and current stabilization work is in [CODEBASE_REVIEW_0_0_2.md](CODEBASE_REVIEW_0_0_2.md). The user selected stabilization only for 0.0.2; earlier assigned new features move to later releases with timing undecided.
 
+The disabled Rust preparation and single-view statements below describe the
+shipped 0.0.2 baseline. The unshipped 0.0.3 candidate implements trusted
+preparation and compiler-captured contexts; current evidence and remaining
+release gates are in [the implementation ledger](IMPLEMENTATION_0_0_3.md) and
+[dated release audit](RELEASE_0_0_3_AUDIT.md). They do not establish published
+support or arbitrary compiler-input coverage.
+
 
 - Know Code is an OSS code-intelligence product supporting embedding, local CLI/MCP, and shared service deployments through a common core.
 - Know Code uses Apache-2.0; see LICENSE. Reference clones retain their upstream licenses and are not project implementation.
