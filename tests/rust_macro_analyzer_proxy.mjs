@@ -4,17 +4,34 @@ import fs from 'node:fs';
 import {spawn} from 'node:child_process';
 
 const [program, logFile, invalidDylib, ...args] = process.argv.slice(2);
-const child = spawn(program, args, {stdio: ['pipe', 'pipe', 'pipe']});
+const child = spawn(program, args, {stdio: ['pipe', 'pipe', 'pipe'], env: {...process.env, RUST_BACKTRACE: '1'}});
 const pending = new Map();
-let logged = 0;
+let logged = 0, stderrBytes = 0, closing = false, killTimer, drainTimer;
+const syntaxMethods = new Set(['rust-analyzer/viewFileText', 'rust-analyzer/viewSyntaxTree']);
 function record(value) {
-  const text = JSON.stringify(value) + '\n';
+  const text = JSON.stringify({atNs: process.hrtime.bigint().toString(), ...value}) + '\n';
   if (logged + Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('macro fixture LSP log exceeds 8 MiB');
   fs.appendFileSync(logFile, text); logged += Buffer.byteLength(text);
+}
+function stop(code, reason, immediate = false) {
+  if (closing) return;
+  closing = true; process.exitCode = code;
+  try { record({proxyStopping: {reason, code, pending: [...pending.values()].map(item => ({method: item.method, params: item.params}))}}); } catch {}
+  process.stdin.pause(); child.stdin.end();
+  if (immediate) child.kill('SIGTERM');
+  killTimer = setTimeout(() => child.kill('SIGKILL'), immediate ? 1000 : 1500);
+  // Retain the outer harness process group: this proxy never detaches a compiler
+  // subtree from the shared owner. Bound inherited-pipe drain after child exit.
+}
+function failed(error) {
+  try { record({proxyError: error.message}); } catch {}
+  process.stderr.write(`macro fixture proxy: ${error.message}\n`);
+  stop(1, 'proxy error', true);
 }
 function connection(input, output, request) {
   let buffer = Buffer.alloc(0);
   input.on('data', chunk => {
+   try {
     buffer = Buffer.concat([buffer, chunk]);
     if (buffer.length > 16 * 1024 * 1024) throw new Error('macro fixture LSP buffer exceeds bound');
     for (;;) {
@@ -36,24 +53,45 @@ function connection(input, output, request) {
             }
           record({injectedLoaderFault: {capturedDylibs: replaced, replacement: invalidDylib}});
         }
-        if (['initialize', 'textDocument/diagnostic', 'textDocument/prepareCallHierarchy', 'callHierarchy/outgoingCalls'].includes(message.method))
+        if (syntaxMethods.has(message.method)) record({request: {id: message.id, method: message.method, params: message.params}});
+        if (['initialize', 'shutdown', 'textDocument/diagnostic', 'textDocument/prepareCallHierarchy', 'callHierarchy/outgoingCalls'].includes(message.method) || syntaxMethods.has(message.method))
           pending.set(message.id, {method: message.method, params: message.params});
       } else if (!message.method && pending.has(message.id)) {
-        record({...pending.get(message.id), result: message.result, error: message.error}); pending.delete(message.id);
+        const original = pending.get(message.id);
+        record({...original, ...(syntaxMethods.has(original.method) ? {responseBytes: length,
+          resultType: typeof message.result, ...(typeof message.result === 'string' ? {resultUtf8Bytes: Buffer.byteLength(message.result)} : {})} :
+          {result: message.result}), error: message.error});
+        pending.delete(message.id);
       } else if (message.method === 'experimental/serverStatus') record({serverStatus: message.params});
       const encoded = Buffer.from(JSON.stringify(message));
       output.write(`Content-Length: ${encoded.length}\r\n\r\n`); output.write(encoded);
+      if (request && message.method === 'exit') stop(0, 'protocol exit');
     }
+   } catch (error) { failed(error); }
   });
-  input.on('end', () => output.end());
+  input.on('error', failed); output.on('error', failed);
+  input.on('end', () => { output.end(); if (request) stop(0, 'client stdin EOF'); });
 }
 if (args.includes('--version')) {
-  child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr); child.stdin.end();
+  child.stdout.pipe(process.stdout); child.stdin.end();
 } else {
   connection(process.stdin, child.stdin, true);
   connection(child.stdout, process.stdout, false);
-  child.stderr.pipe(process.stderr);
 }
-child.on('error', error => { record({proxyError: error.message}); process.exitCode = 1; });
-child.on('exit', code => { process.exitCode = code ?? 1; });
-for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { child.kill(signal); process.exitCode = 1; });
+child.stderr.on('data', bytes => {
+  try {
+    const available = Math.max(0, 8 * 1024 * 1024 - stderrBytes);
+    if (available) fs.appendFileSync(`${logFile}.stderr.log`, bytes.subarray(0, available));
+    stderrBytes += bytes.length; process.stderr.write(bytes);
+  } catch (error) { failed(error); }
+});
+child.on('error', failed);
+child.on('exit', (code, signal) => {
+  clearTimeout(killTimer);
+  process.exitCode = process.exitCode ?? code ?? 1;
+  try { record({analyzerExit: {code, signal, stderrBytes, stderrRetainedBytes: Math.min(stderrBytes, 8 * 1024 * 1024)}}); } catch {}
+  process.stdin.destroy();
+  drainTimer = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); process.stdout.end(); }, 500);
+});
+child.on('close', () => { clearTimeout(killTimer); clearTimeout(drainTimer); process.stdin.destroy(); });
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => stop(1, signal, true));
