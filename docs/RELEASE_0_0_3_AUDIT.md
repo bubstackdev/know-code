@@ -193,8 +193,12 @@ install/upgrade/platform checkpoint. Reuse the expanded
 [installed-package harness](../tests/package_install.py): its Cargo/SwiftPM
 section is still behind `--experimental` and must be required for this release.
 Its existing MCP section precedes that section and currently proves TS/C#;
-one representative installed new-language graph must close that gap. This
-addendum asserts no final installed or release pass.
+`c05caf9` adds one representative installed Rust MCP graph check to the later
+experimental section using the existing helpers and Cargo fixture. It checks
+compiler-bound paths, snapshot/generation and source provenance against native
+queries, but has only passed syntax checks so far. Running that packaged gate
+must close the evidence gap. This addendum asserts no final installed or
+release pass.
 
 The smallest promotion changes, **after those gates**, are:
 
