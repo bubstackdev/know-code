@@ -470,3 +470,69 @@ producer `190ffd3a92a3473fa1b28a9dac6761ae` at test source `747d0e7`
 (`empty-record-swift-providers-03`). Failed build/provenance and fixture attempts
 remain retained. A full-corpus retry is a separate qualification, not implied
 by these passes.
+
+
+The next approved lifted-limit attempt, `production-4g-04`, ran for 973.28
+seconds and passed the prior empty-record boundary, then failed before
+publication at Xcode context-proof validation. Generation remained zero;
+1,082,488,522 worker stdout bytes are an observed stream size, not published
+index size or a throughput benchmark. Its runner restored 2 GiB and stopped
+the owned coordinator. Retained PIF sidecars prove a path-alias mismatch:
+the bridge canonicalized the `.artifacts/af01` data alias to `personal-data`,
+while the provider's containment check used the lexical alias. Both sidecar
+PIF hashes, saved scheme paths and Debug configurations match. The failed
+attempt remains a failure; a narrow canonical job-root correction and matching
+qualification are still pending. Evidence: `wave-01/atelier-full-production-4g-04/`
+and `atelier-production-full-01/production-4g-04/`.
+
+The user separately approved compiler/build-script/procedural-macro execution
+for the fresh complete Lars copy, with the grant confined to its sibling
+`personal-data`. The exact-copy and source census are recorded in
+[the Lars preflight](reviews/RUST_LARS_0_0_3_PREFLIGHT.md). The public CLI grant
+succeeded through the short `.artifacts/lf01` alias with lifecycle scripts still
+disabled; its unregistered coordinator was stopped. Actual normal indexing
+is a separate run at the unchanged two-core/2-GiB defaults, not covered by the
+Atelier-only 4-GiB allowance. Evidence: `wave-01/lars-trust-01/` and
+`lars-production-full-01/trust-grant-01.json`.
+
+
+The Xcode path correction (`e9d479c`) canonicalizes the bridge job directory
+and checks actual PIF containment while retaining hash/closure/scheme/config
+binding. Aliased roots pass and a PIF symlink escaping its job directory fails.
+Matching producer `b51438c2d1c8433491478663e8b562b2` passes `xcode-provider`
+and all 16 device/simulator integration checks
+(`wave-01/xcode-canonical-job-context-01/`). These are focused owned-fixture
+passes, not a successful real-corpus retry.
+
+`production-4g-05` and `06` failed before indexing began: cold-start `resources`
+returned macOS `WouldBlock` after about 0.56–0.57 seconds. Both restored 2 GiB.
+A separate owned foreground measurement showed connection refusal at 0.006 s,
+a timed-out status read at 0.538 s, and readiness at 0.567 s. The listener binds
+before saved workspace restoration finishes; the old post-spawn probe loop
+returned its first 500-ms read timeout despite its existing five-second
+startup window. Only the owned-child wait now retries `WouldBlock`/`TimedOut`
+within that window, with each probe capped by the remaining budget. Initial
+probes, security/protocol/version faults and the single-child policy remain
+strict. All nine focused control tests, formatting and strict workspace Clippy
+pass at `93c6161`; matching Debug producer is
+`cce7be50d0054df3ae36146783ddb3a9`. The delayed-readiness test also verifies
+permanent bad-version/payload replies are not retried. Evidence:
+`wave-01/{atelier-coordinator-startup-01,coordinator-owned-startup-unit-02,assembled-batch-fmt-02,assembled-batch-clippy-02,assembled-corpus-fixes-build-01}/`.
+
+The first real Lars run reached idle generation 2 with 12 coverage rows in
+109.44 seconds under the unchanged 2-GiB limit. It fails graph qualification:
+all Rust contexts are unavailable because required ordinary host libraries in
+tooling dependency chains were rejected before compilation. Healthy C#/TS
+results and explicit missing NuGet/Swift/vendored-UI gaps are retained; neither
+partial publication nor the passing source census is a Rust graph pass. The
+narrow correction admits only typed host-tool library preparation and leaves
+actual compiler/input/artifact joins authoritative. Its source-only I/O checks
+pass; matching actual compiler/managed and real-Lars retries remain pending.
+See [the exact diagnosis](reviews/RUST_LARS_0_0_3_PREFLIGHT.md).
+
+The approved Atelier source copy remains bound to its original manifest.
+A later read-only census found six original source files changed since copying,
+with timestamps preceding `production-4g-04`; it does not certify a now-identical
+live checkout or attribute those changes to a writer. No originals were
+restored, edited or refreshed into the approved copy. Evidence:
+`atelier-production-full-01/original-census-after-4g-06.json`.
