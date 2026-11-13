@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {collectCargoContexts} from '../providers/rust/cargo-contexts.mjs';
 import {compilerEnvironment} from '../providers/rust/lsp.mjs';
 
@@ -15,11 +16,15 @@ fs.cpSync(path.join(repository, 'tests/fixtures/rust'), workspace, {recursive: t
 const buildScript = path.join(workspace, 'build.rs');
 // The marker is an output. Without this declaration Cargo's default package
 // scan sees that output change and correctly reruns the script on every check.
-fs.writeFileSync(buildScript, fs.readFileSync(buildScript, 'utf8').replace(/}\s*$/, '    println!("cargo:rerun-if-changed=build.rs");\n}\n'));
+fs.writeFileSync(buildScript, fs.readFileSync(buildScript, 'utf8').replace(/}\s*$/, '    println!("cargo:rerun-if-changed=build.rs");\n    std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("generated.rs"), "pub const GENERATED_INPUT: usize = 17;\\n").unwrap();\n}\n'));
 const manifest = path.join(workspace, 'Cargo.toml'), library = path.join(workspace, 'src/lib.rs');
 const data = path.join(workspace, 'src/input.txt');
 fs.writeFileSync(data, 'saved 🦀 data\n');
 fs.appendFileSync(library, '\npub const INCLUDED: &str = include_str!("input.txt");\n');
+const readme = path.join(workspace, 'README.md');
+fs.writeFileSync(readme, 'owned retained README include\n');
+fs.appendFileSync(library, 'pub const README_INPUT: &str = include_str!("../README.md");\n'
+  + 'include!(concat!(env!("OUT_DIR"), "/generated.rs"));\n');
 const configInput = path.join(workspace, '.cargo/config.toml');
 fs.mkdirSync(path.dirname(configInput), {recursive: true});
 fs.writeFileSync(configInput, '[env]\nKNOW_CODE_OWNED_CONTEXT_ENV={value="cargo-selected",force=true}\n');
@@ -59,6 +64,31 @@ const warm = collect('warm');
 assert.equal(warm.captureAttempts, 1);
 assert.equal(warm.capturedCount, 0);
 assert.equal(warm.plans.length, 2, JSON.stringify(warm.diagnostics));
+// Invalidate derived proof while preserving actual fresh Cargo artifacts.
+// A metadata-only first pass cannot discover includes from deleted witnesses.
+const cacheFile = fs.readdirSync(path.join(policy.cacheDirectory, 'contexts')).map(name =>
+  path.join(policy.cacheDirectory, 'contexts', name, 'units.json')).find(filename => fs.existsSync(filename));
+const invalidatedCache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+invalidatedCache.fingerprint = 'owned invalidated implementation/setup proof';
+fs.writeFileSync(cacheFile, JSON.stringify(invalidatedCache));
+const rediscovered = collect('fresh-cargo-artifacts-invalidated-proof');
+assert.equal(rediscovered.captureAttempts, 3, 'stale-output recovery consumed the actual include discovery budget');
+assert.equal(rediscovered.staleRecaptures, 1);
+assert.equal(rediscovered.inputRecaptures, 1);
+assert.equal(rediscovered.plans.length, 2, JSON.stringify(rediscovered.diagnostics));
+for (const plan of rediscovered.plans) {
+  const generated = plan.unit.inputs.files.find(filename => filename.endsWith('/out/generated.rs'));
+  assert(generated, plan.unit.inputs.files);
+  for (const filename of [data, readme, generated]) {
+    const expected = createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
+    assert.equal(plan.unit.record.beforeInputs[filename], expected, 'post-compilation hash replaced missing pre-compilation witness');
+    assert.equal(plan.unit.inputHashes[filename], expected);
+  }
+}
+const rediscoveredWarm = collect('warm-after-fresh-artifact-discovery');
+assert.equal(rediscoveredWarm.captureAttempts, 1);
+assert.equal(rediscoveredWarm.capturedCount, 0);
+assert.equal(rediscoveredWarm.plans.length, 2, JSON.stringify(rediscoveredWarm.diagnostics));
 fs.appendFileSync(data, 'include data changed\n');
 const changed = collect('changed-include');
 assert.equal(changed.captureAttempts, 1, 'known consumed input needed an avoidable discovery pass');
@@ -92,7 +122,9 @@ const captureDirectories = fs.readdirSync(path.join(policy.cacheDirectory, 'cont
   fs.readdirSync(path.join(policy.cacheDirectory, 'contexts', name)).filter(item => item.startsWith('capture-')));
 assert.equal(captureDirectories.length, 0, 'scratch captures retained after successful cleanup');
 fs.writeFileSync(path.join(state, 'summary.json'), JSON.stringify({passed: true, assertions: [
-  'bounded package snapshots and one include-discovery recapture', 'unchanged cache avoids compilation including Cargo-injected env! input',
+  'bounded package snapshots and one include-discovery recapture',
+  'fresh Cargo artifacts with invalidated proof use distinct one-time stale-output and include discovery phases',
+  'README and generated includes require matching pre-compilation hashes and then warm reuse', 'unchanged cache avoids compilation including Cargo-injected env! input',
   'actual Cargo env overrides replay while unrelated ambient values are not retained',
   'known include save refreshes directly', 'artifact replacement recaptures', 'compiler failure preserves healthy proven units',
   'configured wrapper stops before capture', 'scratch capture cleanup'],

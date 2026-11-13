@@ -152,7 +152,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       if (typeof filename === 'string' && path.isAbsolute(filename) && fs.existsSync(filename)) files.add(filename);
   }
   const scratch = fs.mkdtempSync(path.join(state, 'capture-'));
-  let units = [], cargoSucceeded = false, artifacts = [], failed = [], buildScripts = [], droppedDiagnostics = 0, captureAttempts = 0, capturedCount = 0;
+  let units = [], cargoSucceeded = false, artifacts = [], failed = [], buildScripts = [], droppedDiagnostics = 0, captureAttempts = 0, capturedCount = 0, staleRecaptures = 0, inputRecaptures = 0;
   const warn = (code, message) => { if (diagnostics.length < 100) diagnostics.push(warning(code, message)); else droppedDiagnostics++; };
   const queryCache = new Map();
   const query = (program, args, cwd) => {
@@ -161,7 +161,10 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
     return queryCache.get(key);
   };
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // One pass may discover stale Cargo artifacts without any wrapper witness;
+    // a later actual compile may discover includes. Each kind gets one recovery,
+    // so only these distinct progress phases can require three bounded checks.
+    for (let attempt = 0; attempt < 3; attempt++) {
       captureAttempts++;
       const directory = path.join(scratch, String(attempt)); fs.mkdirSync(directory);
       const snapshots = snapshotPackages(directory, packages), configuration = path.join(directory, 'configuration.json');
@@ -183,7 +186,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
       const messages = (result.stdout ?? '').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
       artifacts = messages.filter(item => item.reason === 'compiler-artifact');
       buildScripts = messages.filter(item => item.reason === 'build-script-executed').map(item => ({packageId: item.package_id, outDir: item.out_dir}));
-      const records = capturedRecords(directory), current = [], recapture = new Set(), unproven = [];
+      const records = capturedRecords(directory), current = [], discoverInputs = new Set(), staleOutputs = new Set(), unproven = [];
       const selectedCompilers = new Set(records.filter(record => record.status === 0 && !record.error && !record.beforeInputs)
         .map(record => fs.realpathSync(record.compiler)));
       capturedCount += records.filter(record => record.beforeInputs && record.status === 0 && !record.error).length;
@@ -220,26 +223,47 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
             try {
               const consumed = compilerInputs(candidates[0]);
               const files = packages.get(artifact.manifest_path);
-              if (files) for (const filename of consumed.files) files.add(filename);
-              for (const output of candidates[0].artifacts.filter(item => item.emit === 'metadata' ||
-                  artifact.target.kind.includes('proc-macro') && item.emit === 'link')) recapture.add(path.resolve(candidates[0].cwd, output.artifact));
+              let discovered = false;
+              if (files) for (const filename of consumed.files) if (!files.has(filename)) {
+                files.add(filename);
+                discovered = true;
+              }
+              // A missing pre-compilation include can be snapshotted before a
+              // new actual compile. Changed already-known bytes or unrelated
+              // proof failures are not discovery progress and get no retry.
+              if (discovered) for (const output of candidates[0].artifacts.filter(item => item.emit === 'metadata' ||
+                  artifact.target.kind.includes('proc-macro') && item.emit === 'link')) discoverInputs.add(path.resolve(candidates[0].cwd, output.artifact));
             } catch { /* Unknown dep-info forms remain explicit gaps, not guessed inputs. */ }
-          } else if (!artifact.target.kind.includes('custom-build')) {
+          } else if (!candidates.length && artifact.fresh && !artifact.target.kind.includes('custom-build')) {
             // Cargo identifies owned metadata/required proc-macro tool outputs
             // directly. Their removal recovers our cache; it is not a semantic
             // producer join and never requests final application/test linking.
-            for (const filename of artifact.filenames) recapture.add(path.resolve(filename));
+            for (const filename of artifact.filenames) staleOutputs.add(path.resolve(filename));
           }
         }
       }
       units = current;
-      if (attempt || !recapture.size) {
+      const recapture = new Set();
+      if (!inputRecaptures && discoverInputs.size) {
+        inputRecaptures++;
+        for (const filename of discoverInputs) recapture.add(filename);
+      }
+      if (!staleRecaptures && staleOutputs.size) {
+        staleRecaptures++;
+        for (const filename of staleOutputs) recapture.add(filename);
+      }
+      if (attempt === 2 || !recapture.size) {
         for (const message of unproven) warn('rust_context_unavailable', message);
         break;
       }
+      let removed = 0;
       for (const filename of recapture) {
-        try { removeCapturedOutput(state, filename); }
+        try { removeCapturedOutput(state, filename); removed++; }
         catch (error) { warn('rust_context_cleanup_refused', error.message); }
+      }
+      if (!removed) {
+        for (const message of unproven) warn('rust_context_unavailable', message);
+        break;
       }
       previous = current;
     }
@@ -256,7 +280,7 @@ export function collectCargoContexts({manifest, metadata, policy, target, setupI
     try { jsonFile(cacheFile, {version: 1, fingerprint, units}, CACHE_LIMIT); }
     catch (error) { warn('rust_context_cache_limited', error.message); }
     if (droppedDiagnostics) diagnostics.push(warning('rust_context_diagnostics_limited', `${droppedDiagnostics} additional context diagnostics omitted.`));
-    return {plans, units: connected, diagnostics, failed, buildScripts, cargoSucceeded, captureAttempts, capturedCount,
+    return {plans, units: connected, diagnostics, failed, buildScripts, cargoSucceeded, captureAttempts, capturedCount, staleRecaptures, inputRecaptures,
       inputPaths: [...new Set(connected.flatMap(unit => Object.keys(unit.inputHashes)))]};
   } finally {
     // Failed cleanup is an error; never report retained capture bytes reclaimed.
