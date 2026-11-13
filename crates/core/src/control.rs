@@ -799,12 +799,16 @@ pub fn attach_workspace(
 
 static STARTUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
 fn probe(data: &Path) -> Result<bool> {
-    match request(
+    probe_with_timeout(data, 500)
+}
+fn probe_with_timeout(data: &Path, timeout: u32) -> Result<bool> {
+    match request_with_timeout(
         data,
         ControlRequest {
             operation: "status".into(),
             ..Default::default()
         },
+        timeout,
     ) {
         Ok(_) => Ok(true),
         Err(Error::Io(error))
@@ -861,21 +865,34 @@ pub fn ensure_running(data: &Path, executable: Option<&Path>) -> Result<()> {
     let until = std::time::Instant::now() + Duration::from_secs(5);
     let mut exit = None;
     let result = loop {
-        match probe(data) {
+        let remaining = until.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break Err(Error::CoordinatorUnavailable(format!(
+                "coordinator {} did not become ready within 5 seconds (exit: {exit:?}); run that executable with `coordinator run` and the same KNOW_CODE_DATA_DIR to inspect its startup error",
+                executable.display()
+            )));
+        }
+        match probe_with_timeout(data, remaining.as_millis().clamp(1, 500) as u32) {
             Ok(true) => break Ok(()),
+            // The child can bind before restoring its registry/cursors. Only
+            // this owned-start wait may retry a temporarily unreadable peer;
+            // the initial probes must never authorize a duplicate daemon.
+            Err(Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
             Err(error) => break Err(error),
             Ok(false) => {}
         }
         if exit.is_none() {
             exit = child.try_wait()?;
         }
-        if std::time::Instant::now() >= until {
-            break Err(Error::CoordinatorUnavailable(format!(
-                "coordinator {} did not become ready within 5 seconds (exit: {exit:?}); run that executable with `coordinator run` and the same KNOW_CODE_DATA_DIR to inspect its startup error",
-                executable.display()
-            )));
-        }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(
+            until
+                .saturating_duration_since(std::time::Instant::now())
+                .min(Duration::from_millis(20)),
+        );
     };
     // A library host can outlive the service. Reap only a child we launched,
     // without changing its host's SIGCHLD policy or adding per-workspace threads.
@@ -1511,6 +1528,112 @@ mod activity_tests {
                 .contains("cannot start Know Code coordinator"),
             "{error}"
         );
+    }
+    fn startup_executable(root: &Path, mode: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(root.join("startup-mode"), mode).unwrap();
+        let executable = root.join("coordinator-fixture");
+        let binary = std::env::current_exe().unwrap();
+        let quoted = binary.to_str().unwrap().replace('\'', "'\\''");
+        std::fs::write(
+            &executable,
+            format!("#!/bin/sh\nexec '{quoted}' --exact control::activity_tests::startup_fixture_coordinator --nocapture\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        executable
+    }
+    #[test]
+    fn startup_fixture_coordinator() {
+        let Some(root) = std::env::var_os("KNOW_CODE_DATA_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let Ok(mode) = std::fs::read_to_string(root.join("startup-mode")) else {
+            return;
+        };
+        let listener = UnixListener::bind(socket_path(&root)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let until = Instant::now() + Duration::from_secs(4);
+        let mut accepted = 0;
+        loop {
+            assert!(
+                Instant::now() < until,
+                "startup fixture did not receive its probe"
+            );
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(error) => panic!("startup fixture accept failed: {error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            protocol::read_frame(&mut stream).unwrap().unwrap();
+            accepted += 1;
+            if mode == "delayed" && accepted == 1 {
+                // Start the delay after receiving the request so this exceeds
+                // the client's 500ms read budget regardless of child startup.
+                std::thread::sleep(Duration::from_millis(650));
+            }
+            let response = Envelope {
+                protocol_version: if mode == "bad-version" {
+                    VERSION + 1
+                } else {
+                    VERSION
+                },
+                payload: Some(if mode == "bad-payload" {
+                    envelope::Payload::Complete(Completion { success: true })
+                } else {
+                    envelope::Payload::ControlResponse(ControlResponse {
+                        resource_control_version: crate::resource::CONTROL_VERSION,
+                        index_lifecycle_version: protocol::INDEX_LIFECYCLE_VERSION,
+                        analysis_settings_version: crate::settings::VERSION,
+                        ..Default::default()
+                    })
+                }),
+                ..Default::default()
+            };
+            let result = protocol::write_frame(&mut stream, &response);
+            if mode != "delayed" || accepted == 2 {
+                result.unwrap();
+                std::fs::write(root.join("startup-accepted"), accepted.to_string()).unwrap();
+                return;
+            }
+            // The timed-out first client has closed its stream. It must not
+            // prevent the same owned child from answering the next probe.
+        }
+    }
+    #[test]
+    fn owned_startup_wait_retries_delayed_readiness_but_not_invalid_responses() {
+        for mode in ["delayed", "bad-version", "bad-payload"] {
+            let root = root();
+            let executable = startup_executable(&root, mode);
+            let started = Instant::now();
+            let result = ensure_running(&root, Some(&executable));
+            match mode {
+                "delayed" => {
+                    result.unwrap();
+                    assert!(started.elapsed() >= Duration::from_millis(650));
+                }
+                "bad-version" => assert!(matches!(result, Err(Error::UpdateRequired(_)))),
+                _ => assert!(matches!(result, Err(Error::Protocol(_)))),
+            }
+            let until = Instant::now() + Duration::from_secs(1);
+            while !root.join("startup-accepted").exists() {
+                assert!(
+                    Instant::now() < until,
+                    "owned startup fixture did not finish"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert_eq!(
+                std::fs::read_to_string(root.join("startup-accepted")).unwrap(),
+                if mode == "delayed" { "2" } else { "1" }
+            );
+        }
     }
     #[test]
     fn coalesced_hints_do_not_wait_for_a_reply_and_expiry_retries() {
