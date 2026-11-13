@@ -1,6 +1,13 @@
-# Finite TypeScript/C# compiler acceptance catalog
+# Finite compiler acceptance catalog
 
 This catalog maps C04–C09 and Q02–Q05 in [RELEASE_ACCEPTANCE.md](RELEASE_ACCEPTANCE.md) to observable compiler forms and existing assertions. It does not expand those criteria to every language feature or declare every partial capability a release blocker. Source review starts at `c58e2a8`; the focused additions below change fixtures/assertions only. Presence of a test is distinct from a passing run against a frozen candidate.
+
+Published v0.0.2 supports TS 5.9.x/C#; its Swift/Rust adapters are experimental.
+The **unreleased 0.0.3 candidate** implements the additions below. Versioned
+source and development receipts do not certify final packages. Current gates
+and retained corpus failures are in the [release audit](RELEASE_0_0_3_AUDIT.md)
+and [implementation ledger](IMPLEMENTATION_0_0_3.md); the older assertion tables
+and dated receipts below retain their original scope.
 
 ## Toolchain and selection matrix
 
@@ -8,11 +15,14 @@ These are the existing contracts and implemented rejection boundaries, not a new
 
 | Component | Existing policy/pins | Decisive evidence or remaining boundary |
 | --- | --- | --- |
-| Platform/runtime | macOS 15+ / Apple Silicon; Node 24 and separately installed .NET 10 SDK. | Candidate platform policy in AGENTS.md/INSTALLATION.md. Only tested OS versions are evidence; no new VM requirement. Missing runtimes are actionable, not installed by Know Code. |
-| TypeScript | Repository-resolved **5.9.x**. Provider fallback pin **5.9.3** for standalone/no declared compiler; **5.9.2** has named corpus evidence. A declared missing compiler is an error rather than silent fallback. Other compiler families reject explicitly. | `worker.mjs:compilerFor`, `providers/typescript/package.json`, `tests/typescript.mjs`, `TYPESCRIPT_PROVIDER.md`. A 5.9.3 fixture run does not certify every 5.9 patch. Broader compiler families have not been accepted. |
+| Platform/runtime | macOS 15+ / Apple Silicon; Node 24 and separately installed .NET 10 SDK. | Shipped 0.0.2 has macOS 15.7.7 evidence; the final candidate needs its own platform checks. The separate Xcode toolchain has a distinct qualification boundary. Missing runtimes are actionable, not installed by Know Code. |
+| TypeScript legacy API | Shipped **5.9.x**; candidate **5.9.x / 6.0.x**. Provider fallback **5.9.3** only for standalone/no declared compiler. Named candidate semantic fixtures use **5.9.3 / 6.0.2**. | Repository selection is honored; a declared missing/broken compiler never silently falls back. Named patch evidence is not certification of every patch. See [TS6/7 evidence](TYPESCRIPT_7_READINESS.md) and `tests/typescript.mjs`. |
+| Native TypeScript API | Candidate exact **7.0.2** only, including its matching platform binary/API. | Stored calls/impact, saved-error repair and CLI/Node/.NET parity have Debug evidence. Independent project-body links are unavailable; receiver-specialized dispatch and compiler-input provenance remain partial. Compiler-consumed dependency source stays in the caller context. No TS7 future-patch/beta, silent compiler substitution or full legacy graph-parity promise. Final installed/optimized evidence remains separate. |
 | Roslyn/.NET SDK | Provider NuGet compiler/workspace pin **5.9.0**. Selected SDK must expose the exact matching Roslyn assembly version; repository/global.json selection is honored. Different selected SDKs in one worker job are an explicit unsupported boundary. | `providers/dotnet/Program.cs`, provider csproj, `tests/resolution.py` nested unavailable SDK test and `tests/csharp_context.mjs`. The selected .NET 10/Roslyn 5.9 context is the current slice; not all .NET 10 SDK feature bands necessarily carry that compiler. Final evidence must record the actual SDK/compiler pair rather than infer compatibility from “10”. |
 | npm | Stable **10–11**; frozen endpoint fixtures **10.0.0 / 10.9.10**, **11.0.0 / 11.21.2**. Unpinned default **11.21.2**. | Existing accepted policy in FIRST_WAVE_CONTRACT.md/TYPESCRIPT_PROVIDER.md and `tests/node_preparation.mjs`. Honor exact supported pins; endpoints are representative, not a substitute for the selected version. |
 | pnpm | Stable **10–12**; frozen endpoints **10.0.0 / 10.34.9**, **11.0.0 / 11.28.11**, **12.0.0 / 12.18.0**. Unpinned default **12.18.0**. | Same policy/harness. Yarn, prereleases, ranges and unknown future majors do not silently become npm. Native pnpm 12 and JS-based earlier tools have distinct execution paths. |
+| Swift | Candidate selected Swift **6.x** compiler/SDK; finite current-host evidence uses Apple Swift **6.4.2 / Xcode 27.2**. | SwiftPM and both Xcode SDK contexts provide source-backed navigation and partial calls/dependencies/dispatch. The Xcode path additionally requires the pinned separate bridge; selected Test configuration, dependencies/tests and SDK identities remain distinct. Neither deployment target 15 nor source acceptance proves an older Xcode/compiler matrix. See [Swift](SWIFT_PROVIDER.md) and [Xcode](XCODE_PROVIDER.md). |
+| Cargo Rust | Candidate repository-selected Cargo/rustc, rust-analyzer and matching rust-src; current named toolset **1.99.1**. | Actual library/binary/test contexts, trusted build-script/proc-macro preparation, exact source and useful partial direct-call/value/type graphs. Project MSRV and Know Code's build compiler are not a source-language compatibility matrix. Wrappers, native-link/generated-input/expansion forms and dispatch retain explicit gaps; see [Rust boundaries](RUST_PROVIDER.md) and the [release audit](RELEASE_0_0_3_AUDIT.md#rust-release-preparation-addendum--2026-11-13). |
 
 Package endpoints were frozen by the existing contract on 2026-11-09. This packet neither refreshes the upstream “latest” versions nor fetches packages merely to rewrite that historical matrix.
 
@@ -33,6 +43,10 @@ Package endpoints were frozen by the existing contract on 2026-11-09. This packe
 
 The required evidence is source-backed and compiler-produced. A `compiler_bound` edge establishes static binding, not runtime execution. `possible_dispatch`, unresolved sites and explicit external/context boundaries must remain distinguishable. `calls`, `dependencies` and `dispatch` may honestly remain `partial` while these selected forms are supported.
 
+The TS/C# cases below retain their named compiler/API scope. In particular,
+legacy project-link evidence does not certify native TS7 project-body links;
+Swift/Rust forms and omissions are recorded in their provider documents.
+
 | ID / finite form | Required observable assertion | Existing test |
 | --- | --- | --- |
 | Q02 — ordinary TS/C# calls | Direct function/method calls and repeated callsites resolve to their declarations; a function reference alone is absent from callers. | `call_graph.py`: `direct`, `consumer`, `onlyReference`, `Leaf` and `Use`; CLI/Rust, Node and .NET equality through `graph`. |
@@ -50,7 +64,7 @@ The required evidence is source-backed and compiler-produced. A `compiler_bound`
 
 These observations must be reported honestly; this packet does not silently promote them to new release requirements or waive accepted behavior.
 
-- **Broader compiler versions:** the current exact .NET 10/Roslyn 5.9 match and TS 5.9.x slice are the implemented boundary. A broader SDK/compiler family policy requires an explicit decision and named version evidence; endpoint package-manager coverage does not settle it.
+- **Broader compiler versions:** preserve the exact .NET 10/Roslyn 5.9 match and candidate matrix above. New compiler families or untested TS7 versions need named evidence; package-manager endpoints and repository MSRVs do not establish compiler compatibility.
 - **Additional implicit lowerings:** await, foreach/disposal and other lowered runtime operations are documented partial boundaries. Accessors/operators/conversions above remain accepted required cases. Expanding beyond them needs a finite selected form and expected evidence, not “all lowerings”.
 - **Broader dispatch:** open generics/variance and TS structural implementation discovery remain partial. Named ancestry/specialization/composition cases above are required; no whole-program data flow or concrete runtime target proof is promised.
 - **Initialization sequencing:** separate execution ownership is required. Full initializer-to-constructor runtime ordering and invocation through arbitrary stored function values are not implied by that representation.

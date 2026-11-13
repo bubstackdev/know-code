@@ -1,14 +1,18 @@
 # Know Code
 
-Know Code gives agents and applications a local, compiler-backed index of TypeScript and C# repositories. A shared Rust core provides symbol and signature search, references, callers, callees and dependency-impact queries through a CLI, a stdio MCP server, and in-process Node.js and .NET libraries.
+Know Code gives agents and applications a local, compiler-backed code index. A shared Rust core provides symbol and signature search, references, callers, callees and dependency-impact queries through a CLI, a stdio MCP server, and in-process Node.js and .NET libraries.
 
-TypeScript's compiler and Roslyn resolve symbols and references. Results retain source locations, compilation/target provenance, diagnostics and coverage. Call/dependency/dispatch coverage is explicitly partial; see the [supported graph forms and limits](docs/CALL_GRAPH.md).
+Compiler adapters preserve source locations, compilation/target provenance, diagnostics and coverage. Call/dependency/dispatch coverage is explicitly partial; see the [supported graph forms and limits](docs/CALL_GRAPH.md).
 
-v0.0.2, **Snow Leopard**, focuses on correctness, performance, reliability and simplification. See the [changelog](CHANGELOG.md) and [review ledger](docs/CODEBASE_REVIEW_0_0_2.md). Release artifacts must pass matching validation, signing/notarization and normal-security installation checks; a source build alone does not establish certification. The [release plan](docs/RELEASE_PLAN.md) records the artifact-bound evidence.
+**Published v0.0.2, Snow Leopard, supports TypeScript 5.9.x and C#.** Its Swift/Rust adapters remain experimental. See the [changelog](CHANGELOG.md) and [review ledger](docs/CODEBASE_REVIEW_0_0_2.md).
+
+**This checkout is the unreleased v0.0.3 candidate.** It adds TypeScript 6.0.x and exact native 7.0.2, plus useful Swift/SwiftPM/Xcode and Cargo Rust graphs with explicit partial boundaries. Package versions and required-provider declarations do not establish a published release. Final artifact, installed/offline, upgrade/platform and corpus qualification remain pending; failed and interrupted attempts are retained in the [candidate ledger](docs/IMPLEMENTATION_0_0_3.md) and [release audit](docs/RELEASE_0_0_3_AUDIT.md).
 
 ## Get started
 
-Know Code targets **macOS 15+ on Apple Silicon (ARM64)**. Install **Node.js 24** and the **.NET 10 SDK** separately and put them on PATH. Know Code detects missing or incompatible prerequisites; it does not install them. Repository-selected TypeScript and SDK versions must match the [supported compiler contract](docs/COMPILER_ACCEPTANCE.md); the TypeScript adapter currently supports 5.9.x.
+Know Code targets **macOS 15+ on Apple Silicon (ARM64)**. Install **Node.js 24** and the **.NET 10 SDK** separately and put them on PATH. Know Code detects missing or incompatible prerequisites; it does not install them. Follow the [finite compiler contract](docs/COMPILER_ACCEPTANCE.md) for your release and repository-selected toolchain.
+
+Candidate Swift indexing additionally needs the selected Swift compiler/SDK; Cargo indexing needs repository-selected Cargo/rustc, rust-analyzer and matching rust-src. Xcode indexing requires the separately installed pinned [Xcode bridge](tooling/xcode-bridge/README.md), planned as an optional separate download and DMG. SwiftPM and ordinary queries do not require that tool. Current Xcode evidence is specific to the tested toolchain; the common runtime's macOS floor does not certify every Xcode combination.
 
 For packaged installation, use the notarized, stapled DMG from [GitHub Releases](https://github.com/bubstackdev/know-code/releases) and follow that release's verification instructions and the [installation guide](docs/INSTALLATION.md). Runtime and native SDK archives are also available there. The runtime is installed once per user; the npm and NuGet SDK archives are separate consumers of that runtime.
 
@@ -58,7 +62,7 @@ bash scripts/test.sh
 
 Pass `release` for optimized artifacts. The test script defaults to quick checks; [validation tiers](docs/VALIDATION.md) define the required release baseline and extended matrices. The product build profile is separate from an indexed workspace's C# configuration. [Packaging](docs/PACKAGING.md) describes the runtime/SDK layout and artifact provenance.
 
-Experimental [Swift/SwiftPM](docs/SWIFT_PROVIDER.md) and [Rust](docs/RUST_PROVIDER.md) adapters use the same core; supported languages remain TypeScript and C#. v0.0.2 adds no new features. Cross-repository queries, Angular template references and refactoring continuity move to later releases with timing undecided. Swift/Rust language support remains planned for v0.0.3; Xcode remains a Swift follow-on. Embedding-based semantic search and searchable source history remain outside the current release scope.
+[Swift/SwiftPM](docs/SWIFT_PROVIDER.md), [Xcode](docs/XCODE_PROVIDER.md) and [Rust](docs/RUST_PROVIDER.md) document the candidate's finite evidence and limits. Cross-repository search remains optional for 0.0.3; company onboarding, Angular template references and refactoring continuity remain backlog work. Embedding-based semantic search and searchable source history remain outside the current release scope.
 
 See [design requirements](docs/DESIGN.md), [architecture](docs/ARCHITECTURE.md), [release plan](docs/RELEASE_PLAN.md) and [performance evaluation](docs/PERFORMANCE.md) for the durable requirements, roadmap and evidence boundaries.
 
