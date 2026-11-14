@@ -20,8 +20,10 @@ assert NODE, 'Node.js is required'
 HELPER = ROOT / 'tests/worker_harness.mjs'
 
 
-def run(label, workspace, projects=None, env=None):
+def run(label, workspace, projects=None, env=None, policy=None):
     request = {'workspaceRoot': str(workspace), 'projects': [str(p) for p in (projects or [workspace / 'Cargo.toml'])], 'configuration': 'Debug'}
+    if policy is not None:
+        request['analysisPolicy'] = policy
     start = time.monotonic()
     result = subprocess.run([NODE, str(HELPER), str(ROOT / 'providers/rust/worker.mjs')], input=json.dumps(request), text=True, cwd=ROOT,
                             capture_output=True, timeout=190, check=True, env=env)
@@ -57,10 +59,18 @@ workspace = ARTIFACTS / 'fixture'
 if workspace.exists():
     shutil.rmtree(workspace)
 shutil.copytree(ROOT / 'tests/fixtures/rust', workspace)
+# The compiler syntax extension uses byte columns and may normalize line ends;
+# retain the original CRLF bytes while LSP navigation stays UTF-16.
+helper_source = workspace / 'src/helper.rs'
+helper_source.write_bytes(('// 🦀 saved CRLF source\n' + helper_source.read_text()).replace('\n', '\r\n').encode())
+(workspace / 'orphan.rs').write_text('pub fn orphan_must_not_be_owned() {}\n')
+(workspace / 'vendor/unrelated').mkdir(parents=True)
+(workspace / 'vendor/unrelated/bogus.rs').write_text('pub fn vendor_must_not_be_owned() {}\n')
 clean = run('clean', workspace)
 symbols, occurrences, sources = facts(clean)
 names = {s['name'] for s in symbols.values()}
 assert {'Greeter', 'greet', 'café', 'input', 'expected', 'greeting', 'decorate'} <= names, names
+assert not {'orphan_must_not_be_owned', 'vendor_must_not_be_owned'} & names, names
 local_ids = [s['id'] for s in symbols.values() if s['name'] == 'café']
 assert len(local_ids) == 2, local_ids
 assert all(any(o['symbolId'] == sid and o['role'] == 'declaration' for o in occurrences) for sid in local_ids)
@@ -77,8 +87,47 @@ assert extents, 'compiler document outline did not provide the function extent'
 assert any('fn decorate' in sources[o['artifactId']][o.get('startByte',0):o['endByte']].decode() for o in extents)
 assert all(len(s['signature']) < 4096 for s in symbols.values()), 'hover docs leaked into signatures'
 assert any(s.get('external') and s['name'] == 'String' for s in symbols.values())
-assert len(sources) == 3, 'dependency source was indexed'
+assert len(sources) == 3, 'dependency/orphan/vendor source was indexed'
 assert not (workspace / 'know-code-build-ran').exists(), 'analysis executed the build script'
+
+# Actual outgoing-call evidence, syntax ownership and unique definitions must
+# agree. Navigation references alone are not calls, including a function value.
+relationships = [edge for frame in clean['messages'] if 'facts' in frame
+                 for edge in frame['facts'].get('relationships', [])]
+for edge in relationships:
+    assert edge['sourceId'] in symbols and edge['targetId'] in symbols, edge
+    assert edge['resolution'] == 'compiler_bound', edge
+    text = sources[edge['artifactId']]
+    assert 0 <= edge.get('startByte', 0) < edge['endByte'] <= len(text), edge
+    text[edge.get('startByte', 0):edge['endByte']].decode('utf8')
+
+def symbol_named(name):
+    matches = [sid for sid, symbol in symbols.items() if symbol['name'] == name]
+    assert len(matches) == 1, (name, matches)
+    return matches[0]
+
+def edges(source, target, kind):
+    return [edge for edge in relationships if edge['sourceId'] == symbol_named(source)
+            and edge['targetId'] == symbol_named(target) and edge['kind'] == kind]
+
+assert edges('graph_entry', 'graph_leaf', 'call'), 'direct call missing'
+assert edges('graph_leaf', 'GRAPH_VALUE', 'reference'), 'constant read missing'
+assert edges('graph_leaf', 'GRAPH_STATIC', 'reference'), 'static read missing'
+assert edges('graph_value_only', 'graph_leaf', 'reference'), 'function value dependency missing'
+assert not edges('graph_value_only', 'graph_leaf', 'call'), 'function value fabricated a call'
+assert edges('graph_inner', 'graph_leaf', 'call'), 'nested function lost its call'
+assert edges('graph_nested', 'graph_inner', 'call'), 'nested function invocation missing'
+assert not edges('graph_nested', 'graph_leaf', 'call'), 'inner call attributed to containing function'
+assert not edges('graph_deferred', 'graph_leaf', 'call'), 'closure/async call attributed to containing function'
+assert edges('graph_type_reference', 'Greeter', 'type_reference'), 'signature type dependency missing'
+assert any(o.get('enclosingSymbolId') == symbol_named('graph_entry')
+           and o['symbolId'] == symbol_named('graph_leaf') for o in occurrences), 'enclosing owner missing'
+for frame in clean['messages']:
+    if 'report' in frame:
+        assert frame['report']['capabilities']['calls'] == 'partial'
+        assert frame['report']['capabilities']['dependencies'] == 'partial'
+        assert frame['report']['capabilities']['dispatch'] == 'partial'
+
 
 # Same project scope, changed saved text: a replacement has new exact source
 # payload/ranges and no old symbol. Storage publication/parity is tested above
@@ -101,14 +150,33 @@ virtual = ARTIFACTS / 'virtual'
 if virtual.exists():
     shutil.rmtree(virtual)
 (virtual / 'member/src').mkdir(parents=True)
-(virtual / 'Cargo.toml').write_text('[workspace]\nmembers = ["member"]\nresolver = "3"\n')
-(virtual / 'member/Cargo.toml').write_text('[package]\nname = "fixture-member"\nversion = "0.1.0"\nedition = "2024"\n')
-(virtual / 'member/src/lib.rs').write_text('pub fn member_function(value: usize) -> usize { value }\n')
+(virtual / 'Cargo.toml').write_text('[workspace]\nmembers = ["member", "z_dependency"]\nresolver = "3"\n')
+(virtual / 'member/Cargo.toml').write_text('[package]\nname = "fixture-member"\nversion = "0.1.0"\nedition = "2024"\n[dependencies]\nfixture-dependency = {path = "../z_dependency"}\n')
+(virtual / 'member/src/lib.rs').write_text('pub fn member_function(value: usize) -> usize { fixture_dependency::hidden::shared_helper(value) }\n')
+(virtual / 'z_dependency/src').mkdir(parents=True)
+(virtual / 'z_dependency/Cargo.toml').write_text('[package]\nname = "fixture-dependency"\nversion = "0.1.0"\nedition = "2024"\n')
+(virtual / 'z_dependency/src/lib.rs').write_text('pub mod hidden;\n')
+(virtual / 'z_dependency/src/hidden.rs').write_text('pub fn shared_helper(value: usize) -> usize { value }\n')
 dedup = run('workspace', virtual, [virtual / 'Cargo.toml', virtual / 'member/Cargo.toml'])
-facts(dedup)
+dedup_symbols, _, dedup_sources = facts(dedup)
+assert any(symbol['name'] == 'shared_helper' and not symbol.get('external') for symbol in dedup_symbols.values()), 'later-owned module was classified external'
+assert any('z_dependency/src/hidden.rs@' in artifact for artifact in dedup_sources), 'analyzer-selected dependency module omitted'
 compilations = [f['compilation'] for f in dedup['messages'] if 'compilation' in f]
 assert len(compilations) == 1 and compilations[0]['projectPath'] == 'Cargo.toml', compilations
 assert any(p.endswith('member/Cargo.toml') for p in compilations[0]['inputPaths'])
+
+# Managed policy acknowledgment is separate from legacy worker requests. A
+# wrong branch/version or invalid cache path must fail before ProviderInfo and
+# therefore before compiler/dependency work; no silent legacy fallback.
+for label, policy in [
+    ('wrong-policy-version', {'version': 99, 'rust': {'cacheDirectory': str(ARTIFACTS / 'cache')}}),
+    ('wrong-policy-branch', {'version': 1, 'csharp': {}}),
+    ('relative-policy-cache', {'version': 1, 'rust': {'cacheDirectory': 'relative'}}),
+]:
+    rejected = run(label, virtual, policy=policy)
+    assert rejected['code'] != 0 and 'Update required' in rejected['stderr'], rejected
+    assert not any('provider' in frame or 'compilation' in frame for frame in rejected['messages']), rejected
+
 
 # Registering only a member directory must not silently index an enclosing
 # workspace that the host cannot select again during an incremental refresh.
@@ -204,6 +272,9 @@ assert 'install rust-src separately' in missing_source['stderr'] and not source_
 assert not any('compilation' in f or f.get('complete', {}).get('success') for f in missing_source['messages'])
 
 summary = {'passed': True, 'checks': ['compiler-defined method/cross-file references', 'distinct same-named Unicode locals and exact byte ranges',
+           'outgoing direct calls with compiler locations', 'value/type dependency kinds and enclosing owners',
+           'function values and deferred/nested execution are not fabricated calls',
+           'Cargo target roots and analyzer-selected modules exclude orphan/vendor source',
            'test symbols', 'external identity without dependency source publication', 'saved-source replacement scope',
            'unresolved call does not invent symbol', 'Cargo workspace member deduplication', 'out-of-root workspace rejection', 'build script execution disabled', 'missing analyzer prerequisite', 'uninstalled pin without install/network', 'missing rust-src before analyzer launch'],
            'clean_symbols': len(symbols), 'clean_occurrences': len(occurrences),

@@ -81,6 +81,104 @@ fn populate(writer: &mut Writer, text: &str) {
 }
 
 #[test]
+fn provider_policy_backfills_legacy_views_without_retrying_current_gaps() {
+    let path = database();
+    let stage = |writer: &mut Writer, id: &str, language: &str, options: &str| {
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: id.into(),
+                language: language.into(),
+                project_path: "Cargo.toml".into(),
+                options_json: options.into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: id.into(),
+                status: "partial".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+    };
+    let mut writer = Writer::open(&path).unwrap();
+    stage(
+        &mut writer,
+        "legacy",
+        "rust",
+        r#"{"provider":"rust-analyzer-lsp"}"#,
+    );
+    let legacy = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (legacy, true));
+
+    for context in ["{}", r#""unavailable""#] {
+        let mut writer = Writer::open(&path).unwrap();
+        stage(
+            &mut writer,
+            "pre-macro",
+            "rust",
+            &format!(r#"{{"rustContextPolicy":1,"context":{context}}}"#),
+        );
+        let old_policy = writer.publish().unwrap();
+        assert_eq!(ReadView::readiness(&path).unwrap(), (old_policy, true));
+    }
+
+    let mut writer = Writer::open(&path).unwrap();
+    stage(
+        &mut writer,
+        "unit",
+        "rust",
+        r#"{"rustContextPolicy":2,"context":{}}"#,
+    );
+    stage(
+        &mut writer,
+        "unavailable",
+        "rust",
+        r#"{"rustContextPolicy":2,"context":"unavailable"}"#,
+    );
+    let current = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (current, false));
+
+    for origin in ["xcode", "swiftpm_build_server", "inferred_directory"] {
+        let mut writer = Writer::open(&path).unwrap();
+        stage(
+            &mut writer,
+            "old-swift",
+            "swift",
+            &format!(r#"{{"origin":"{origin}"}}"#),
+        );
+        let old = writer.publish().unwrap();
+        assert_eq!(ReadView::readiness(&path).unwrap(), (old, true));
+    }
+    let mut writer = Writer::open(&path).unwrap();
+    stage(
+        &mut writer,
+        "swift-target",
+        "swift",
+        r#"{"swiftExtractionPolicy":1}"#,
+    );
+    stage(
+        &mut writer,
+        "swift-gap",
+        "swift",
+        r#"{"swiftExtractionPolicy":1,"supported":false}"#,
+    );
+    stage(
+        &mut writer,
+        "rust-target",
+        "rust",
+        r#"{"rustContextPolicy":2}"#,
+    );
+    let current = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (current, false));
+
+    let mut writer = Writer::open(&path).unwrap();
+    stage(&mut writer, "other-provider", "other-language", "{}");
+    let other = writer.publish().unwrap();
+    assert_eq!(ReadView::readiness(&path).unwrap(), (other, false));
+}
+
+#[test]
 fn published_readers_keep_matching_source_across_replacement() {
     let path = database();
     let mut writer = Writer::open(&path).unwrap();
@@ -428,6 +526,231 @@ fn missing_reports_and_truncated_protocol_never_count_as_ready() {
     assert!(read_frame(&mut truncated).is_err());
     let mut oversized = std::io::Cursor::new(((MAX_FRAME + 1) as u32).to_le_bytes());
     assert!(read_frame(&mut oversized).is_err());
+}
+
+#[test]
+fn last_project_removal_publishes_empty_and_preserves_reader_generations() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    let first = writer.publish().unwrap();
+    let retention = GenerationRetention::activate(&path, [1; 16]).unwrap();
+    let old_pin = retention.pin_current().unwrap();
+    let old = old_pin.open_view_in_scope(&common::scope(&path)).unwrap();
+    let second =
+        know_code_core::update::index_scoped(&path, vec![], Some(&["tsconfig.json".into()]))
+            .unwrap();
+    assert!(second > first);
+    let current = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
+    let result = current.query(request("symbols")).unwrap();
+    assert_eq!(result.generation, second);
+    assert!(result.symbols.is_empty() && result.coverage.is_empty());
+    assert_eq!(old.query(request("symbols")).unwrap().symbols.len(), 1);
+    let source = old
+        .query(serde_json::from_str(r#"{"op":"source","artifact_id":"source"}"#).unwrap())
+        .unwrap();
+    assert_eq!(source.source.unwrap().text, "Greeter old");
+    drop(old);
+    drop(current);
+    let empty_pin = retention.pin_current().unwrap();
+    assert_eq!(empty_pin.generation(), second);
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter returned");
+    let third = writer.publish().unwrap();
+    assert!(third > second);
+    let empty = empty_pin.open_view_in_scope(&common::scope(&path)).unwrap();
+    assert_eq!(empty.generation, second);
+    assert!(empty.query(request("symbols")).unwrap().symbols.is_empty());
+    drop(empty);
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let retained: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM generations WHERE id=?)",
+            [second],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(retained, "empty pinned generation was reclaimed");
+    retention.release(&old_pin).unwrap();
+    retention.release(&empty_pin).unwrap();
+    let retained: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM generations WHERE id=?)",
+            [second],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!retained, "released empty generation was not reclaimed");
+    assert_eq!(
+        ReadView::open_in_scope(&path, &common::scope(&path))
+            .unwrap()
+            .generation,
+        third
+    );
+}
+
+#[test]
+fn empty_analysis_cannot_create_or_replace_a_published_graph() {
+    let path = database();
+    assert!(
+        know_code_core::update::index_scoped(&path, vec![], Some(&["missing".into()])).is_err()
+    );
+    assert!(matches!(
+        ReadView::open_in_scope(&path, &common::scope(&path)),
+        Err(know_code_core::Error::NotReady)
+    ));
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    let generation = writer.publish().unwrap();
+    assert!(know_code_core::update::index(&path, vec![]).is_err());
+    assert!(
+        Writer::open_incremental(&path, &["tsconfig.json".into()])
+            .unwrap()
+            .publish()
+            .is_err()
+    );
+    let view = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
+    assert_eq!(view.generation, generation);
+    assert_eq!(view.query(request("symbols")).unwrap().symbols.len(), 1);
+}
+
+#[test]
+fn empty_worker_cannot_remove_its_scope_while_other_units_survive() {
+    let path = database();
+    let mut writer = Writer::open(&path).unwrap();
+    populate(&mut writer, "Greeter old");
+    writer
+        .stage(Payload::Compilation(Compilation {
+            id: "other".into(),
+            language: "typescript".into(),
+            project_path: "other.json".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    writer
+        .stage(Payload::Report(AnalysisReport {
+            compilation_id: "other".into(),
+            status: "complete".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+    let published = writer.publish().unwrap();
+    let response_path = path.with_extension("empty-worker-frames");
+    let mut response = std::fs::File::create(&response_path).unwrap();
+    for payload in [
+        Payload::Provider(ProviderInfo {
+            language: "typescript".into(),
+            ..Default::default()
+        }),
+        Payload::Complete(Completion { success: true }),
+    ] {
+        write_frame(
+            &mut response,
+            &Envelope {
+                protocol_version: VERSION,
+                job_id: format!("{}-0", published + 1),
+                payload: Some(payload),
+            },
+        )
+        .unwrap();
+    }
+    let root = path.parent().unwrap();
+    let data = root.join("personal-trust");
+    know_code_core::settings::set_project_execution(root, &data, true).unwrap();
+    let result = know_code_core::update::index_scoped(
+        &path,
+        vec![know_code_core::update::WorkerCommand {
+            execution_grant: know_code_core::settings::project_execution_grant(root, &data)
+                .unwrap(),
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "/bin/cat >/dev/null; /bin/cat \"$1\"".into(),
+                "owned-worker".into(),
+                response_path.to_string_lossy().into_owned(),
+            ],
+            request: AnalyzeRequest {
+                workspace_root: root.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+        }],
+        Some(&["other.json".into()]),
+    );
+    assert!(
+        matches!(&result, Err(know_code_core::Error::Provider(message)) if message.contains("without any compilation")),
+        "{result:?}"
+    );
+    let current = ReadView::open_in_scope(&path, &common::scope(&path)).unwrap();
+    let result = current.query(request("symbols")).unwrap();
+    assert_eq!(result.generation, published);
+    assert_eq!(result.symbols.len(), 1);
+    let complete = current
+        .query(
+            serde_json::from_str(r#"{"op":"symbols","name":"Greeter","coverage_detail":"full"}"#)
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        complete.coverage.len(),
+        2,
+        "empty worker removed its previous unit"
+    );
+}
+
+#[test]
+fn unowned_swift_changes_select_their_group_and_containing_projects() {
+    let path = database();
+    let root = path.parent().unwrap();
+    let mut writer = Writer::open(&path).unwrap();
+    for project in [
+        "$swift-inferred:swift",
+        "swift-package/Package.swift",
+        "xcode/App.xcodeproj/project.pbxproj",
+    ] {
+        writer
+            .stage(Payload::Compilation(Compilation {
+                id: project.into(),
+                language: "swift".into(),
+                project_path: project.into(),
+                ..Default::default()
+            }))
+            .unwrap();
+        writer
+            .stage(Payload::Report(AnalysisReport {
+                compilation_id: project.into(),
+                status: "complete".into(),
+                ..Default::default()
+            }))
+            .unwrap();
+    }
+    writer.publish().unwrap();
+    for (source, mut expected) in [
+        ("swift/new/New.swift", vec!["$swift-inferred:swift/new"]),
+        (
+            "swift-package/Sources/New.swift",
+            vec![
+                "$swift-inferred:swift-package/Sources",
+                "swift-package/Package.swift",
+            ],
+        ),
+        (
+            "xcode/New.swift",
+            vec![
+                "$swift-inferred:xcode",
+                "xcode/App.xcodeproj/project.pbxproj",
+            ],
+        ),
+    ] {
+        expected.sort();
+        let scopes =
+            know_code_core::workspace::affected_projects(&path, root, &[root.join(source)])
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            scopes, expected,
+            "new/already-removed source {source} replanned unrelated groups"
+        );
+    }
 }
 
 #[test]
@@ -785,6 +1108,17 @@ fn revocation_between_workers_prevents_new_execution_and_preserves_prior_generat
             ..Default::default()
         })];
         if number == 0 {
+            payloads.push(Payload::Compilation(Compilation {
+                id: "first-worker".into(),
+                language: "typescript".into(),
+                project_path: "first/tsconfig.json".into(),
+                ..Default::default()
+            }));
+            payloads.push(Payload::Report(AnalysisReport {
+                compilation_id: "first-worker".into(),
+                status: "complete".into(),
+                ..Default::default()
+            }));
             payloads.push(Payload::Progress(Progress {
                 stage: "owned-revoke".into(),
                 ..Default::default()

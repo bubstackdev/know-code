@@ -73,6 +73,9 @@ impl Entry {
         let mut status = self.status.snapshot();
         if let Some(settings) = status.requested_settings.as_mut() {
             settings.project_execution_allowed = self.project_trusted;
+            if let Some(rust) = settings.rust.as_mut() {
+                rust.execution_allowed = self.project_trusted;
+            }
         }
         if !self.project_trusted && !self.cancel_pending && status.available {
             status.phase = "trust_required".into();
@@ -1538,13 +1541,13 @@ fn execute(
             });
         }
         let changes = workspace::differences(&job.inputs, &before);
-        let (recovered, classification_backfill) = if candidate.is_some() {
+        let (recovered, policy_backfill) = if candidate.is_some() {
             (0, false)
         } else {
             selected_readiness(database)?
         };
         if !job.force
-            && !classification_backfill
+            && !policy_backfill
             && changes.is_empty()
             && recovered != 0
             && recovered == job.previous_generation
@@ -1568,7 +1571,7 @@ fn execute(
             // actual analysis, while an unchanged failed snapshot must stay failed.
         }
         let scopes = if job.force
-            || classification_backfill
+            || policy_backfill
             || !job.previous_error.is_empty()
             || recovered == 0
             || recovered != job.previous_generation
@@ -2753,13 +2756,34 @@ mod live_lifetime_tests {
         let job = cancellation_job();
         let mut entry = permission_entry(&job.root, &job.database);
         let queued = entry.queued;
+        entry.status.requested_settings =
+            Some(know_code_core::protocol::WorkspaceAnalysisSettings {
+                project_execution_allowed: true,
+                rust: Some(know_code_core::protocol::RustAnalysisPolicy {
+                    execution_allowed: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
         assert_eq!(entry.snapshot().phase, "trust_required");
+        let requested = entry.snapshot().requested_settings.unwrap();
+        assert!(!requested.project_execution_allowed);
+        assert!(!requested.rust.unwrap().execution_allowed);
         let saved = PersistedEntry::capture(&entry).unwrap();
         assert_eq!(saved.status.outcome_code, "analysis_error");
         assert_eq!(saved.analysis_error, "prior dependency setup failed");
         assert_eq!(saved.failed_input_hash, "saved-failure");
         entry.project_trusted = true;
         assert_eq!(entry.snapshot().phase, "failed");
+        assert!(
+            entry
+                .snapshot()
+                .requested_settings
+                .unwrap()
+                .rust
+                .unwrap()
+                .execution_allowed
+        );
         assert!(!entry.pending && !entry.force && !entry.retry_preparation);
         assert_eq!(entry.queued, queued);
         entry.project_trusted = false;

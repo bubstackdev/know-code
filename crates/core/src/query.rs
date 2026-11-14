@@ -413,7 +413,9 @@ impl ReadView {
             view.check()?;
             let readiness = (
                 view.generation,
-                view.needs_test_classification()? || view.needs_target_equivalence()?,
+                view.needs_test_classification()?
+                    || view.needs_target_equivalence()?
+                    || view.needs_provider_backfill()?,
             );
             view.check()?;
             Ok(readiness)
@@ -1466,6 +1468,14 @@ impl ReadView {
             "1"
         };
         Ok(self.connection.query_row(&format!("SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND c.language='csharp' AND {missing})"),[self.generation],|r|r.get(0))?)
+    }
+
+    /// Older provider extraction policies need ordinary bounded reanalysis.
+    fn needs_provider_backfill(&self) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=? AND ((c.language='rust' AND coalesce(json_extract(nullif(c.options_json,''),'$.rustContextPolicy'),0)<>2) OR (c.language='swift' AND coalesce(json_extract(nullif(c.options_json,''),'$.swiftExtractionPolicy'),0)<>1)))",
+            [self.generation], |r| r.get(0),
+        )?)
     }
 
     fn coverage(&self, details: bool) -> Result<Vec<Coverage>> {

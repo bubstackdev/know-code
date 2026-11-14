@@ -435,23 +435,23 @@ mod tests {
     use std::os::unix::net::UnixListener;
     #[test]
     fn incompatible_page_producer_peer_requires_update_before_reading_pages() {
+        let compatible = ControlResponse {
+            cursor_control_version: CONTROL_VERSION,
+            index_lifecycle_version: crate::protocol::INDEX_LIFECYCLE_VERSION,
+            analysis_settings_version: crate::settings::VERSION,
+            resource_control_version: crate::resource::CONTROL_VERSION,
+            ..Default::default()
+        };
         for version in [0, 2, CONTROL_VERSION + 1] {
             assert!(matches!(
                 checked_cursor_response(ControlResponse {
                     cursor_control_version: version,
-                    ..Default::default()
+                    ..compatible.clone()
                 }),
                 Err(Error::UpdateRequired(_))
             ));
         }
-        assert!(
-            checked_cursor_response(ControlResponse {
-                cursor_control_version: CONTROL_VERSION,
-                index_lifecycle_version: crate::protocol::INDEX_LIFECYCLE_VERSION,
-                ..Default::default()
-            })
-            .is_ok()
-        );
+        assert!(checked_cursor_response(compatible).is_ok());
     }
     #[test]
     fn cancelled_upload_discards_partial_file_and_pin_with_uncancelled_cleanup() {

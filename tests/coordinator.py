@@ -75,7 +75,8 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as old_client:
     response = b''
     while len(response) < length: response += old_client.recv(length - len(response))
     assert b'update_required' in response
-ready = wait(lambda s: s['phase'] == 'idle', 'initial registration')
+# Explicit compiler-publication ceilings; generic state/latency waits stay short.
+ready = wait(lambda s: s['phase'] == 'idle', 'initial registration', seconds=90)
 print('coordinator: initial registration ready', flush=True)
 
 def query(request):
@@ -97,14 +98,14 @@ original = source.read_text()
 replacement = source.with_suffix('.swap')
 replacement.write_text(original.replace('Hello', 'Welcome'))
 os.replace(replacement, source)
-saved = wait(lambda s: s['phase'] == 'idle' and s['generation'] > ready['generation'], 'atomic save without consumers')
+saved = wait(lambda s: s['phase'] == 'idle' and s['generation'] > ready['generation'], 'atomic save without consumers', seconds=90)
 assert 'Welcome' in source_text('greet')
 after = owners()
 assert after['ts:typescript/tsconfig.json'] != before['ts:typescript/tsconfig.json']
 assert all(after[k] == v for k, v in before.items() if k != 'ts:typescript/tsconfig.json'), (before, after)
 csharp = WORKSPACE / 'csharp/Greeter.cs'
 csharp.write_text(csharp.read_text().replace('Greet(string name)', 'Greet(string name, int count = 1)'))
-cs_ready = wait(lambda s: s['phase'] == 'idle' and s['generation'] > saved['generation'], 'C# dependent invalidation')
+cs_ready = wait(lambda s: s['phase'] == 'idle' and s['generation'] > saved['generation'], 'C# dependent invalidation', seconds=90)
 cs_owners = owners()
 assert cs_owners['cs:consumer/Consumer.csproj:net10.0:Debug'] != after['cs:consumer/Consumer.csproj:net10.0:Debug']
 assert cs_owners['ts:independent/tsconfig.json'] == after['ts:independent/tsconfig.json']
@@ -116,12 +117,12 @@ fallback = query({'op': 'symbols', 'name': 'greet', 'freshness_wait_ms': 10, 'de
 assert time.monotonic() - started < .75
 assert fallback['result']['freshness'] == 'stale', fallback
 source.write_text(original.replace('Hello', 'Final'))
-final = wait(lambda s: s['phase'] == 'idle' and s['generation'] > cs_ready['generation'], 'save during analysis')
+final = wait(lambda s: s['phase'] == 'idle' and s['generation'] > cs_ready['generation'], 'save during analysis', seconds=90)
 assert 'Final' in source_text('greet')
 config = WORKSPACE / 'typescript/tsconfig.json'
 config_text = config.read_text()
 config.write_text('{ invalid JSON')
-partial = wait(lambda s: s['phase'] == 'idle' and s['generation'] > final['generation'], 'invalid project configuration publishes unavailable coverage')
+partial = wait(lambda s: s['phase'] == 'idle' and s['generation'] > final['generation'], 'invalid project configuration publishes unavailable coverage', seconds=90)
 invalid = query({'op': 'symbols', 'name': 'greet', 'coverage_detail': 'full'})['result']
 assert invalid['freshness'] == 'current' and not invalid.get('symbols'), invalid
 unavailable = [c for c in invalid['coverage'] if c['project_path'] == 'typescript/tsconfig.json']
@@ -135,7 +136,7 @@ time.sleep(.5)
 unchanged_partial = status()
 assert unchanged_partial['phase'] == 'idle' and unchanged_partial['generation'] == partial['generation'], 'unchanged unavailable project retried without another save'
 config.write_text(config_text)
-healthy = wait(lambda s: s['phase'] == 'idle' and s['generation'] > partial['generation'], 'repair configuration')
+healthy = wait(lambda s: s['phase'] == 'idle' and s['generation'] > partial['generation'], 'repair configuration', seconds=90)
 repaired = query({'op': 'symbols', 'name': 'greet', 'coverage_detail': 'full'})['result']
 assert repaired['freshness'] == 'current' and repaired['symbols'] and all(c['status'] == 'complete' for c in repaired['coverage']), repaired
 away = RUN / 'workspace-away'
@@ -147,14 +148,14 @@ time.sleep(2.2)
 assert not status()['available'] and 'different workspace' in status()['error']
 WORKSPACE.rmdir()
 away.rename(WORKSPACE)
-returned = wait(lambda s: s['available'] and s['phase'] == 'idle', 'returning workspace')
+returned = wait(lambda s: s['available'] and s['phase'] == 'idle', 'returning workspace', seconds=90)
 BASE.write_text(json.dumps({'compilerOptions': {'noUncheckedIndexedAccess': True}}))
-returned = wait(lambda s: s['phase'] == 'idle' and s['generation'] > returned['generation'], 'external config save')
+returned = wait(lambda s: s['phase'] == 'idle' and s['generation'] > returned['generation'], 'external config save', seconds=90)
 BASE.unlink()
-missing_base = wait(lambda s: s['phase'] == 'idle' and s['generation'] > returned['generation'], 'missing external config')
+missing_base = wait(lambda s: s['phase'] == 'idle' and s['generation'] > returned['generation'], 'missing external config', seconds=90)
 assert any(c['language'] == 'typescript' and c['status'] == 'partial' for c in query({'op': 'symbols', 'name': 'greet'})['result']['coverage'])
 BASE.write_text(json.dumps({'compilerOptions': {'noUncheckedIndexedAccess': False}}))
-returned = wait(lambda s: s['phase'] == 'idle' and s['generation'] > missing_base['generation'], 'external config return')
+returned = wait(lambda s: s['phase'] == 'idle' and s['generation'] > missing_base['generation'], 'external config return', seconds=90)
 assert all(c['status'] == 'complete' for c in query({'op': 'symbols', 'name': 'greet'})['result']['coverage'])
 print('coordinator: saves, dependent scopes, stale fallback, root identity and external config passed', flush=True)
 
@@ -167,7 +168,7 @@ def start():
     while not (RUN / 'data/c.sock').exists() and time.monotonic() < until: time.sleep(.02)
     return process
 daemon = start()
-restarted = wait(lambda s: s['phase'] == 'idle', 'offline edit reconciliation')
+restarted = wait(lambda s: s['phase'] == 'idle', 'offline edit reconciliation', seconds=90)
 assert restarted['generation'] > returned['generation']
 assert '8' in source_text('independent')
 assert all(owners()[k] == v for k, v in stable_owners.items() if k != 'ts:independent/tsconfig.json')
@@ -206,7 +207,7 @@ WORKSPACE.rename(away)
 wait(lambda s: not s['available'], 'failed workspace becomes unavailable')
 shutil.rmtree(away / 'node_modules/typescript')
 away.rename(WORKSPACE)
-wait(lambda s: s['available'] and s['phase'] == 'idle' and s['generation'] > prior['generation'], 'returning workspace retries interrupted analysis and publishes repaired facts')
+wait(lambda s: s['available'] and s['phase'] == 'idle' and s['generation'] > prior['generation'], 'returning workspace retries interrupted analysis and publishes repaired facts', seconds=90)
 
 stop(); daemon.wait(timeout=15)
 assert query({'op': 'symbols', 'name': 'greet'})['result']['freshness'] == 'stale'

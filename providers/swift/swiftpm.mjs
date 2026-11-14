@@ -3,8 +3,12 @@ import path from 'node:path';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 import {JsonRpcProcess} from '../shared/jsonrpc.mjs';
 import {send} from '../shared/protocol.mjs';
-import {checked, run, hash, relative, sourceFile, compilerDiagnostics, ingestStore} from './index.mjs';
+import {checked, hash, relative, sourceFile, compileSources, ingestStore} from './index.mjs';
+import {unavailableGraphCapabilities} from './graph.mjs';
+import {semanticArguments} from './compiler.mjs';
 
+export const PREPARATION_TIMEOUT_MS = 600000;
+const CACHE_COMPATIBILITY = 'swiftpm-planner-v3-canonical-work';
 const packageManifest = file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file));
 export const canonicalManifest = file => packageManifest(file) ? path.join(path.dirname(file), 'Package.swift') : file;
 const exists = file => { try { return fs.statSync(file).isFile() || fs.statSync(file).isDirectory(); } catch { return false; } };
@@ -17,13 +21,13 @@ function gap(root, project, toolchain, configuration, diagnostics) {
   const {version, compiler, sdk} = toolchain;
   const projectPath = relative(root, project), id = `swift:${projectPath}`;
   send('compilation', {id, language: 'swift', projectPath, configuration, compilerVersion: version,
-    inputPaths: [...manifests(path.dirname(project)), ...toolchain.inputPaths], optionsJson: JSON.stringify({origin: 'swiftpm', supported: false, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection})});
-  send('report', {compilationId: id, status: 'partial', diagnostics});
+    inputPaths: [...manifests(path.dirname(project)), ...toolchain.inputPaths], optionsJson: JSON.stringify({swiftExtractionPolicy: 1, origin: 'swiftpm', supported: false, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection})});
+  send('report', {compilationId: id, status: 'partial', diagnostics, capabilities: unavailableGraphCapabilities});
 }
 function packageArguments(directory, state, configuration, sdk) {
   return ['package', '--sdk', sdk, '--package-path', directory, '--scratch-path', path.join(state, 'build'),
     '--cache-path', path.join(state, 'cache'), '--manifest-cache', 'local', '--jobs', '1',
-    '--configuration', configuration.toLowerCase()];
+    ...(configuration ? ['--configuration', configuration.toLowerCase()] : [])];
 }
 function loadManifest(swift, directory, state, configuration, env, sdk) {
   return JSON.parse(checked(swift, [...packageArguments(directory, state, configuration, sdk), 'dump-package'], directory, env));
@@ -47,10 +51,10 @@ function cachedPlanValid(plan) {
     try { return hash(fs.readFileSync(filename)) === expected; } catch { return false; }
   });
 }
-function prepareDependencies({request, root, project, swift, toolchain, state, configuration}) {
+function prepareDependencies({request, root, project, swift, toolchain, work, state, configuration}) {
   const {env, identity, sdk} = toolchain;
   const directory = path.dirname(project), key = `swiftpm:${project}`;
-  const fingerprint = hash(`${request.preparationFingerprint}:${identity}:${configuration}:swiftpm-planner-v2`);
+  const fingerprint = hash(`${request.preparationFingerprint}:${identity}:${configuration}:${work}:${CACHE_COMPATIBILITY}`);
   const previous = request.preparations.find(item => item.key === key);
   const planFile = path.join(state, 'dependency-plan.json');
   let plan;
@@ -63,7 +67,7 @@ function prepareDependencies({request, root, project, swift, toolchain, state, c
   let error = '';
   try {
     const args = packageArguments(directory, state, configuration, sdk);
-    checked(swift, [...args, 'resolve'], directory, env);
+    checked(swift, [...args, 'resolve'], directory, env, {timeout: PREPARATION_TIMEOUT_MS});
     const graph = JSON.parse(checked(swift, [...args, 'show-dependencies', '--format', 'json'], directory, env));
     const nodes = dependencyNodes(graph);
     const inputs = {};
@@ -78,20 +82,9 @@ function prepareDependencies({request, root, project, swift, toolchain, state, c
   send('preparation', {key, fingerprint, succeeded: !error, error, outputs: error ? [] : plan.outputs});
   return error ? {error: diagnostic('dependency_restore_failed', error, relative(root, project))} : {plan};
 }
-export async function extensionRequest(client, method, params) {
-  try { return await client.request(`sourcekit/${method}`, params); }
-  catch (error) { if (error.rpcCode !== -32601) throw error; return client.request(method, params); }
-}
-function semanticArguments(args) {
-  const result = [];
-  const outputOptions = new Set(['-index-store-path', '-index-unit-output-path', '-o', '-emit-module-path',
-    '-emit-module-doc-path', '-emit-module-source-info-path', '-emit-dependencies-path', '-emit-reference-dependencies-path', '-serialize-diagnostics-path']);
-  for (let i = 0; i < args.length; i++) {
-    if (outputOptions.has(args[i])) { i++; continue; }
-    if (['-c', '-emit-module', '-emit-object', '-typecheck', '-index-file'].includes(args[i])) continue;
-    result.push(args[i]);
-  }
-  return result;
+export async function extensionRequest(client, method, params, options) {
+  try { return await client.request(`sourcekit/${method}`, params, options); }
+  catch (error) { if (error.rpcCode !== -32601) throw error; return client.request(method, params, options); }
 }
 function verifyToolchain(target, compiler) {
   const uri = target.data?.toolchain;
@@ -103,7 +96,7 @@ function verifyToolchain(target, compiler) {
 export async function analyzePackage({request, root, project, toolchain, work, scratch}) {
   const {compiler, version, sdk, env} = toolchain;
   const directory = path.dirname(project);
-  const state = path.join(work, 'packages', hash(`${project}:${toolchain.identity}:${request.configuration}`).slice(0, 24));
+  const state = path.join(work, 'packages', hash(`${project}:${toolchain.identity}:${request.configuration}:${work}:${CACHE_COMPATIBILITY}`).slice(0, 24));
   fs.mkdirSync(state, {recursive: true});
   const swift = path.join(path.dirname(compiler), 'swift');
   const configuration = request.configuration || 'Debug';
@@ -115,7 +108,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
   catch (error) { gap(root, project, toolchain, configuration, [diagnostic('swiftpm_manifest_failed', error.message, relative(root, project))]); return; }
   let problem = unsupported(rootManifest, relative(root, project));
   if (problem) { gap(root, project, toolchain, configuration, [problem]); return; }
-  const prepared = prepareDependencies({request, root, project, swift, toolchain, state, configuration});
+  const prepared = prepareDependencies({request, root, project, swift, toolchain, work, state, configuration});
   if (prepared.error) { gap(root, project, toolchain, configuration, [prepared.error]); return; }
   const nodes = dependencyNodes(prepared.plan.graph);
   // Complete manifest preflight precedes creating the BSP server: SwiftPM can
@@ -160,6 +153,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       }
     }
   });
+  let completed = false;
   try {
     const initialized = await client.request('build/initialize', {displayName: 'Know Code', version: '0.0.2',
       bspVersion: '2.2.0', rootUri: pathToFileURL(directory).href, capabilities: {languageIds: ['swift', 'c', 'cpp', 'objective-c', 'objective-cpp']}});
@@ -194,7 +188,7 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       const items = sourcesByTarget.get(target.id.uri);
       const preparationStart = buildDiagnostics.length;
       send('progress', {stage: 'preparing', projectPath, message: `Preparing Swift modules for ${target.displayName}; no product/object build`});
-      await extensionRequest(client, 'buildTarget/prepare', {targets: [target.id]});
+      await extensionRequest(client, 'buildTarget/prepare', {targets: [target.id]}, {timeout: PREPARATION_TIMEOUT_MS});
       const sourceResponse = await client.request('buildTarget/sources', {targets: [target.id]});
       const currentItems = sourceResponse.items.flatMap(item => item.sources);
       const swiftItems = currentItems.filter(source => source.uri.startsWith('file:') && source.uri.endsWith('.swift'));
@@ -249,23 +243,17 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       let partial = diagnostics.some(item => item.severity === 'error');
       const compilerInputs = new Set([...inputs, ...toolchain.inputPaths]);
       const toolchainRoot = path.resolve(path.dirname(compiler), '..', '..');
-      for (const option of options) {
-        const compile = run(compiler, ['-index-file', '-index-file-path', option.file,
-          '-index-store-path', store, '-index-include-locals', '-index-ignore-system-modules',
-          '-index-unit-output-path', path.join(store, `${hash(option.file)}.o`), ...option.args], option.workingDirectory, env);
-        const items = compilerDiagnostics(compile.stderr, root);
-        if (/Stack dump:|Please submit a bug report|signal [0-9]+|LLVM ERROR|Assertion failed/i.test(compile.stderr)
-            || (compile.status !== 0 && !items.some(item => item.severity === 'error' && item.path)))
-          throw new Error(`Swift compiler/driver failed: ${compile.stderr.slice(0, 16000)}`);
-        partial ||= compile.status !== 0 || items.some(item => item.severity === 'error');
-        for (const item of items) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
-      }
+      send('progress', {stage: 'analyzing', projectPath, message: `Indexing Swift source bodies for ${target.displayName}`.slice(0, 512)});
+      const compiled = compileSources({compiler, options, store, root, env});
+      partial ||= compiled.partial;
+      for (const item of compiled.diagnostics) if (diagnostics.length < 100 && !diagnostics.some(existing => JSON.stringify(existing) === JSON.stringify(item))) diagnostics.push(item);
       const library = path.resolve(path.dirname(compiler), '..', 'lib', 'libIndexStore.dylib');
+      send('progress', {stage: 'analyzing', projectPath, message: `Reading compiler IndexStore records for ${target.displayName}`.slice(0, 512)});
       const facts = ingestStore({id, root, sources, store, library, scratch, onInputs: indexInputs => {
         for (const file of indexInputs)
           if (!within(file, work) && !within(file, toolchainRoot) && !within(file, fs.realpathSync(sdk)) && exists(file)) compilerInputs.add(file);
         send('compilation', {id, language: 'swift', projectPath, target: target.displayName, configuration, compilerVersion: version,
-        dependencies, inputPaths: [...compilerInputs], optionsJson: JSON.stringify({origin: 'swiftpm_build_server',
+        dependencies, inputPaths: [...compilerInputs], optionsJson: JSON.stringify({swiftExtractionPolicy: 1, origin: 'swiftpm_build_server',
           bspVersion: initialized.bspVersion, buildServerVersion: initialized.version, bspTarget: target.id.uri,
           compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection, effectiveTarget, signatures: 'compiler_index_names_only',
           indexIncludeLocals: true, jobs: 1, preparation: 'modules_only', compilerConfigurations: [...configurations.values()],
@@ -274,10 +262,15 @@ export async function analyzePackage({request, root, project, toolchain, work, s
       diagnostics.push(...facts.diagnostics);
       if (droppedDiagnostics) diagnostics.push({code: 'diagnostics_truncated', severity: 'info', path: '', message: `${droppedDiagnostics} additional SwiftPM preparation diagnostics were omitted.`});
       if (!sources.size) diagnostics.push(diagnostic('swiftpm_no_source_inputs', 'No Swift source could be analyzed for this target.', projectPath));
-      send('report', {compilationId: id, status: partial || facts.partial || !sources.size ? 'partial' : 'complete', diagnostics});
+      send('report', {compilationId: id, status: partial || facts.partial || !sources.size ? 'partial' : 'complete', diagnostics, capabilities: facts.capabilities});
     }
+    completed = true;
   } finally {
-    try { if (!client.failure) { await client.request('build/shutdown', {}); client.notify('build/exit', {}); } }
+    try { if (completed && !client.failure) { await client.request('build/shutdown', {}); client.notify('build/exit', {}); } }
     finally { client.terminate(); }
   }
 }
+
+// Xcode inspects the compiler-selected package manifests with the same tools
+// and conservative plugin/macro policy before module preparation.
+export {loadManifest, unsupported as unsupportedManifest};

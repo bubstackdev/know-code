@@ -69,6 +69,8 @@ message AnalysisPolicy {
   oneof settings {
     NodePreparationPolicy node = 2;
     CSharpBuildContext csharp = 3;
+    RustAnalysisPolicy rust = 4;
+    SwiftBuildContext swift = 5;
   }
 }
 message NodePreparationPolicy {
@@ -82,6 +84,25 @@ message CSharpBuildContext {
   optional string configuration = 1;
   // Absent: discover zero/one solution; several require an explicit selection.
   optional string solution_path = 2;
+}
+message RustAnalysisPolicy {
+  // Empty preserves repository Cargo target selection (host when unset).
+  repeated string targets = 1;
+  repeated string features = 2;
+  // Absence preserves Cargo's default features.
+  optional bool default_features = 3;
+  // Derived only from the existing identity-bound personal execution grant.
+  bool execution_allowed = 4;
+  // Absolute coordinator-owned location for compiler preparation outputs.
+  string cache_directory = 5;
+}
+message SwiftBuildContext {
+  // Absent: select the sole shared scheme; ambiguity requires a choice.
+  optional string scheme_path = 1;
+  // Derived only from the existing identity-bound personal execution grant.
+  bool execution_allowed = 2;
+  // Absolute coordinator-owned location for compiler preparation outputs.
+  string cache_directory = 3;
 }
 // Required setup state, shared by providers; not usage telemetry or graph facts.
 message PreparationResult {
@@ -314,6 +335,8 @@ message WorkspaceAnalysisSettings {
   string personal_file = 6;
   // Personal identity-bound permission; never granted by checked-in settings.
   bool project_execution_allowed = 7;
+  RustAnalysisPolicy rust = 8;
+  SwiftBuildContext swift = 9;
 }
 
 // Personal coordinator-wide ceilings; not workspace compiler settings.

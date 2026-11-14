@@ -337,6 +337,24 @@ pub fn extra_inputs(database: &Path, root: &Path) -> Result<Vec<PathBuf>> {
         other => other,
     })
 }
+
+// A successful empty census may remove a prior serving graph. Read only unit
+// ownership, never salvage facts/inputs from a damaged replacement source.
+fn empty_removal_projects(database: &Path) -> Result<Vec<String>> {
+    let guard = crate::recovery::IndexReadGuard::open_unbudgeted(database)?;
+    let result = (|| {
+        crate::query::ReadView::readiness(guard.physical_path())?;
+        let conn =
+            Connection::open_with_flags(guard.physical_path(), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let mut statement = conn.prepare("SELECT DISTINCT c.project_path FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id WHERE u.generation=(SELECT current_generation FROM state)")?;
+        let scopes = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        guard.check()?;
+        Ok(scopes)
+    })();
+    crate::index_result(&guard, result)
+}
 /// A replacement plans from saved inputs and logical preparation checkpoints.
 /// Before selector publication, its verified external inputs come from the
 /// private destination, never the damaged selected database.
@@ -379,6 +397,17 @@ pub fn extra_inputs_at(database: Option<&Path>, root: &Path) -> Result<Vec<PathB
     result.sort();
     result.dedup();
     Ok(result)
+}
+
+fn inferred_swift_project(root: &Path, source: &Path) -> String {
+    let directory = source.parent().unwrap_or(root);
+    let relative = directory.strip_prefix(root).unwrap_or(directory);
+    let group = if relative.as_os_str().is_empty() {
+        ".".into()
+    } else {
+        relative.to_string_lossy().replace('\\', "/")
+    };
+    format!("$swift-inferred:{group}")
 }
 
 // None means a complete refresh; Some scopes replace only those project units.
@@ -439,15 +468,30 @@ fn affected_projects_at(
             affected.insert("$inferred".into());
         }
         if language == "swift" && owners.is_empty() {
-            // A newly saved file can introduce a standalone directory group.
-            let directory = path.parent().unwrap_or(root);
-            let relative = directory.strip_prefix(root).unwrap_or(directory);
-            let relative = if relative.as_os_str().is_empty() {
-                ".".into()
-            } else {
-                relative.to_string_lossy().replace('\\', "/")
-            };
-            affected.insert(format!("$swift-inferred:{relative}"));
+            // New or already-removed loose files affect their own group. A
+            // configured project may also enroll a new file beneath its root;
+            // its adapter remains authoritative about actual target ownership.
+            affected.insert(inferred_swift_project(root, path));
+            for (project, _, language, _) in &metadata {
+                if language != "swift" || project.starts_with("$swift-inferred:") {
+                    continue;
+                }
+                let project_path = root.join(project);
+                let parent = project_path.parent().unwrap_or(root);
+                let boundary = if swift_manifest(&project_path) {
+                    Some(parent)
+                } else if project_path.file_name().is_some_and(|name| {
+                    name == "project.pbxproj" || name == "contents.xcworkspacedata"
+                }) {
+                    parent.parent()
+                } else {
+                    None
+                };
+                if boundary.is_some_and(|directory| path.starts_with(directory)) {
+                    affected.insert(project.clone());
+                }
+            }
+            continue;
         }
         if owners.is_empty() {
             affected.extend(
@@ -599,16 +643,25 @@ pub fn refresh_controlled(
     cs.retain(|p| selected(p));
     rust.retain(|p| selected(p));
     swift.retain(|p| selected(p));
-    let swift_inferred = !swift_sources.is_empty()
-        && replacements.is_none_or(|r| r.iter().any(|s| s.starts_with("$swift-inferred:")));
-    if let Some(replacements) = replacements {
+    if let Some(scopes) = replacements {
+        let selected: BTreeSet<_> = scopes
+            .iter()
+            .filter(|scope| scope.starts_with("$swift-inferred:"))
+            .collect();
+        swift_sources
+            .retain(|source| selected.contains(&inferred_swift_project(root, Path::new(source))));
+        let present: BTreeSet<_> = swift_sources
+            .iter()
+            .map(|source| inferred_swift_project(root, Path::new(source)))
+            .collect();
         swift.extend(
-            replacements
+            scopes
                 .iter()
-                .filter(|s| s.starts_with("$swift-inferred:"))
+                .filter(|scope| present.contains(*scope))
                 .cloned(),
         );
     }
+    let swift_inferred = !swift_sources.is_empty();
     let mut workers = vec![];
     if inferred || !ts.is_empty() {
         workers.push(WorkerCommand {
@@ -689,6 +742,14 @@ pub fn refresh_controlled(
             request: AnalyzeRequest {
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: rust,
+                analysis_policy: settings.rust.clone().map(|mut context| {
+                    // The identity-bound grant above is checked again when the worker starts.
+                    context.execution_allowed = true;
+                    crate::protocol::AnalysisPolicy {
+                        version: crate::protocol::ANALYSIS_POLICY_VERSION,
+                        settings: Some(crate::protocol::analysis_policy::Settings::Rust(context)),
+                    }
+                }),
                 configuration: configuration.into(),
                 preparation_fingerprint: preparation_fingerprint.into(),
                 retry_preparation,
@@ -709,6 +770,14 @@ pub fn refresh_controlled(
             request: AnalyzeRequest {
                 workspace_root: root.to_string_lossy().into_owned(),
                 projects: swift,
+                analysis_policy: settings.swift.clone().map(|mut context| {
+                    // Checked again by the shared update path before worker execution.
+                    context.execution_allowed = true;
+                    crate::protocol::AnalysisPolicy {
+                        version: crate::protocol::SWIFT_ANALYSIS_POLICY_VERSION,
+                        settings: Some(crate::protocol::analysis_policy::Settings::Swift(context)),
+                    }
+                }),
                 configured_projects: swift_projects,
                 configuration: configuration.into(),
                 preparation_fingerprint: preparation_fingerprint.into(),
@@ -722,6 +791,13 @@ pub fn refresh_controlled(
             },
         });
     }
+    let removal_scopes;
+    let replacements = if workers.is_empty() && replacements.is_none() && destination.is_none() {
+        removal_scopes = empty_removal_projects(database)?;
+        Some(removal_scopes.as_slice())
+    } else {
+        replacements
+    };
     if workers.is_empty() && replacements.is_none() {
         return Err(Error::Provider(
             "no supported TypeScript, C#, Rust Cargo, or Swift source/project inputs found".into(),

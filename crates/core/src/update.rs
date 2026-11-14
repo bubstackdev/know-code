@@ -340,6 +340,9 @@ pub(crate) fn index_published(
         )?,
         Publication::Serving(_) => Writer::open_controlled(database, replacements, control)?,
     };
+    if workers.is_empty() && replacements.is_some() {
+        writer.allow_empty_removal()?;
+    }
     let preparation_path = database.with_extension("preparation.json");
     let mut preparations: BTreeMap<String, PreparationResult> =
         match std::fs::read(&preparation_path) {
@@ -455,6 +458,7 @@ pub(crate) fn index_published(
             )?));
             let mut hello = false;
             let mut completed = false;
+            let mut saw_compilation = false;
             while let Some(message) = protocol::read_frame(&mut *stdout)? {
                 control.check()?;
                 if message.job_id != job_id || completed {
@@ -483,7 +487,17 @@ pub(crate) fn index_published(
                         );
                         hello = true;
                     }
-                    Some(Payload::Complete(done)) if hello && done.success => completed = true,
+                    Some(Payload::Complete(done)) if hello => {
+                        if !done.success {
+                            return Err(Error::Provider(
+                                "worker reported failure; previous generation preserved".into(),
+                            ));
+                        }
+                        if !saw_compilation {
+                            return Err(Error::Protocol("worker completed without any compilation; previous generation preserved".into()));
+                        }
+                        completed = true;
+                    }
                     Some(Payload::Progress(status)) if hello => {
                         if status.stage.len() > 64
                             || status.project_path.len() > 4096
@@ -507,6 +521,7 @@ pub(crate) fn index_published(
                         std::fs::rename(next, &preparation_path)?;
                     }
                     Some(payload) if hello => {
+                        saw_compilation |= matches!(payload, Payload::Compilation(_));
                         if let Payload::Compilation(compilation) = &payload
                             && target_policy != 0
                             && compilation.target_equivalence_policy != target_policy

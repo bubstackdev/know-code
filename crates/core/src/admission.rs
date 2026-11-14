@@ -428,6 +428,9 @@ mod tests {
         busy(scope.try_reserve());
         busy(scope.policy());
         busy(scope.configure(2));
+        // Parallel fork tests can inherit this raw descriptor; closing only
+        // our copy does not release its shared open-file-description lock.
+        guard.unlock().unwrap();
         drop(guard);
         let policy = scope.directory().join(POLICY);
         for (bytes, code) in [

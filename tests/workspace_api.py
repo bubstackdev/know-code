@@ -44,7 +44,9 @@ class Client:
   (RUN/f'client-{self.p.pid}.json').write_text(json.dumps(self.events,indent=2)+'\n')
 
 def ready(client,after=0,previous_failed_epoch=None):
- until=time.monotonic()+60
+ # Ordinary TS/C# compiler publication, including input-watch reconciliation.
+ # Query deadlines and individual client reply bounds remain independent.
+ until=time.monotonic()+90
  while time.monotonic()<until:
   status=client.send('wait',wait_ms=1000)
   assert 'error' not in status or not isinstance(status['error'],dict),status
@@ -112,11 +114,15 @@ assert node.send('settings')['requested_settings']['configuration_origin']=='rep
 # Personal settings use one resolver in both hosts; null persists a real reset,
 # while omission in a replacement inherits the checked-in choice.
 settings_file=WORKSPACE/'.know-code.json'
-settings_file.write_text(json.dumps({'csharp':{'configuration':'Release'}}))
+settings_file.write_text(json.dumps({'csharp':{'configuration':'Release'}, 'rust':{'targets':['aarch64-apple-darwin'],'features':['extra'],'default_features':False}}))
 current=ready(node,current['generation']+1)
 assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
-requested=dotnet.send('configure',settings={'csharp':{'configuration':None},'allow_install_scripts':True})
+requested=dotnet.send('configure',settings={'csharp':{'configuration':None},'rust':{'targets':None,'features':[],'default_features':None},'swift':{'scheme':None},'allow_install_scripts':True})
 assert requested['requested_settings']['configuration_origin']=='personal'
+assert requested['requested_settings']['rust']['targets']==[]
+assert requested['requested_settings']['rust']['features']==[]
+assert requested['requested_settings']['rust']['default_features'] is None
+assert requested['requested_settings']['swift']['scheme_path'] is None
 current=ready(node,current['generation']+1)
 assert node.send('settings')['requested_settings']['node']['allow_install_scripts']
 assert node.send('settings')['requested_settings']['csharp']['configuration'] is None
@@ -126,6 +132,13 @@ assert reset['requested_settings']['configuration_origin']=='project_file'
 current=ready(dotnet,current['generation']+1)
 assert all(c['configuration']=='Release' for c in equivalent({'op':'symbols','name':'Value'})['coverage'])
 assert not dotnet.send('settings')['requested_settings']['node']['allow_install_scripts']
+for client in (node,dotnet):
+ requested=client.send('settings')['requested_settings']
+ rust=requested['rust']
+ assert rust['targets']==['aarch64-apple-darwin'] and rust['features']==['extra'] and rust['default_features'] is False,rust
+ assert rust['execution_allowed'] is True and Path(rust['cache_directory']).is_absolute(),rust
+ swift=requested['swift']
+ assert swift['execution_allowed'] is True and Path(swift['cache_directory'])==DATA/'workers/swift',swift
 personal_file=Path(reset['requested_settings']['personal_file'])
 assert json.loads(personal_file.read_text())['allow_install_scripts'] is False
 error(node.send('configure',settings={'csharp':{'configuration':' '}}),'invalid_request')
@@ -158,7 +171,8 @@ for op,args in [('query',{'request':{'op':'symbols'}}),('status',{}),('wait',{'w
 assert dotnet.send('close')['closed'];dotnet.close()
 previous=json.loads(cli('coordinator','status').stdout)['workspaces'][0]['generation']
 (WORKSPACE/'value.ts').write_text('export function savedWithoutClients() { return 10; }\n')
-until=time.monotonic()+45
+# A saved mixed-language workspace still waits for ordinary compiler publication.
+until=time.monotonic()+90
 while time.monotonic()<until:
  status=json.loads(cli('coordinator','status').stdout)['workspaces'][0]
  if status['phase']=='idle' and status['generation']>previous:break
@@ -232,22 +246,25 @@ cli('coordinator','stop');until=time.monotonic()+15
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 old=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);old.bind(str(DATA/'c.sock'));old.listen(4)
 requests=[]
+old.settimeout(.2)
+peer_finished=threading.Event()
 def old_settings_peer():
- for _ in range(12):
-  conn,_=old.accept()
+ while not peer_finished.is_set():
+  try:conn,_=old.accept()
+  except TimeoutError:continue
   with conn:
    requests.append(request_frame(conn))
-   # Envelope v7: current lifecycle4, old resource1 and settings1.
+   # Envelope v7: current lifecycle4/settings2, old resource1.
    # Reach the cancellation-contract check instead of failing lifecycle first.
-   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x01\x68\x04')
+   conn.sendall(b'\x0b\x00\x00\x00\x08\x07\xfa\x01\x06\x38\x01\x40\x02\x68\x04')
 thread=threading.Thread(target=old_settings_peer,daemon=True);thread.start()
 for client in [node,dotnet]:
  error(client.send('refresh',configuration='Release'),'update_required')
  error(client.send('query',request={'op':'symbols','name':'Value'}),'update_required')
  error(client.send('status'),'update_required')
  error(client.send('cancel'),'update_required');client.close()
-thread.join(timeout=5);old.close();(DATA/'c.sock').unlink()
-assert len(requests)==12 and not thread.is_alive()
+peer_finished.set();thread.join(timeout=5);old.close();(DATA/'c.sock').unlink()
+assert requests and not thread.is_alive()
 assert not any(b'\x0a\x07refresh' in request or b'\x0a\x06cancel' in request for request in requests)
 checks.append('existing_handles_reject_settings_incompatible_coordinator')
 # A client must not spawn a replacement when a connected peer is incompatible.

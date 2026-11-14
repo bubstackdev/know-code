@@ -6,7 +6,8 @@ import {readRequest, send} from '../shared/protocol.mjs';
 import {relative, hash, run, sourceFile, compilerDiagnostics, ingestStore} from './index.mjs';
 import {canonicalManifest, analyzePackage} from './swiftpm.mjs';
 import {createToolchainResolver} from './toolchain.mjs';
-import {canonicalXcodeProject, analyzeXcode} from './xcode.mjs';
+import {canonicalXcodeProject, xcodeSelection, analyzeXcode} from './xcode.mjs';
+import {swiftAnalysisPolicy} from './policy.mjs';
 function within(file, directory) {
   const rel = path.relative(directory, file);
   return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
@@ -25,7 +26,7 @@ function analyzeGroup(request, root, projectPath, files, toolchain, scratch) {
     '-index-include-locals', '-module-cache-path', path.join(path.dirname(scratch), `modules-${hash(toolchain.identity).slice(0, 16)}`)];
   send('compilation', {id, language: 'swift', projectPath, target: '', configuration: request.configuration,
     inferred: true, compilerVersion: version, inputPaths: [...files, ...toolchain.inputPaths], optionsJson: JSON.stringify({
-      origin: 'inferred_directory', moduleName: module, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection,
+      swiftExtractionPolicy: 1, origin: 'inferred_directory', moduleName: module, compilerPath: compiler, sdkPath: sdk, toolchainSelection: toolchain.selection,
       indexIncludeLocals: true, signatures: 'compiler_index_names_only', sourceScope: 'saved_standalone_files',
       packageSupport: false, xcodeSupport: false
     })});
@@ -49,16 +50,19 @@ function analyzeGroup(request, root, projectPath, files, toolchain, scratch) {
     message: 'Swift module/build options are inferred per directory; SwiftPM/Xcode configuration is not analyzed.'});
   const facts = ingestStore({id, root, sources, store, library, scratch});
   diagnostics.push(...facts.diagnostics);
-  send('report', {compilationId: id, status: failed || facts.partial ? 'partial' : 'complete', diagnostics});
+  send('report', {compilationId: id, status: failed || facts.partial ? 'partial' : 'complete', diagnostics, capabilities: facts.capabilities});
 }
 try {
   const request = readRequest();
+  const policy = swiftAnalysisPolicy(request);
   const root = path.resolve(request.workspaceRoot);
   const resolveToolchain = createToolchainResolver({workspaceRoot:root});
-  send('provider', {language: 'swift', compilerVersion: 'selected per compilation', runtimeVersion: process.version});
+  send('provider', {language: 'swift', compilerVersion: 'selected per compilation', runtimeVersion: process.version,
+    analysisPolicyVersion: 2});
   const canonicalProject = file => canonicalXcodeProject(canonicalManifest(path.resolve(root, file)));
   const projects = [...new Set(request.projects.filter(file => !file.startsWith('$swift-inferred:')).map(canonicalProject))];
   const configured = [...new Set(request.configuredProjects.filter(file => /^Package(?:@swift-[0-9.]+)?\.swift$/.test(path.basename(file)) || ['project.pbxproj', 'contents.xcworkspacedata'].includes(path.basename(file))).map(canonicalProject))];
+  const selection = xcodeSelection({root, configuredProjects: [...new Set([...configured, ...projects])], schemePath: policy?.schemePath});
   const groups = new Map();
   for (const source of request.looseSources.map(file => path.resolve(root, file))) {
     if (configured.some(project => within(source, boundary(project)))) continue;
@@ -69,8 +73,9 @@ try {
     groups.get(group).push(source);
   }
   const data = process.env.KNOW_CODE_DATA_DIR || path.join(os.homedir(), 'Library', 'Application Support', 'Know Code');
-  const work = path.join(data, 'workers', 'swift');
-  fs.mkdirSync(work, {recursive: true});
+  const cacheDirectory = policy?.cacheDirectory ?? path.join(data, 'workers', 'swift');
+  fs.mkdirSync(cacheDirectory, {recursive: true});
+  const work = fs.realpathSync(cacheDirectory);
   const scratch = fs.mkdtempSync(path.join(work, 'job-'));
   try {
     for (const project of projects) {
@@ -79,7 +84,7 @@ try {
         await analyzePackage({request, root, project, toolchain, work, scratch});
         continue;
       }
-      await analyzeXcode({request, root, project, toolchain, work, scratch});
+      await analyzeXcode({request, root, project, toolchain, work, scratch, policy, selection});
     }
     for (const [group, files] of [...groups].sort(([a], [b]) => a.localeCompare(b)))
       analyzeGroup(request, root, group, files.sort(), resolveToolchain(path.dirname(files[0])), scratch);

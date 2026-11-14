@@ -30,8 +30,8 @@ elapsed seconds without introducing a test scheduler.
 | --- | --- |
 | `quick` | `protocol`, `provider-source`, `native-header` (C and C++), `typescript`: source/codec/compiler-JS checks without a product build or cold Rust compilation. |
 | `core` | Quick plus producer fault cases, all matching-profile Rust workspace tests, managed path checks and the public TS/C#/CLI/MCP/native/coordinator/query baseline. Exact 27 IDs: `--list`. |
-| `extended` | The remaining 19 existing matrix/adapter checks, including full npm/pnpm endpoints, direct C# context/SDK/target cases, deeper resolution/project-links/dispatch and experimental providers. |
-| `all` | All 46 IDs / 47 existing commands, preserving their original order and cases. |
+| `extended` | The remaining 20 matrix/adapter checks, including full npm/pnpm endpoints, direct C# context/SDK/target cases, deeper resolution/project-links/dispatch and experimental providers. |
+| `all` | All 47 IDs / 48 commands, preserving their original order and cases. |
 
 `rust` can compile its own tests without a prior product build. Other source-only
 IDs also skip producer verification: `build-record`, `jsonrpc`,
@@ -58,6 +58,13 @@ Git-diff guesses. Shared code changes trigger its consumers too.
 | Shared LSP/BSP JSON-RPC, Node provider source/framing/process/environment contracts | `jsonrpc rust-navigation rust-provider swift-toolchain swift-provider swiftpm-provider xcode-provider languages`, plus affected TS/C# cases. |
 | Experimental Rust/Swift/Xcode adapters or their toolchain selection | The relevant preceding adapter/toolchain cases and `languages`; no new language acceptance is implied. |
 
+The `xcode-integration` extended check runs the owned six-context Xcode fixture
+through the coordinator and CLI/Node/.NET queries. Set
+`KNOW_CODE_TEST_XCODE_BRIDGE` to the separately built qualified runtime directory
+or executable. It uses an isolated tool path and personal data directory; it
+does not install the bridge or change the live coordinator. Select it for
+production Xcode extraction, preparation, context or generated-source changes.
+
 The npm/pnpm ten-cell matrix is independent of Rust Debug/Release compilation.
 Run it once for unchanged relevant source/toolchain identities rather than twice
 solely for the native profile. A `KNOW_CODE_TEST_PACKAGE_PINS` subset is focused
@@ -75,6 +82,12 @@ approved real-HOME lifecycle/security workflow remain separate existing gates.
 No generic installer test that repurposes HOME is added. Encoding performance
 remains explicitly deferred; this policy does not manufacture a passing result.
 
+For 0.0.3, the user explicitly removed VM testing from scope on 2026-11-13.
+Run the remaining applicable gates on the current host; do not relaunch a VM
+or report a macOS 15 candidate pass. The accepted macOS 15+ distribution floor
+remains, with this release's lack of retesting disclosed. Historical 0.0.2 VM
+receipts remain evidence for that release only.
+
 Observed Debug work was about 1,013 seconds to the failed resources fixture and
 409 seconds for a later suffix after focused repair. Those are segmented costs,
 not an uninterrupted green suite. Ten npm/pnpm cells dominate profile-independent
@@ -90,3 +103,23 @@ verifies its producer before/after. The default quick selection passed in about
 one second on this machine (`quick-tier-01`); core's elapsed duration has not been
 measured separately. This is narrower coverage than `all`, not an equal-coverage
 performance comparison.
+
+
+The 0.0.3 `rust-managed` check is change-triggered for Cargo preparation, trust,
+compiler-wrapper preservation and setup input/cache behavior. It uses the same
+worker harness with owned local Git/path dependencies, tests scripts/macros only
+under the managed policy, and retains malformed/oversized-cache and explicit
+retry cases. It needs installed Rust/analyzer tools but no product native build
+or hosted dependency download. Run it during relevant adapter work; it does not
+replace assembled coordinator/native, exact Cargo-context or release gates.
+
+The `rust-contexts` extended check runs owned compiler-context planning and
+collection/cache fixtures after changes to Rust capture, cfg/input/artifact
+proof or analyzer-project construction. It uses installed Cargo/rustc and
+durable local fixtures, without a native product build or hosted downloads.
+It covers warm reuse, include edits, replaced artifacts, failed-unit isolation
+and actual selected-root worker graphs/save behavior. The same check includes
+procedural-macro dylib/environment replay, synchronous loader diagnostics,
+canonical callable identity and conservative generated/attributed-origin
+omissions. Native graph parity remains a separate gate.
+It is intentionally excluded from routine quick and core checks.

@@ -27,15 +27,20 @@ struct Settings {
     login: bool,
     #[serde(skip, default = "current_lifecycle")]
     control_version: u32,
+    #[serde(skip, default = "current_settings")]
+    settings_version: u32,
 }
 fn current_lifecycle() -> u32 {
     know_code_core::protocol::INDEX_LIFECYCLE_VERSION
+}
+fn current_settings() -> u32 {
+    know_code_core::settings::VERSION
 }
 fn install_request(
     s: &Settings,
     request: ControlRequest,
 ) -> know_code_core::Result<ControlResponse> {
-    control::request_installer(&s.data, request, s.control_version)
+    control::request_installer(&s.data, request, s.control_version, s.settings_version)
 }
 struct Layout {
     prefix: PathBuf,
@@ -267,6 +272,7 @@ struct Maintenance {
     token: String,
     owned: bool,
     control_version: u32,
+    settings_version: u32,
 }
 impl Drop for Maintenance {
     fn drop(&mut self) {
@@ -279,6 +285,7 @@ impl Drop for Maintenance {
                     ..Default::default()
                 },
                 self.control_version,
+                self.settings_version,
             );
         }
     }
@@ -295,6 +302,7 @@ fn pause(layout: &Layout, s: &Settings) -> Result<Maintenance> {
         ),
         owned: false,
         control_version: s.control_version,
+        settings_version: s.settings_version,
     };
     let Some(response) = status(s)? else {
         return Ok(guard);
@@ -412,7 +420,9 @@ fn compatible_info(a: &Value, b: &Value) -> Result<()> {
                 || version == u64::from(know_code_core::protocol::INDEX_LIFECYCLE_VERSION)
         })
         || a["resource_control_version"] != know_code_core::resource::CONTROL_VERSION
-        || a["analysis_settings_version"] != know_code_core::settings::VERSION
+        || !a["analysis_settings_version"]
+            .as_u64()
+            .is_some_and(|version| version == 1 || version == u64::from(current_settings()))
         || a["worker_protocol"] != b["worker_protocol"]
     {
         return Err(
@@ -530,6 +540,9 @@ fn activate(layout: &Layout, s: &Settings, target: &Path, keep_previous: bool) -
     target_settings.control_version = target_info["index_lifecycle_version"]
         .as_u64()
         .ok_or("target lacks lifecycle contract")? as u32;
+    target_settings.settings_version = target_info["analysis_settings_version"]
+        .as_u64()
+        .ok_or("target lacks settings contract")? as u32;
     let prior_login = layout.settings()?.is_some_and(|s| s.login);
     if old.as_deref() == Some(target) && prior_login == s.login && (!s.login || loaded(s)?) {
         return Ok(());
@@ -810,13 +823,15 @@ pub fn run(args: &[String]) -> Result<Value> {
             .map_err(|_| "toolchain PATH must be valid UTF-8")?,
             login: !no_login,
             control_version: current_lifecycle(),
+            settings_version: current_settings(),
         }
     };
     s.path = know_code_core::update::trusted_path(std::ffi::OsStr::new(&s.path))?
         .into_string()
         .map_err(|_| "toolchain PATH must be valid UTF-8")?;
     if let Some(selected) = layout.selected(&layout.current)? {
-        let version = info(&selected)?["index_lifecycle_version"]
+        let selected_info = info(&selected)?;
+        let version = selected_info["index_lifecycle_version"]
             .as_u64()
             .ok_or("installed runtime lacks lifecycle evidence")?;
         if !matches!(version, 1..=3)
@@ -825,6 +840,15 @@ pub fn run(args: &[String]) -> Result<Value> {
             return Err("installed lifecycle is unsupported; use a compatible installer".into());
         }
         s.control_version = version as u32;
+        let settings = selected_info["analysis_settings_version"]
+            .as_u64()
+            .ok_or("installed runtime lacks settings evidence")?;
+        if settings != 1 && settings != u64::from(current_settings()) {
+            return Err(
+                "installed analysis settings are unsupported; use a compatible installer".into(),
+            );
+        }
+        s.settings_version = settings as u32;
     }
     private_dir(&s.data)?;
     s.data = s.data.canonicalize()?;
@@ -973,6 +997,20 @@ mod contract_tests {
         assert!(compatible_info(&supported, &mismatch).is_err());
     }
     #[test]
+    fn settings_upgrade_is_directional_and_requires_known_source_evidence() {
+        let target = supported();
+        let mut previous = target.clone();
+        previous["analysis_settings_version"] = json!(1);
+        assert!(compatible_info(&previous, &target).is_ok());
+        assert!(compatible_info(&target, &previous).is_err());
+        for version in [Value::Null, json!(0), json!(3)] {
+            let mut unknown = target.clone();
+            unknown["analysis_settings_version"] = version;
+            assert!(compatible_info(&unknown, &target).is_err());
+            assert!(compatible_info(&target, &unknown).is_err());
+        }
+    }
+    #[test]
     fn registered_store_and_lifecycle_evidence_block_unsafe_switches_without_rewrites() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -1011,6 +1049,7 @@ mod contract_tests {
             path: String::new(),
             login: false,
             control_version: current_lifecycle(),
+            settings_version: current_settings(),
         };
         let registry = rusqlite::Connection::open(s.data.join("registry.db")).unwrap();
         registry

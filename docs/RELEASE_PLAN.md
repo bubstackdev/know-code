@@ -1,6 +1,12 @@
-# Release readiness: 0.0.1 and 0.0.2
+# Release readiness and scope
 
 ## Current release and stabilization direction — 2026-11-12
+
+[v0.0.2 — Snow Leopard is published](https://github.com/bubstackdev/know-code/releases/tag/v0.0.2) at `c77f972dd9c8604cdc7a0723eae8c3ee5e2692b0`. Required core/relevant matrices, actual previous/current native compatibility, signed installed/offline/lifecycle/upgrade checks, notarization/stapling and clean macOS 15.7.7 ARM64 first-use/startup checks passed. All twelve public assets were downloaded anonymously and matched. The prior 0.0.1 release, all 407 existing refs and all five rulesets were preserved. Exact closeout: `.artifacts/release-0.0.2/publication/PUBLISHED.json`. This does not claim a new uninterrupted full Debug run or a measured encoding result.
+
+The [0.0.3 scope audit](RELEASE_0_0_3_AUDIT.md) distinguishes existing experimental Swift/Rust navigation from remaining graph/context/Xcode/distribution work. Required 0.0.3 gates are working Xcode device-and-simulator indexing and useful callers/callees/impact for both languages, with unsupported forms explicitly partial. Xcode uses one selected shared scheme per workspace, including dependencies/tests; select the sole shared scheme automatically and require a choice when several exist. The user selected symbol search across already registered repositories as the preferred estate addition if capacity permits. Remaining detailed acceptance and bridge adoption are still being discussed; unaccepted audit suggestions are not frozen requirements.
+
+Previous release baseline:
 
 [v0.0.1 is published](https://github.com/bubstackdev/know-code/releases/tag/v0.0.1) at `e20da5db9f359311b0bc6b2be30ff9db94ac99c3`. Matching full Debug and Release suites passed, along with installed native/CLI/MCP, compatibility, license/zero-telemetry, signing/notarization/stapling and macOS 15.7.7 ARM64 VM checks. All 12 public assets were downloaded anonymously and matched the verified candidate hashes. The 10 superseded releases and 11 old tags were removed; 24 older branches and the original repository protections were retained. Local operation evidence: `.artifacts/pretag-wave/publication/publish-01/final-result.json`.
 
@@ -8,7 +14,13 @@ The user explicitly deferred the real video-encoding responsiveness/progress/int
 
 The user selected **0.0.2 as a stabilization-only “Snow Leopard” release**: correctness, performance, reliability and simplification. Previously assigned new features (including cross-repository queries, company onboarding, Angular template references and refactoring continuity) move to later releases with timing undecided. Experimental Swift/Rust work remains experimental. [The 0.0.2 review ledger](CODEBASE_REVIEW_0_0_2.md) records current findings, fixes, decisions and focused validation.
 
-The user has requested proceeding toward publication of v0.0.2. Package declarations now identify 0.0.2; [release notes](../CHANGELOG.md) summarize the stabilization changes. This version change requires fresh matching producer/package/signing/platform receipts; earlier stabilization runs do not certify the new artifacts. Native query9/cursor3 and worker7/store8 contracts are unchanged by the package-version bump. Until publication completes, v0.0.1 remains the published baseline.
+Package declarations identify 0.0.2; [release notes](../CHANGELOG.md) summarize the stabilization changes. Fresh matching producer/package/signing/platform receipts bind the published artifacts. Native query9/cursor3 and worker7/store8 contracts were unchanged by the package-version bump.
+
+For the optional 0.0.3 estate addition, the user accepted one bounded symbol-search result set with explicit truncation and workspace-specific drill-down. Multi-repository pagination follows later. This narrows the feature boundary without making estate work a required gate ahead of Swift/Rust completion.
+
+The user identified omitted TypeScript 7 support and confirmed it as a required 0.0.3 release gate, ahead of optional estate work. Shipped TypeScript analysis still accepts only 5.9.x. [TS7 readiness](TYPESCRIPT_7_READINESS.md) records the native compiler/API transition; exact version coverage and a viable integration path need validation. Existing Swift/Rust/Xcode gates remain required, so estate capacity must be reassessed.
+
+The user also accepted a TypeScript matrix of 5.9.x, 6.0.x and explicitly tested TS7 releases. Exact native version pins require actual compatibility evidence; prerelease availability is not itself a support promise.
 
 The sections below retain earlier source-bound planning/checkpoints. Their pending-work and version statements are historical and do not override this release status, current constants, or the user's stabilization-only decision.
 

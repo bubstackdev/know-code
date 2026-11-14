@@ -1,6 +1,6 @@
 # Know Code design
 
-Status: agreed requirements baseline with a first working end-to-end slice. Architecture/release scope remains under development; see [actual implementation and limits](IMPLEMENTATION.md). Requirements below are not a claim that v0.0.1 is complete.
+Status: agreed requirements baseline; [0.0.2 — Snow Leopard is published](https://github.com/bubstackdev/know-code/releases/tag/v0.0.2). See [actual implementation and limits](IMPLEMENTATION.md). Older 0.0.2 feature assignments below were superseded by its stabilization-only scope; those features retain their backlog priority with release timing undecided. The [0.0.3 audit](RELEASE_0_0_3_AUDIT.md) records existing Swift/Rust capabilities, remaining gaps and the user's preferred optional estate symbol-search slice. Detailed 0.0.3 acceptance remains under discussion; requirements and proposed targets are not implementation guarantees.
 
 ## Purpose
 

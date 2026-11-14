@@ -210,6 +210,129 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "macos")]
+    fn cursor_maintenance_does_not_block_watch_or_sibling_control() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap()
+            .join(".artifacts/ef")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                REGISTRATION.fetch_add(1, Ordering::Relaxed)
+            ));
+        let data = root.join("d");
+        let workspace = root.join("w");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let workspace = workspace.canonicalize().unwrap();
+        let governor = Governor::new(Limits::default()).unwrap();
+        let session = governor.start().unwrap();
+        let shared = super::super::test_support::shared(session.control());
+        let limits = shared.resources.limits();
+        let socket = control::socket_path(&data);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let stopping = Arc::new(AtomicBool::new(false));
+        let (sender, _events) = mpsc::sync_channel(32);
+        // Scope cleanup must wake accept and release the cursor barrier even
+        // when a prerequisite assertion fails; no sleeps or child processes.
+        struct StopServer(Arc<AtomicBool>, PathBuf);
+        impl Drop for StopServer {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+                let _ = UnixStream::connect(&self.1);
+            }
+        }
+        let (watch, status, cancelled, resources) = thread::scope(|scope| {
+            let stop = StopServer(Arc::clone(&stopping), socket.clone());
+            let serving_state = Arc::clone(&shared);
+            let serving_data = data.clone();
+            let serving = scope.spawn(move || {
+                for stream in listener.incoming() {
+                    if stopping.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let stream = stream.unwrap();
+                    let state = Arc::clone(&serving_state);
+                    let data = serving_data.clone();
+                    let sender = sender.clone();
+                    scope.spawn(move || {
+                        let _ = super::super::serve(stream, &state, &sender, &data);
+                    });
+                }
+            });
+            let (entered, held) = mpsc::channel();
+            let (release, released) = mpsc::channel::<()>();
+            let held_state = Arc::clone(&shared);
+            let held_database = data.join("cursor-maintenance.db");
+            let holding = scope.spawn(move || {
+                held_state
+                    .cursors
+                    .publish_replacement(&held_database, &Control::default(), || {
+                        entered.send(()).unwrap();
+                        let _ = released.recv();
+                        Ok(())
+                    })
+            });
+            held.recv_timeout(Duration::from_secs(5)).unwrap();
+            // These are actual framed control requests. WATCH follows the
+            // normal attach/probe/register path; each RPC keeps its existing
+            // 500ms read budget while cursor maintenance remains held.
+            let unavailable_executable = data.join("must-not-start-coordinator");
+            let watch = control::attach_workspace(
+                &data,
+                &workspace,
+                String::new(),
+                false,
+                Some(&unavailable_executable),
+            );
+            let status = control::request(
+                &data,
+                ControlRequest {
+                    operation: "status".into(),
+                    database: "owned".into(),
+                    ..Default::default()
+                },
+            );
+            let cancelled = control::request(
+                &data,
+                ControlRequest {
+                    operation: "cancel".into(),
+                    database: "owned".into(),
+                    ..Default::default()
+                },
+            );
+            let resources = control::request(
+                &data,
+                ControlRequest {
+                    operation: "resources".into(),
+                    resources: Some(ResourceLimits {
+                        cpu_cores: 1.0,
+                        memory_mib: limits.memory_mib,
+                        rebuild_disk_mib: limits.rebuild_disk_mib,
+                        min_free_disk_mib: limits.min_free_disk_mib,
+                    }),
+                    ..Default::default()
+                },
+            );
+            // Release before checking results, including the old blocked-lock
+            // failure, so server threads cannot strand a failed test.
+            drop(release);
+            holding.join().unwrap().unwrap();
+            drop(stop);
+            serving.join().unwrap();
+            (watch, status, cancelled, resources)
+        });
+        assert_eq!(watch.unwrap().workspace_root, workspace.to_string_lossy());
+        assert_eq!(status.unwrap().workspaces[0].database, "owned");
+        assert_eq!(cancelled.unwrap().workspaces[0].database, "owned");
+        assert!(shared.entries.lock().unwrap()["owned"].cancel_pending);
+        assert_eq!(resources.unwrap().resources.unwrap().cpu_cores, 1.0);
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
     fn held_adoption_keeps_sibling_status_available_and_revalidates_enrollment() {
         for change in 0..4 {
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

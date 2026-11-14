@@ -17,6 +17,41 @@ PROFILE = os.environ.get('KNOW_CODE_BUILD_PROFILE', 'debug')
 ENV = dict(os.environ, KNOW_CODE_DATA_DIR=str(RUN / 'data'), KNOW_CODE_BUILD_PROFILE=PROFILE)
 ENV['KNOW_CODE_QUERY_SCOPE']=str(RUN/'query-admission')
 HARNESS = ROOT / 'tests/worker_harness.mjs'
+# Actual compiler forms include unlocated option warnings. They must not turn
+# otherwise healthy source analysis into a compiler-error report.
+diagnostic_check = subprocess.run(['node', '--input-type=module', '-e', '''
+import assert from 'node:assert/strict';
+import {compilerDiagnostics, run, checked, compileSources} from './providers/swift/index.mjs';
+const root = process.cwd();
+const warnings = compilerDiagnostics('<unknown>:0: warning: ignoring -experimental-lazy-typecheck (requires -enable-library-evolution)\\nwarning: driver warning\\n', root);
+assert.deepEqual(warnings.map(d => [d.severity, d.path]), [['warning', ''], ['warning', '']]);
+const mixed = compilerDiagnostics(`${root}/Sample.swift:3:7: error: missing value\\n<unknown>:0: note: compiler context\\nremark: compiler remark\\n`, root);
+assert.deepEqual(mixed.map(d => [d.severity, d.path]), [['error', 'Sample.swift'], ['info', ''], ['info', '']]);
+assert.equal(compilerDiagnostics('unrecognized compiler failure', root)[0].severity, 'error');
+const delayed = ['-e', "setTimeout(() => process.stdout.write('finished'), 100)"];
+assert.throws(() => run(process.execPath, delayed, root, process.env, {timeout:25}), /ETIMEDOUT/);
+assert.throws(() => checked(process.execPath, delayed, root, process.env, {timeout:25}), /ETIMEDOUT/);
+assert.equal(checked(process.execPath, delayed, root, process.env, {timeout:1000}), 'finished');
+assert.equal(checked(process.execPath, ['-e', "process.stdout.write('default')"], root), 'default');
+assert.throws(() => run(process.execPath, ['-e', "process.stderr.write('owned start' + 'x'.repeat(20000) + 'owned end', () => process.kill(process.pid, 'SIGTERM'))"], root), error => {
+  assert.match(error.message, /Swift tool interrupted by SIGTERM/);
+  assert.ok(error.message.includes('owned start') && error.message.includes('owned end'));
+  assert.ok(error.message.includes('[Swift tool stderr truncated]') && Buffer.byteLength(error.message) < 8200);
+  return true;
+});
+const source = `${root}/OwnedDiagnostic.swift`, compiler = `${process.execPath}/nonexistent-compiler`, cache = `${root}/owned-cache`;
+assert.throws(() => compileSources({compiler, options: [{file: source, args: ['-module-cache-path', cache], workingDirectory: root}],
+  store: `${root}/owned-store`, root}), error => {
+  for (const length of [8192, 16384]) {
+    const tail = error.message.slice(-length);
+    assert.ok(tail.includes('stage=index-file') && tail.includes(`source=${source}`)
+      && tail.includes(`compiler=${compiler}`) && tail.includes(`module_cache_path=${cache}`));
+  }
+  assert.ok(error.message.includes('Swift tool failed:'));
+  return true;
+});
+'''], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
+assert diagnostic_check.returncode == 0, diagnostic_check.stderr
 subprocess.run([sys.executable, ROOT / 'scripts/build_record.py', 'verify', PROFILE], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
 READER = ROOT / f'.artifacts/build/{PROFILE}/swift/indexstore-reader'
 reader_sha256 = hashlib.sha256(READER.read_bytes()).hexdigest()
@@ -49,10 +84,79 @@ assert len(compilations) == 1 and compilations[0]['projectPath'] == '$swift-infe
 assert reports[0]['status'] == 'complete', reports
 assert compilations[0]['inferred'] and 'Swift version 6.' in compilations[0]['compilerVersion']
 assert json.loads(compilations[0]['optionsJson'])['signatures'] == 'compiler_index_names_only'
+# An actual corrupt unit must preserve the helper's unit and process exit
+# details. This uses the selected compiler's library, never a replacement reader.
+invalid_store = RUN / 'invalid-index-store'
+invalid_unit = invalid_store / 'v5/units/know-code-owned-corrupt-unit'
+invalid_unit.parent.mkdir(parents=True)
+invalid_unit.write_bytes(b'not an IndexStore unit\n')
+reader_scratch = RUN / 'reader-failure'
+reader_scratch.mkdir()
+compiler = Path(json.loads(compilations[0]['optionsJson'])['compilerPath'])
+reader_failure = subprocess.run(['node', '--input-type=module', '-e', '''
+import assert from 'node:assert/strict';
+import {ingestStore} from './providers/swift/index.mjs';
+const [root, store, scratch, library] = process.argv.slice(1);
+assert.throws(() => ingestStore({id:'invalid-store', root, store, scratch, library, sources:new Map()}), error => {
+  assert.match(error.message, /Swift IndexStore reader failed: status=1, signal=none, error=none, stderr=Swift IndexStore unit create failed/);
+  assert.ok(error.message.includes('unit=know-code-owned-corrupt-unit;'));
+  console.log(JSON.stringify({message:error.message}));
+  return true;
+});
+''', str(WORKSPACE), str(invalid_store), str(reader_scratch), str(compiler.parent.parent / 'lib/libIndexStore.dylib')],
+    cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
+assert reader_failure.returncode == 0, reader_failure.stderr
+(RUN / 'reader-failure-result.json').write_text(json.dumps({'returncode': reader_failure.returncode, **json.loads(reader_failure.stdout)}))
 symbols = {symbol['id']: symbol for message in messages if 'facts' in message for symbol in message['facts']['symbols']}
 occurrences = [occ for message in messages if 'facts' in message for occ in message['facts']['occurrences']]
+relationships = [edge for message in messages if 'facts' in message for edge in message['facts']['relationships']]
 artifacts = {message['source']['id']: message['source'] for message in messages if 'source' in message}
 assert len(artifacts) == len(sources)
+excluded = next(source for source in artifacts.values() if source['path'] == 'Excluded.swift')
+assert __import__('base64').b64decode(excluded['utf8']) == original[WORKSPACE / 'Excluded.swift']
+assert not any('excludedSymbol' in symbol['name'] for symbol in symbols.values())
+# Keep a tiny real compiler store for finite empty/nonempty corruption checks.
+# Filename selection is only for fault injection into these owned test bytes.
+reader_probe = RUN / 'reader-records'
+reader_probe.mkdir()
+active_file, excluded_file = reader_probe / 'ReaderActive.swift', reader_probe / 'ReaderExcluded.swift'
+active_file.write_text('func readerActive() -> Int { 1 }\n')
+excluded_file.write_bytes((WORKSPACE / 'Excluded.swift').read_bytes())
+probe_store = reader_probe / 'store'
+sdk = json.loads(compilations[0]['optionsJson'])['sdkPath']
+for primary, other_file in ((active_file, excluded_file), (excluded_file, active_file)):
+    compiled = subprocess.run([str(compiler), '-index-file', '-index-file-path', str(primary),
+        '-index-store-path', str(probe_store), '-index-include-locals', '-index-ignore-system-modules',
+        '-index-unit-output-path', str(probe_store / f'{primary.stem}.o'), '-sdk', sdk,
+        '-module-name', 'KnowCodeReaderRecords', str(primary), str(other_file)],
+        cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=30)
+    assert compiled.returncode == 0, compiled.stderr
+
+
+def read_probe(name):
+    result = subprocess.run([str(READER), str(compiler.parent.parent / 'lib/libIndexStore.dylib'), str(probe_store)],
+        cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=10)
+    (reader_probe / f'{name}.json').write_text(json.dumps({'status': result.returncode, 'stderr': result.stderr, 'stdout': result.stdout}))
+    return result
+
+
+assert read_probe('healthy').returncode == 0
+empty_record, = probe_store.glob('v5/records/*/ReaderExcluded.swift-*')
+active_record, = probe_store.glob('v5/records/*/ReaderActive.swift-*')
+empty_bytes, active_bytes = empty_record.read_bytes(), active_record.read_bytes()
+for case, record, damaged in (
+        ('empty-header', empty_record, b'BAD!' + empty_bytes[4:]),
+        ('empty-truncated', empty_record, empty_bytes[:4]),
+        ('nonempty-truncated', active_record, active_bytes[:4])):
+    saved = record.read_bytes()
+    try:
+        record.write_bytes(damaged)
+        result = read_probe(case)
+        assert result.returncode == 1, (case, result.returncode, result.stderr)
+        assert 'record create failed' in result.stderr and f'record={record.name};' in result.stderr, (case, result.stderr)
+    finally:
+        record.write_bytes(saved)
+assert read_probe('repaired').returncode == 0
 for name in ('name', 'message', 'café'):
     matched = [symbol for symbol in symbols.values() if symbol['name'] == name]
     assert matched and all(not symbol['external'] for symbol in matched), (name, matched)
@@ -62,6 +166,29 @@ choices = [symbol for symbol in symbols.values() if symbol['name'] == 'choose(_:
 assert len(choices) == 2, choices
 assert all(len([occ for occ in occurrences if occ['symbolId'] == symbol['id'] and occ['role'] == 'reference']) == 1 for symbol in choices)
 assert any(symbol['name'] == 'String' and symbol['external'] for symbol in symbols.values())
+# A function value reference is not an invocation. Calls use compiler CALLEDBY
+# evidence; implicit accessors retain that distinction and source-bound sites.
+leaf = next(s['id'] for s in symbols.values() if s['name'] == 'swiftGraphLeaf(_:)')
+direct = next(s['id'] for s in symbols.values() if s['name'] == 'swiftGraphDirect()')
+reference = next(s['id'] for s in symbols.values() if s['name'] == 'swiftGraphReference()')
+assert any(e['sourceId'] == direct and e['targetId'] == leaf and e['kind'] == 'call' for e in relationships)
+assert not any(e['sourceId'] == reference and e['targetId'] == leaf and e['kind'] == 'call' for e in relationships)
+assert any(e['sourceId'] == reference and e['targetId'] == leaf and e['kind'] == 'reference' for e in relationships)
+for name in ('swiftGraphLoaded', 'swiftGraphClosure', 'stored'):
+    owner = next(s['id'] for s in symbols.values() if s['name'] == name)
+    assert not any(e['sourceId'] == owner and e['targetId'] == leaf and e['kind'] == 'call' for e in relationships)
+    assert any(e['sourceId'] == owner and e['targetId'] == leaf and e['kind'] == 'reference' for e in relationships)
+assert any(d['code'] == 'swift_graph_evidence_unavailable' for d in reports[0]['diagnostics'])
+assert any(e['kind'] == 'call' and e['implicit'] and symbols[e['targetId']]['name'] == 'getter:computed' for e in relationships)
+assert any(e['kind'] == 'type_reference' for e in relationships)
+assert any(e['kind'] == 'inherits' and symbols[e['sourceId']]['name'] == 'SwiftGraphDerived'
+           and symbols[e['targetId']]['name'] == 'SwiftGraphBase' for e in relationships)
+assert reports[0]['capabilities'] == {'calls': 'partial', 'dependencies': 'partial', 'dispatch': 'partial', 'project_links': 'unavailable'}
+for edge in relationships:
+    assert edge['resolution'] == 'compiler_bound'
+    assert edge['sourceId'] in symbols and edge['targetId'] in symbols
+    payload = __import__('base64').b64decode(artifacts[edge['artifactId']]['utf8'])
+    assert payload[edge['startByte']:edge['endByte']].decode('utf8'), edge
 import base64
 checked = 0
 for occurrence in occurrences:
@@ -117,6 +244,7 @@ assert not any((RUN / 'data/workers/swift').glob('job-*')), 'compiler scratch mu
 assert hashlib.sha256(READER.read_bytes()).hexdigest() == reader_sha256, 'test changed the built reader'
 summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'symbols': len(symbols), 'reader_sha256': reader_sha256,
            'occurrences': len(occurrences), 'unicode_ranges_checked': checked,
+           'relationships': len(relationships), 'graph_capabilities': reports[0]['capabilities'],
            'compiler': compilations[0]['compilerVersion'], 'scope': 'standalone_directory_groups',
            'explicit_packages': 'empty_package_partial_without_inference'}
 (RUN / 'summary.json').write_text(json.dumps(summary, indent=2))

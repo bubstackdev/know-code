@@ -75,7 +75,6 @@ struct State {
     initialized: BTreeSet<(PathBuf, String)>,
     file_error: Option<String>,
     pending_publications: usize,
-    disabled: BTreeSet<PathBuf>,
     cleanup_pending: BTreeMap<PathBuf, String>,
     cleanup_queue: VecDeque<PathBuf>,
     pressure: Option<String>,
@@ -84,6 +83,9 @@ struct State {
 pub struct CursorService {
     root: PathBuf,
     state: Mutex<State>,
+    // Coordinator enrollment must not wait behind retention/cache I/O while
+    // holding workspace entries. This fence has no disk work or state wait.
+    disabled: Mutex<BTreeSet<PathBuf>>,
     changed: Condvar,
     stopped: AtomicBool,
 }
@@ -161,12 +163,12 @@ impl CursorService {
                 initialized,
                 file_error,
                 pending_publications: 0,
-                disabled: BTreeSet::new(),
                 cleanup_queue: cleanup_pending.keys().cloned().collect(),
                 cleanup_pending,
                 pressure: None,
                 maintenance_error: None,
             }),
+            disabled: Mutex::new(BTreeSet::new()),
             changed: Condvar::new(),
             stopped: AtomicBool::new(false),
         })
@@ -175,6 +177,14 @@ impl CursorService {
         self.state.lock().map_err(|_| {
             Error::Coordinator(
                 "cursor state is unavailable after an internal failure; restart the coordinator"
+                    .into(),
+            )
+        })
+    }
+    fn enrollment(&self) -> Result<MutexGuard<'_, BTreeSet<PathBuf>>> {
+        self.disabled.lock().map_err(|_| {
+            Error::Coordinator(
+                "cursor enrollment is unavailable after an internal failure; restart the coordinator"
                     .into(),
             )
         })
@@ -236,7 +246,7 @@ impl CursorService {
     /// reads retain their pins until they finish or their leases expire.
     pub fn unregister(&self, database: &Path) -> Result<()> {
         let mut state = self.lock()?;
-        state.disabled.insert(database.into());
+        self.enrollment()?.insert(database.into());
         state.initialized.retain(|(path, _)| path != database);
         for entry in state.registry.entries.values_mut() {
             if entry.pin.database == database {
@@ -262,7 +272,13 @@ impl CursorService {
         Ok(())
     }
     pub fn register(&self, database: &Path) -> Result<()> {
-        self.lock()?.disabled.remove(database);
+        if self.state.is_poisoned() {
+            return Err(Error::Coordinator(
+                "cursor state is unavailable after an internal failure; restart the coordinator"
+                    .into(),
+            ));
+        }
+        self.enrollment()?.remove(database);
         Ok(())
     }
     fn enforce_limits(state: &mut State, execution: Execution) -> Result<()> {
@@ -343,7 +359,7 @@ impl CursorService {
                 ..Default::default()
             });
         }
-        if state.disabled.contains(database) {
+        if self.enrollment()?.contains(database) {
             return Err(Error::CursorInvalidated);
         }
         if let Err(error) = state.registry.sweep_controlled(execution.clone()) {
@@ -703,7 +719,7 @@ impl CursorService {
             let incarnation = crate::recovery::selected_incarnation(database)?.unwrap_or_default();
             loop {
                 self.running()?;
-                if state.disabled.contains(database) {
+                if self.enrollment()?.contains(database) {
                     return Err(Error::CursorInvalidated);
                 }
                 control.check_stopped()?;
@@ -1543,7 +1559,13 @@ mod tests {
             call(&service, &db, action("admit", None)),
             Err(Error::CursorInvalidated)
         ));
+        assert!(matches!(
+            service.publish_replacement(&db, &Control::default(), || Ok(())),
+            Err(Error::CursorInvalidated)
+        ));
         service.register(&db).unwrap();
+        let fresh = call(&service, &db, action("admit", None)).unwrap();
+        assert_ne!(fresh.cursor, stored.cursor);
         assert!(matches!(
             call(&service, &db, action("borrow", Some(&stored))),
             Err(Error::CursorInvalidated)

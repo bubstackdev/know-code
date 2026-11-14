@@ -2,7 +2,11 @@
 from pathlib import Path
 import argparse,atexit,hashlib,json,os,re,selectors,shlex,shutil,socket,subprocess,sys,tarfile,time,zipfile
 ROOT=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256');args=parser.parse_args()
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true',help='Test both Rust and Swift, retaining the existing combined selection');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256')
+parser.add_argument('--additional-language',choices=['rust','swift'],action='append',default=[],help='Additional installed language fixture to test; repeat to select both')
+args=parser.parse_args()
+ADDITIONAL_LANGUAGES=set(args.additional_language)|({'rust','swift'} if args.experimental else set())
+TESTED_ADDITIONAL_LANGUAGES=[]
 assert bool(args.signed_team_id)==bool(args.signed_signer_sha256),'signed mode requires both Team ID and pinned signer SHA-256'
 PACKAGES=args.packages.resolve();PREFIX=args.prefix.resolve();assert PREFIX!=ROOT and ROOT not in PREFIX.parents,'package test prefix must be outside checkout';PREFIX.mkdir(parents=True,exist_ok=False)
 CHECKOUTS=sorted({ROOT,*[p.resolve() for p in args.deny_checkout]})
@@ -131,9 +135,10 @@ bundle=next((PREFIX/'first installation').glob('know-code-*'));HOST=BIN/'know-co
 for root in CHECKOUTS:assert command('/bin/cat',root/'LICENSE',check=False).returncode!=0,('checkout deny policy ineffective',root)
 info=json.loads(command(HOST,'runtime-info').stdout);assert info['layout']=='bundle' and info['sqlite']['fts5'] and str(PREFIX) in info['resource_directory']
 runtime_manifest=json.loads((bundle/'lib/know-code/runtime.json').read_text())
-contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':1,'resource_control_version':3}
+contracts={'worker_protocol':7,'store_format':8,'index_lifecycle_version':4,'analysis_settings_version':2,'resource_control_version':3}
 assert all(info[key]==runtime_manifest[key]==version for key,version in contracts.items()),(info,runtime_manifest)
 assert runtime_manifest['version']==VERSION
+assert {p['language']:p['status'] for p in runtime_manifest['providers']}==dict.fromkeys(['typescript','csharp','rust','swift'],'required'),runtime_manifest
 assert command(HOST,'--version').stdout.strip()==f'know-code {VERSION}'
 checks+=['checkout_access_denied','runtime_discovery_through_symlink_and_spaces','bundled_SQLite_FTS5']
 for native in [bundle/'bin/know-code',PREFIX/'unused']:
@@ -172,6 +177,37 @@ command('dotnet','restore',WORKSPACE/'App.csproj','--configfile',PREFIX/'NuGet.C
 assert (WORKSPACE/'node_modules/typescript/lib/typescript.js').is_file()
 assert (WORKSPACE/'node_modules/@know-code/offline-dependency/index.d.ts').is_file()
 assets=json.loads((WORKSPACE/'obj/project.assets.json').read_text());assert f'KnowCode/{VERSION}' in assets['libraries']
+# Restore only the two exact additional compiler selections before denial.
+# These owned projects contain no serving state; normal installed discovery and
+# common trust/preparation must select them after first offline registration.
+selected_typescript=[]
+for suffix,version in [('6','6.0.2'),('7','7.0.2')]:
+ directory=WORKSPACE/('selected-ts'+suffix);directory.mkdir()
+ prefix='selected_ts'+suffix
+ source=directory/'Code.ts'
+ source.write_text('// café 🦀 selected compiler source\n'
+                   +f'export function {prefix}_leaf(value: number): number {{ return value + 1; }}\n'
+                   +f'export function {prefix}_entry(): number {{ return {prefix}_leaf(41); }}\n'
+                   +f'export function {prefix}_reference() {{ return {prefix}_leaf; }}\n')
+ (directory/'tsconfig.json').write_text(json.dumps({'compilerOptions':{'target':'ES2022','module':'NodeNext','moduleResolution':'NodeNext','strict':True,'noEmit':True},'files':['Code.ts']})+'\n')
+ dependencies={'typescript':version}
+ if suffix=='7':dependencies['@typescript/typescript-darwin-arm64']=version
+ (directory/'package.json').write_text(json.dumps({'name':'selected-typescript-'+suffix,'private':True,'type':'module','packageManager':'npm@'+npm_version,'devDependencies':dependencies})+'\n')
+ command('npm','install','--ignore-scripts','--no-audit','--no-fund',cwd=directory)
+ selected=directory/'node_modules/typescript/package.json';compiler=json.loads(selected.read_text())
+ assert compiler['name']=='typescript' and compiler['version']==version,compiler
+ evidence={'version':version,'project':str(directory.relative_to(WORKSPACE)),'source':str(source),
+           'compiler_manifest':str(selected),'compiler_manifest_sha256':hashlib.sha256(selected.read_bytes()).hexdigest(),
+           'lock_sha256':hashlib.sha256((directory/'package-lock.json').read_bytes()).hexdigest(),'scripts':'disabled'}
+ if suffix=='7':
+  native_manifest=directory/'node_modules/@typescript/typescript-darwin-arm64/package.json'
+  native=json.loads(native_manifest.read_text());assert native['name']=='@typescript/typescript-darwin-arm64' and native['version']==version,native
+  binary=native_manifest.parent/'lib/tsc';assert binary.is_file() and os.access(binary,os.X_OK),binary
+  evidence.update(native_manifest=str(native_manifest),native_manifest_sha256=hashlib.sha256(native_manifest.read_bytes()).hexdigest(),
+                  native_binary=str(binary),native_binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
+ selected_typescript.append(dict(evidence,suffix=suffix))
+(PREFIX/'selected-typescript-setup.json').write_text(json.dumps(selected_typescript,indent=2)+'\n')
+checks.append('exact_TS6_TS7_and_native_platform_packages_restored_scripts_off_before_denial')
 # Acquire only a tool distribution, through the shipped helper, before Internet
 # denial. This cache lives outside DATA and cannot pre-seed a serving index.
 TOOL_CACHE=PREFIX/'tool-cache';npm10_prime=PREFIX/'prime-npm10.mjs'
@@ -230,8 +266,8 @@ def cleanup():
  for client in CLIENTS:client.close()
  if HOST.exists():command(HOST,'coordinator','stop',check=False)
 atexit.register(cleanup)
-def ready(client,after=1):
- until=time.monotonic()+90
+def ready(client,after=1,timeout=90):
+ until=time.monotonic()+timeout
  while time.monotonic()<until:
   s=client.send('wait',wait_ms=1000);assert not isinstance(s.get('error'),dict),s;assert s['phase']!='failed',s
   if s['phase']=='idle' and s['observed_epoch']==s['published_epoch'] and s['generation']>=after:return s
@@ -253,7 +289,15 @@ def exact_source(source,filename):
  assert raw[source['start_byte']:source['end_byte']].decode('utf-8')==source['text'],source
 for name in ['answer','Greet']:
  result=query({'op':'symbols','name':name});assert result['freshness']=='current' and result['symbols']
- assert result['coverage'] and all(c['status']=='complete' for c in result['coverage']),result
+ # Completeness belongs to the compilations supporting these findings;
+ # the independent selected TS7 project intentionally remains partial.
+ owners={symbol['compilation_id'] for symbol in result['symbols']}
+ owners.update(support['compilation_id'] for symbol in result['symbols'] for support in symbol.get('supporting_targets',[]))
+ reports={row['compilation_id']:row for row in result['coverage']}
+ assert owners and owners<=reports.keys(),result
+ expected_language='typescript' if name=='answer' else 'csharp'
+ assert all(reports[owner]['status']=='complete' and reports[owner]['language']==expected_language for owner in owners),result
+ if name=='answer':assert all(reports[owner]['compiler_version']==json.loads((WORKSPACE/'node_modules/typescript/package.json').read_text())['version'] for owner in owners),result
  symbol=result['symbols'][0];context=query({'op':'symbol_context','symbol_id':symbol['id'],'max_bytes':1024});assert context['contexts'][0]['declarations'][0]['source']
  exact_source(context['contexts'][0]['declarations'][0]['source'],WORKSPACE/('value.ts' if name=='answer' else 'Code.cs'))
 leaf=query({'op':'symbols','name':'leaf'})['symbols'][0]
@@ -273,6 +317,44 @@ for caller,callee,filename in [('answer','leaf','value.ts'),('GreetCaller','Gree
  assert limited['truncated'] and 'source_budget' in limited['graph']['limits'],limited
  assert [f['symbol'] for f in limited['graph']['findings']]==[f['symbol'] for f in compact['findings']],limited
 checks.append('installed_offline_TS_Csharp_graph_source_defaults_exact_bodies_limits_native_parity')
+# Fixed supported compiler cells, not a package-manager/configuration matrix.
+# All reads use the installed runtime and both installed in-process SDKs.
+selected_typescript_results=[]
+for case in selected_typescript:
+ prefix='selected_ts'+case['suffix'];filename=Path(case['source'])
+ found=query({'op':'symbols','name':prefix+'_entry','coverage_detail':'full','detail_max_bytes':262144})
+ reports=[row for row in found['coverage'] if row['language']=='typescript' and row['project_path']==case['project']+'/tsconfig.json']
+ assert len(reports)==1 and reports[0]['compiler_version']==case['version'],reports
+ report=reports[0];options=report['analysis_options'];compilation=report['compilation_id']
+ assert not report['inferred'] and (WORKSPACE/report['project_path']).resolve()==(filename.parent/'tsconfig.json').resolve(),report
+ if case['suffix']=='7':
+  assert options['knowCodeNativeCompiler']=='7.0.2' and options['knowCodeNativeApi']=='unstable/sync',report
+  assert report['status']=='partial' and report['capabilities']['project_links']=='unavailable',report
+ else:
+  assert 'knowCodeNativeCompiler' not in options and options['knowCodeSourceReferenceRedirect'] is True,report
+ symbols={}
+ for role in ['entry','leaf','reference']:
+  values=query({'op':'symbols','name':prefix+'_'+role,'compilation_id':compilation})['symbols']
+  matches=[symbol for symbol in values if symbol['name']==prefix+'_'+role and not symbol['external'] and symbol['compilation_id']==compilation]
+  assert len(matches)==1,(role,matches);symbols[role]=matches[0]
+ scope={'snapshot':found['snapshot'],'max_depth':1}
+ callees=query(dict(scope,op='callees',symbol_id=symbols['entry']['id'],include_source=True,source_max_bytes=4096))
+ called=next(finding for finding in callees['graph']['findings'] if finding['symbol']['id']==symbols['leaf']['id'])
+ assert called['paths'] and all(len(path)==1 and path[0]['kind']=='call' and path[0]['resolution']=='compiler_bound'
+                               and path[0]['source_id']==symbols['entry']['id'] and path[0]['target_id']==symbols['leaf']['id']
+                               for path in called['paths']),called
+ declarations=called['context']['declarations'];assert declarations and all(d['source_status']=='included' for d in declarations),called
+ for declaration in declarations:exact_source(declaration['source'],filename)
+ impact=query(dict(scope,op='impact',symbol_id=symbols['leaf']['id']))
+ assert {symbols['entry']['id'],symbols['reference']['id']}<={finding['symbol']['id'] for finding in impact['graph']['findings']},impact
+ location=symbols['leaf']['locations'][0]
+ retained=query({'op':'source','artifact_id':location['artifact_id'],'snapshot':found['snapshot'],'content_hash':location['content_hash'],'max_bytes':4096})['source']
+ exact_source(retained,filename)
+ offset=retained['start_byte'];assert retained['text'].encode()[location['start_byte']-offset:location['end_byte']-offset].decode()==prefix+'_leaf'
+ selected_typescript_results.append({'setup':case,'coverage':report,'snapshot':found['snapshot'],'generation':found['generation'],
+                                     'callees':callees['graph'],'impact':impact['graph'],'source':retained})
+(PREFIX/'selected-typescript-results.json').write_text(json.dumps(selected_typescript_results,indent=2)+'\n')
+checks.append('installed_offline_exact_TS6_legacy_TS7_native_graph_value_impact_source_and_three_client_parity')
 # MCP startup/query/EOF over the installed executable, using the same saved publication.
 mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-stderr.log').open('w'))
 mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
@@ -320,22 +402,110 @@ try:
  final_generation=saved_cs['generation'];checks.append('offline_saved_TS_and_Csharp_semantic_and_source_updates')
 finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
 checks.append('installed_MCP_shared_queries_and_EOF')
-if args.experimental:
+if ADDITIONAL_LANGUAGES:
  before=ready(node)['generation']
- (WORKSPACE/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n')
- (WORKSPACE/'lib.rs').write_text('pub fn packaged_rust() -> i32 { 42 }\n')
- (WORKSPACE/'Sample.swift').write_text('struct PackagedSwiftType { let value: Int }\n')
- ready(node,before+1)
- # More saves can queue while discovery reconciles; wait for both names.
- until=time.monotonic()+90
+ if 'rust' in ADDITIONAL_LANGUAGES:
+  rust_package=WORKSPACE/'rust-package';rust_package.mkdir()
+  (rust_package/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n[workspace]\n')
+  rust_file=rust_package/'lib.rs'
+  rust_text='// café 🦀 installed offline source\npub fn packaged_rust_leaf(value: i32) -> i32 { value + 1 }\npub fn packaged_rust_entry() -> i32 { packaged_rust_leaf(41) }\npub fn packaged_rust_reference() -> fn(i32) -> i32 { packaged_rust_leaf }\n'
+  rust_file.write_text(rust_text)
+ if 'swift' in ADDITIONAL_LANGUAGES:
+  swift_package=WORKSPACE/'swift-package';swift_sources=swift_package/'Sources/PackagedSwift';swift_sources.mkdir(parents=True)
+  swift_file=swift_sources/'Model.swift'
+  swift_text='// café 🦀 installed offline source\npublic func packagedSwiftLeaf(_ value: Int) -> Int { value + 1 }\npublic func packagedSwiftEntry() -> Int { packagedSwiftLeaf(41) }\npublic func packagedSwiftReference() -> (Int) -> Int { packagedSwiftLeaf }\n'
+  (swift_package/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "PackagedSwift", targets: [.target(name: "PackagedSwift")])\n')
+  swift_file.write_text(swift_text)
+ # More saves can queue while discovery reconciles; wait for selected names.
+ # Keep discovery and its nested publication wait within the same harness window.
+ until=time.monotonic()+300
+ found={}
  while time.monotonic()<until:
-  ready(node)
-  rust=query({'op':'symbols','name':'packaged_rust'})
-  swift=query({'op':'symbols','name':'PackagedSwiftType'})
-  if rust.get('symbols') and swift.get('symbols'):break
- else:raise AssertionError((rust,swift))
- assert any(c['status']=='partial' for c in rust['coverage'])
- checks.append('experimental_packaged_Swift_reader_and_Rust_adapter')
+  ready(node,before+1,timeout=max(.001,until-time.monotonic()))
+  found={language:query({'op':'symbols','name':{'rust':'packaged_rust_entry','swift':'packagedSwiftEntry()'}[language]}) for language in sorted(ADDITIONAL_LANGUAGES)}
+  if all(result.get('symbols') for result in found.values()):break
+ else:raise AssertionError(found)
+ MIN_GENERATION=ready(node,timeout=300)['generation']
+ def language_symbol(name,language,compilation=None):
+  request={'op':'symbols','name':name}
+  if compilation is None:request.update(coverage_detail='full',detail_max_bytes=262144)
+  else:request['compilation_id']=compilation
+  found=query(request)
+  reports={row['compilation_id']:row for row in found['coverage'] if row['language']==language}
+  if language=='rust' and compilation is None:
+   reports={key:row for key,row in reports.items() if isinstance(row.get('analysis_options',{}).get('context'),dict)
+            and row['analysis_options']['context']['profile']['test'] is False}
+  values=[symbol for symbol in found.get('symbols',[]) if not symbol['external'] and symbol['compilation_id'] in reports
+          and (compilation is None or symbol['compilation_id']==compilation)]
+  assert len(values)==1,(name,values,found)
+  return values[0],reports[values[0]['compilation_id']]
+ def language_graph(language,entry_name,leaf_name,reference_name,filename):
+  entry,report=language_symbol(entry_name,language);compilation=entry['compilation_id']
+  assert report['capabilities']['calls']=='partial' and report['capabilities']['dependencies']=='partial',report
+  if language=='swift':assert report['analysis_options']['origin']=='swiftpm_build_server',report
+  else:assert report['status']=='partial' and report['analysis_options']['rustContextPolicy']==2,report
+  leaf,_=language_symbol(leaf_name,language,compilation);reference,_=language_symbol(reference_name,language,compilation)
+  callees=query({'op':'callees','symbol_id':entry['id'],'max_depth':1})['graph']
+  called=next(finding for finding in callees['findings'] if finding['symbol']['id']==leaf['id'])
+  assert called['paths'] and all(edge['kind']=='call' and edge['resolution']=='compiler_bound' for path in called['paths'] for edge in path),called
+  callers=query({'op':'callers','symbol_id':leaf['id'],'max_depth':1})['graph']
+  assert entry['id'] in {finding['symbol']['id'] for finding in callers['findings']},callers
+  assert reference['id'] not in {finding['symbol']['id'] for finding in callers['findings']},callers
+  impact=query({'op':'impact','symbol_id':leaf['id']})['graph']
+  assert {entry['id'],reference['id']}<={finding['symbol']['id'] for finding in impact['findings']},impact
+  occurrences=query({'op':'references','symbol_id':leaf['id']})
+  assert any(item['role']=='reference' for item in occurrences['occurrences']),occurrences
+  for occurrence in occurrences['occurrences']:
+   location=occurrence['location']
+   source=query({'op':'source','artifact_id':location['artifact_id'],'snapshot':occurrences['snapshot'],
+                 'content_hash':location['content_hash'],'max_bytes':4096})['source']
+   exact_source(source,filename)
+   assert filename.read_bytes()[location['start_byte']:location['end_byte']].decode()==leaf_name.split('(')[0],occurrence
+ language_cases=[]
+ if 'rust' in ADDITIONAL_LANGUAGES:language_cases.append(('rust','packaged_rust_entry','packaged_rust_leaf','packaged_rust_reference',rust_file,rust_text,
+                  '\npub fn broken_package() -> i32 { missing_package_value }\n'))
+ if 'swift' in ADDITIONAL_LANGUAGES:language_cases.append(('swift','packagedSwiftEntry()','packagedSwiftLeaf(_:)','packagedSwiftReference()',swift_file,swift_text,
+                  '\npublic func brokenPackage() -> Int { missingPackageValue }\n'))
+ for language,entry_name,leaf_name,reference_name,filename,text,broken in language_cases:
+  language_graph(language,entry_name,leaf_name,reference_name,filename)
+  previous=ready(node)['generation'];filename.write_text(text+broken)
+  MIN_GENERATION=ready(node,previous+1,timeout=300)['generation']
+  anchor=query({'op':'symbols','limit':1})
+  status=query({'op':'coverage','generation':anchor['generation'],'snapshot':anchor['snapshot'],'max_bytes':16384})
+  assert status['coverage_scope']=='workspace',status
+  reports=[row for row in status['coverage'] if row['language']==language]
+  assert reports and any(row['status']=='partial' and row['diagnostic_counts'].get('error',0) for row in reports),status
+  previous=ready(node)['generation'];filename.write_text(text)
+  MIN_GENERATION=ready(node,previous+1,timeout=300)['generation']
+  language_graph(language,entry_name,leaf_name,reference_name,filename)
+  TESTED_ADDITIONAL_LANGUAGES.append(language)
+ if 'rust' in ADDITIONAL_LANGUAGES:
+  # Reuse the same installed MCP framing/helpers for the selected Cargo graph.
+  rust_entry,rust_report=language_symbol('packaged_rust_entry','rust')
+  rust_leaf,_=language_symbol('packaged_rust_leaf','rust',rust_entry['compilation_id'])
+  rust_anchor=query({'op':'symbols','name':'packaged_rust_entry','compilation_id':rust_entry['compilation_id']})
+  rust_graph_args={'symbol_id':rust_entry['id'],'target':rust_report['target'],'max_depth':1,
+                   'snapshot':rust_anchor['snapshot'],'include_source':True,'source_max_bytes':4096}
+  mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-rust-stderr.log').open('w'))
+  mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
+  try:
+   assert rpc(100,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test-rust','version':'1'}})['result']['protocolVersion']=='2025-11-25'
+   mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
+   rust_mcp=tool_result(101,'callees',rust_graph_args)
+   assert rust_mcp==query(dict(rust_graph_args,op='callees')),rust_mcp
+   assert rust_mcp['snapshot']==rust_anchor['snapshot'] and rust_mcp['generation']==rust_anchor['generation'],rust_mcp
+   called=next(finding for finding in rust_mcp['graph']['findings'] if finding['symbol']['id']==rust_leaf['id'])
+   assert called['symbol']['compilation_id']==rust_entry['compilation_id'],called
+   assert called['paths'] and all(len(path)==1 and path[0]['kind']=='call' and path[0]['resolution']=='compiler_bound'
+                                 and path[0]['source_id']==rust_entry['id'] and path[0]['target_id']==rust_leaf['id']
+                                 for path in called['paths']),called
+   declarations=called['context']['declarations'];assert declarations and all(d['source_status']=='included' for d in declarations),called
+   for declaration in declarations:exact_source(declaration['source'],rust_file)
+   checks.append('installed_offline_Cargo_MCP_graph_snapshot_source_matches_native_projection')
+  finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp-rust.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
+ labels='_'.join({'rust':'Cargo','swift':'SwiftPM'}[language] for language in ['swift','rust'] if language in ADDITIONAL_LANGUAGES)
+ checks+=[f'installed_offline_{labels}_direct_calls_value_impact_exact_source_native_parity',
+          f'installed_offline_{labels}_saved_compiler_partial_repair']
 final_generation=ready(node)['generation'];node.close();net.close();checks.append('packaged_saved_file_updates')
 command(HOST,'coordinator','stop');until=time.monotonic()+20
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
@@ -380,7 +550,10 @@ def npm10_step(label):
  assert not (WORKSPACE/'package-lock.json').exists(),'unlocked preparation wrote a source lockfile'
  assert {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in owned_configs}==config_hashes,'preparation rewrote selected config'
  assert cache_inventory(DATA/'package-tools')==npm10_cache_inventory,'preparation modified the primed tool distribution'
- typescript=[c for c in result['coverage'] if c['language']=='typescript'];assert typescript,result
+ # This policy probe mutates only the root TS5.9 npm10 project, not the
+ # independently pinned TS6/TS7 child projects restored before denial.
+ typescript=[c for c in result['coverage'] if c['language']=='typescript' and c['project_path']=='tsconfig.json']
+ assert len(typescript)==1,typescript
  assert all(not c['details_omitted'] for c in typescript),typescript
  for compilation in typescript:
   manager=compilation['analysis_options']['knowCodePackageManager']
@@ -431,11 +604,24 @@ while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
 resources=bundle/'lib/know-code';worker=resources/'providers/typescript/worker.mjs';backup=worker.with_suffix('.held');worker.rename(backup)
 try:failure=command(HOST,'runtime-info',check=False);assert failure.returncode and 'missing' in failure.stderr
 finally:backup.rename(worker)
-manifest_file=resources/'runtime.json';saved=manifest_file.read_bytes();broken=json.loads(saved);broken['worker_protocol']=999;manifest_file.write_text(json.dumps(broken))
+manifest_file=resources/'runtime.json';saved=manifest_file.read_bytes()
+for language in ['rust','swift']:
+ # Keep provider bytes intact: omission from the manifest must itself fail.
+ original=json.loads(saved);entry=next(p for p in original['providers'] if p['language']==language)
+ assert (resources/entry['entrypoint']).is_file(),entry
+ broken=dict(original,providers=[p for p in original['providers'] if p['language']!=language])
+ manifest_file.write_text(json.dumps(broken))
+ try:
+  failure=command(HOST,'runtime-info',check=False)
+  assert failure.returncode and f'runtime lacks required {language} provider' in failure.stderr,failure.stderr
+ finally:manifest_file.write_bytes(saved)
+checks.append('required_Rust_Swift_manifest_entries_cannot_be_omitted')
+broken=json.loads(saved);broken['worker_protocol']=999;manifest_file.write_text(json.dumps(broken))
 try:failure=command(HOST,'runtime-info',check=False);assert failure.returncode and 'incompatible' in failure.stderr
 finally:manifest_file.write_bytes(saved)
 invalid=PREFIX/'invalid-resources';invalid.mkdir();failure=command(HOST,'runtime-info',check=False,env=dict(ENV,KNOW_CODE_RUNTIME_DIR=str(invalid)));assert failure.returncode and 'manifest' in failure.stderr
 bare=PREFIX/'bare';bare.mkdir();shutil.copy2(bundle/'bin/know-code',bare/'know-code');failure=command(bare/'know-code','runtime-info',check=False);assert failure.returncode and 'not found' in failure.stderr
 checks+=['missing_resource_no_checkout_fallback','manifest_protocol_mismatch','invalid_override_no_silent_fallback','bare_executable_actionable_error']
-result={'passed':True,'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json'),'installed_npm10_evidence':str(PREFIX/'npm10-installed.json')}
+assert set(TESTED_ADDITIONAL_LANGUAGES)==ADDITIONAL_LANGUAGES,(TESTED_ADDITIONAL_LANGUAGES,ADDITIONAL_LANGUAGES)
+result={'passed':True,'selected_additional_languages':sorted(ADDITIONAL_LANGUAGES),'tested_additional_languages':sorted(TESTED_ADDITIONAL_LANGUAGES),'tested_languages':['typescript','csharp',*sorted(TESTED_ADDITIONAL_LANGUAGES)],'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json'),'installed_npm10_evidence':str(PREFIX/'npm10-installed.json')}
 (PREFIX/'result.json').write_text(json.dumps(result,indent=2)+'\n');report=ROOT/'.artifacts/packaging/installed-test.json';report.parent.mkdir(parents=True,exist_ok=True);report.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))

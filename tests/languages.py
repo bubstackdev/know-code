@@ -1,6 +1,7 @@
 """Four providers share publication, native queries, and saved-input invalidation."""
 from fixture_trust import grant_fixture
 import atexit
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -62,12 +63,13 @@ registered = json.loads(run([HOST, 'watch', WORKSPACE]).stdout)
 DATABASE = registered['database']
 
 
-def wait(after=0, allow_failed=False):
-    until = time.monotonic() + 120
+def wait(after=0, allow_failed=False, timeout_seconds=120):
+    until = time.monotonic() + timeout_seconds
     while time.monotonic() < until:
         status = json.loads(run([HOST, 'coordinator', 'status']).stdout)['workspaces'][0]
         assert allow_failed or status['phase'] != 'failed', status
-        if status['phase'] == 'idle' and status['generation'] > after:
+        if (status['phase'] == 'idle' and status['generation'] > after
+                and status['published_epoch'] == status['observed_epoch']):
             return status['generation']
         time.sleep(.05)
     raise AssertionError(('language indexing did not settle', status))
@@ -92,8 +94,8 @@ def owners():
                                        'WHERE generation=(SELECT current_generation FROM state)'))
 
 
-def check_ranges(name, provider):
-    symbols = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True)['symbols']
+def check_ranges(name, provider, target=None):
+    symbols = [symbol for symbol in query({'op': 'symbols', 'name': name, 'target': target}, equivalent=True)['symbols']
                if symbol['compilation_id'].startswith(provider + ':')]
     assert symbols, name
     count = 0
@@ -109,28 +111,110 @@ def check_ranges(name, provider):
     return count
 
 
-generation = wait()
+# Initial SDK evaluation/compilation is a correctness setup bound, not an
+# indexing-latency gate. Saved-update waits keep their existing shorter bound.
+generation = wait(timeout_seconds=300)
 # Request workspace coverage explicitly; symbol inventory size must not turn
 # this cross-provider coverage/parity check into an oversized response.
-coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full'}, equivalent=True)['coverage']
+coverage = query({'op': 'symbols', 'limit': 1, 'coverage_detail': 'full', 'detail_max_bytes': 65536}, equivalent=True)['coverage']
 assert {item['language'] for item in coverage} == {'typescript', 'csharp', 'rust', 'swift'}, coverage
 assert all(item['status'] == 'partial' for item in coverage if item['language'] == 'rust'), coverage
 assert all(item['status'] == 'complete' for item in coverage if item['language'] != 'rust'), coverage
-checked = check_ranges('café', 'rust') + check_ranges('message', 'swift') + check_ranges('packageLocal', 'swift')
+rust_coverage = [item for item in coverage if item['language'] == 'rust']
+assert all(item['analysis_options']['rustContextPolicy'] == 2 for item in rust_coverage), rust_coverage
+rust_contexts = [item for item in rust_coverage if isinstance(item['analysis_options']['context'], dict)]
+rust_summaries = [item for item in rust_coverage if item not in rust_contexts]
+assert all(item['analysis_options']['context'] == 'workspace-summary' for item in rust_summaries), rust_summaries
+# This fixture declares a single library with its ordinary and test compiler
+# units. Tooling/build-script units supply preparation, not duplicate bodies.
+assert len(rust_contexts) == 2, rust_contexts
+assert {item['target'] for item in rust_contexts} == {
+    'lib:know_code_rust_fixture:normal@host', 'lib:know_code_rust_fixture:test@host'}, rust_contexts
+assert all(item['analysis_options']['context']['target']['kind'] == ['lib'] for item in rust_contexts), rust_contexts
+assert {item['analysis_options']['context']['profile']['test'] for item in rust_contexts} == {False, True}, rust_contexts
+normal_rust = next(item for item in rust_contexts if not item['analysis_options']['context']['profile']['test'])
+normal_rust_target = normal_rust['target']
+with sqlite3.connect(physical_database(DATABASE)) as connection:
+    rust_sources = connection.execute(
+        'SELECT a.path,count(DISTINCT u.compilation_id),count(DISTINCT a.rowid),count(DISTINCT a.content_hash) '
+        'FROM generation_units u JOIN compilations c ON c.generation=u.owner_generation AND c.id=u.compilation_id '
+        'JOIN unit_artifacts ua ON ua.owner_generation=u.owner_generation AND ua.compilation_id=u.compilation_id '
+        'JOIN artifacts a ON a.generation=ua.owner_generation AND a.id=ua.artifact_id '
+        'WHERE u.generation=(SELECT current_generation FROM state) AND c.language=\'rust\' GROUP BY a.path').fetchall()
+assert {row[0] for row in rust_sources} == {'rust/src/lib.rs', 'rust/src/helper.rs'}, rust_sources
+assert all(row[1:] == (2, 1, 1) for row in rust_sources), 'Rust contexts must share retained source artifacts/bytes'
+checked = check_ranges('café', 'rust', normal_rust_target) + check_ranges('message', 'swift') + check_ranges('packageLocal', 'swift')
 assert sum(item['language'] == 'swift' and item['project_path'] == 'swift-package/Package.swift'
            for item in coverage) == 2, coverage
 for language, name, expected in [('rust','Greeter','included'),('swift','message','extent_unavailable')]:
-    symbol = next(s for s in query({'op':'symbols','name':name})['symbols'] if s['compilation_id'].startswith(language+':'))
+    symbol = next(s for s in query({'op':'symbols','name':name, 'target': normal_rust_target if language == 'rust' else None})['symbols']
+                  if s['compilation_id'].startswith(language+':'))
     context = query({'op':'symbol_context','symbol_id':symbol['id']}, equivalent=True)['contexts'][0]
     assert context['declarations'] and any(d['source_status']==expected for d in context['declarations']), context
 print('languages: four-provider native parity and exact retained UTF-8 ranges passed', flush=True)
+
+# The same stored traversal and native SDKs must preserve compiler evidence
+# from both new adapters, including the difference between calls and values.
+for language, leaf_name, direct_name, reference_name in [
+        ('swift', 'swiftGraphLeaf(_:)', 'swiftGraphDirect()', 'swiftGraphReference()'),
+        ('rust', 'graph_leaf', 'graph_entry', 'graph_value_only')]:
+    selected = {}
+    for name in (leaf_name, direct_name, reference_name):
+        matches = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True).get('symbols', [])
+                   if symbol['name'] == name and symbol['compilation_id'].startswith(language + ':')
+                   and (language != 'rust' or symbol['compilation_id'] == normal_rust['compilation_id'])]
+        assert len(matches) == 1, (language, name, matches)
+        selected[name] = matches[0]['id']
+    leaf_id, direct_id, reference_id = (selected[name] for name in (leaf_name, direct_name, reference_name))
+    callers = query({'op': 'callers', 'symbol_id': leaf_id}, equivalent=True)['graph']
+    assert reference_id not in {finding['symbol']['id'] for finding in callers['findings']}, callers
+    direct = next(finding for finding in callers['findings'] if finding['symbol']['id'] == direct_id)
+    assert direct['paths'] and all(edge['kind'] == 'call' and edge['resolution'] == 'compiler_bound'
+                                   for path in direct['paths'] for edge in path), direct
+    callees = query({'op': 'callees', 'symbol_id': direct_id, 'max_depth': 1}, equivalent=True)['graph']
+    called = next(finding for finding in callees['findings'] if finding['symbol']['id'] == leaf_id)
+    assert called['paths'] and all(edge['source_id'] == direct_id and edge['target_id'] == leaf_id
+                                  and edge['kind'] == 'call' and edge['resolution'] == 'compiler_bound'
+                                  for path in called['paths'] for edge in path), called
+    assert not query({'op': 'callees', 'symbol_id': reference_id}, equivalent=True)['graph']['findings']
+    impact = query({'op': 'impact', 'symbol_id': leaf_id}, equivalent=True)['graph']
+    assert {direct_id, reference_id} <= {finding['symbol']['id'] for finding in impact['findings']}, impact
+    value_use = next(finding for finding in impact['findings'] if finding['symbol']['id'] == reference_id)
+    assert value_use['paths'] and all(edge['kind'] == 'reference' and edge['resolution'] == 'compiler_bound'
+                                    for path in value_use['paths'] for edge in path), value_use
+    reports = [report for report in query({'op': 'symbols', 'name': leaf_name, 'coverage_detail': 'full'}, equivalent=True)['coverage']
+               if report['language'] == language]
+    assert reports and all(report['capabilities']['calls'] == 'partial'
+                           and report['capabilities']['dependencies'] == 'partial'
+                           and report['capabilities']['dispatch'] == 'partial' for report in reports), reports
+    if language == 'rust':
+        assert all(report['status'] == 'partial' for report in reports), reports
+        constants = [symbol for symbol in query({'op': 'symbols', 'name': 'GRAPH_VALUE'}, equivalent=True).get('symbols', [])
+                     if symbol['name'] == 'GRAPH_VALUE' and symbol['compilation_id'] == normal_rust['compilation_id']]
+        assert len(constants) == 1, constants
+        constant_impact = query({'op': 'impact', 'symbol_id': constants[0]['id'], 'kinds': ['reference']}, equivalent=True)['graph']
+        for identifier in (leaf_id, direct_id):
+            finding = next(item for item in constant_impact['findings'] if item['symbol']['id'] == identifier)
+            assert finding['paths'] and all(edge['kind'] == 'reference' and edge['resolution'] == 'compiler_bound'
+                                           for path in finding['paths'] for edge in path), finding
+    else:
+        assert all(report['capabilities']['project_links'] == 'unavailable' for report in reports), reports
+        for name in ('swiftGraphLoaded', 'swiftGraphClosure'):
+            values = [symbol for symbol in query({'op': 'symbols', 'name': name}, equivalent=True).get('symbols', [])
+                      if symbol['name'] == name and symbol['compilation_id'].startswith('swift:')]
+            assert len(values) == 1, (name, values)
+            assert not query({'op': 'callees', 'symbol_id': values[0]['id']}, equivalent=True)['graph']['findings']
+print('languages: stored Swift/Rust calls, value impact and honest graph capability parity passed', flush=True)
 
 before = owners()
 rust = WORKSPACE / 'rust/src/lib.rs'
 rust.write_text(rust.read_text() + '\n// saved Rust change\n')
 generation = wait(generation)
 after = owners()
-assert after['rust:rust/Cargo.toml'] != before['rust:rust/Cargo.toml']
+rust_units = {key for key in before if key.startswith('rust:')}
+assert rust_units == {item['compilation_id'] for item in rust_coverage}
+assert {key for key in after if key.startswith('rust:')} == rust_units
+assert all(after[key] != before[key] for key in rust_units)
 assert all(after[key] == value for key, value in before.items() if not key.startswith('rust:'))
 
 # Legacy Cargo configuration is extensionless; discovery must notice its creation.
@@ -138,7 +222,9 @@ config = WORKSPACE / 'rust/.cargo/config'
 config.parent.mkdir()
 config.write_text('# saved Cargo configuration input\n')
 generation = wait(generation)
-assert owners()['rust:rust/Cargo.toml'] != after['rust:rust/Cargo.toml']
+changed = owners()
+assert {key for key in changed if key.startswith('rust:')} == rust_units
+assert all(changed[key] != after[key] for key in rust_units)
 after = owners()
 
 before = after
@@ -178,23 +264,26 @@ assert query({'op': 'symbols', 'name': 'packageSaved'})['freshness'] == 'stale'
 compiler = next(item['compiler_version'] for item in coverage if item['language'] == 'swift')
 pin.write_text(re.search(r'Swift version (\d+\.\d+\.\d+)', compiler).group(1) + '\n')
 generation = wait(generation, allow_failed=True)
-scoped = query({'op': 'symbols', 'name': 'packageSaved','coverage_detail':'full'}, equivalent=True)['coverage']
+scoped = query({'op': 'symbols', 'name': 'packageSaved','coverage_detail':'full', 'detail_max_bytes':65536}, equivalent=True)['coverage']
 assert all(item['analysis_options']['toolchainSelection']['origin'] == 'repository_pin'
            for item in scoped if item['project_path'] == 'swift-package/Package.swift')
 pin.unlink()
 generation = wait(generation)
 assert all(item['analysis_options']['toolchainSelection']['swiftPin'] is None
-           for item in query({'op': 'symbols','limit':1,'coverage_detail':'full'})['coverage'] if item['project_path'] == 'swift-package/Package.swift')
+           for item in query({'op': 'symbols','limit':1,'coverage_detail':'full', 'detail_max_bytes':65536})['coverage'] if item['project_path'] == 'swift-package/Package.swift')
 
 added = WORKSPACE / 'swift/new/New.swift'
 added.parent.mkdir()
 added.write_text('struct AddedSwift {}\n')
 generation = wait(generation)
 assert query({'op': 'symbols', 'name': 'AddedSwift'})['symbols']
+before = owners()
 added.unlink()
 generation = wait(generation)
 assert not query({'op': 'symbols', 'name': 'AddedSwift'}).get('symbols')
-assert 'swift:$swift-inferred:swift/new' not in owners()
+after = owners()
+assert 'swift:$swift-inferred:swift/new' not in after
+assert all(after[key] == value for key, value in before.items() if key != 'swift:$swift-inferred:swift/new')
 
 before = owners()
 healthy = swift.read_text()
@@ -207,12 +296,77 @@ swift.write_text(healthy)
 generation = wait(generation)
 assert all(item['status'] == 'complete' for item in query({'op': 'symbols'})['coverage'] if item['language'] == 'swift')
 
+# Keep one real cursor across removal of all owned language inputs. The saved
+# sources move outside discovery, but remain durable evidence for pinned reads.
+# Creating separate queries creates separate opaque cursors. Establish one
+# cursor, then compare native clients while replaying that same token.
+retained = query({'op': 'symbols', 'name': 'reply', 'limit': 1, 'page_size': 1})
+assert retained['generation'] == generation and len(retained['symbols']) == 1, retained
+cursor = retained['page']['cursor']
+location = retained['symbols'][0]['locations'][0]
+saved_swift = swift.read_bytes()
+assert saved_swift[location['start_byte']:location['end_byte']].decode() == 'reply', location
+retained_page = {key: value for key, value in retained.items() if key not in ('freshness', 'coordination')}
+initial_replay = query({'op': 'next_page', 'cursor': cursor}, equivalent=True)
+assert initial_replay['freshness'] == 'current', initial_replay
+assert {key: value for key, value in initial_replay.items() if key not in ('freshness', 'coordination')} == retained_page
+removed = RUN / 'removed-inputs'
+removed.mkdir()
+for directory in ('typescript', 'csharp', 'rust', 'swift', 'swift-package'):
+    shutil.move(str(WORKSPACE / directory), removed / directory)
+generation = wait(generation, allow_failed=True)
+
+
+def check_empty():
+    result = query({'op': 'symbols', 'coverage_detail': 'full'}, equivalent=True)
+    assert result['freshness'] == 'current' and result['generation'] == generation, result
+    assert not result.get('symbols', []) and not result['coverage'], result
+    assert result['workspace_coverage']['compilations'] == 0 and not owners(), result
+
+
+check_empty()
+replayed = query({'op': 'next_page', 'cursor': cursor}, equivalent=True)
+assert replayed['freshness'] == 'stale', replayed
+assert {key: value for key, value in replayed.items() if key not in ('freshness', 'coordination')} == retained_page
+pinned = query({'op': 'source', 'cursor': cursor, 'artifact_id': location['artifact_id'],
+                'content_hash': location['content_hash'], 'start_byte': 0,
+                'max_bytes': len(saved_swift) + 1}, equivalent=True)
+assert pinned['generation'] == retained['generation'] and pinned['freshness'] == 'stale', pinned
+body = pinned['source']
+assert body['text'].encode() == saved_swift and body['start_byte'] == 0 and body['end_byte'] == len(saved_swift), body
+assert body['content_hash'] == location['content_hash'] == hashlib.sha256(saved_swift).hexdigest(), body
+run([HOST, 'index', WORKSPACE])
+generation = wait(generation)
+check_empty()
+stop()
+until = time.monotonic() + 15
+while (RUN / 'data/c.sock').exists() and time.monotonic() < until:
+    time.sleep(.05)
+assert not (RUN / 'data/c.sock').exists(), 'Isolated coordinator did not stop'
+assert json.loads(run([HOST, 'watch', WORKSPACE]).stdout)['database'] == DATABASE
+generation = wait(generation - 1)
+check_empty()
+# Cursors are deliberately not reused after the coordinator restart.
+restored_source = WORKSPACE / 'restored.ts'
+restored_source.write_text('export function restoredAfterEmpty() { return 7; }\n')
+generation = wait(generation)
+restored = query({'op': 'symbols', 'name': 'restoredAfterEmpty'}, equivalent=True)
+assert restored['freshness'] == 'current' and restored['symbols'], restored
+assert {item['language'] for item in restored['coverage']} == {'typescript'}, restored
+assert owners(), 'Saved standalone TypeScript source did not restore a compilation'
+
 summary = {'result': 'passed', 'profile': PROFILE, 'database': DATABASE,
            'checked_utf8_ranges': checked, 'rust_coverage': 'explicitly partial',
            'checks': ['four_provider_publication', 'native_parity', 'UTF8_source_ranges', 'build_cache_and_worktree_exclusions',
+                      'Swift_Rust_stored_call_and_impact_native_parity', 'compiler_bound_paths_and_value_reference_separation',
+                      'Rust_constant_dependency_impact', 'Rust_normal_and_test_compiler_contexts_share_source_storage',
+                      'Swift_value_initializers_do_not_invent_calls',
                       'Rust_scoped_save', 'extensionless_Cargo_config', 'Swift_scoped_save', 'SwiftPM_target_save',
                       'Swift_pin_failure_repair_and_removal', 'new_Swift_group',
-                      'last_Swift_file_deletion', 'Swift_partial_and_repair']}
+                      'last_Swift_file_deletion_without_sibling_reanalysis', 'Swift_partial_and_repair',
+                      'all_inputs_removed_empty_current_manifest_and_native_parity',
+                      'retained_page_and_exact_UTF8_source_across_empty_publication',
+                      'explicit_empty_refresh_and_restart', 'saved_source_rediscovery_after_empty']}
 (RUN / 'result.json').write_text(json.dumps(summary, indent=2) + '\n')
 (ROOT / '.artifacts/languages/latest.json').write_text(json.dumps(summary, indent=2) + '\n')
 print(json.dumps(summary, indent=2))

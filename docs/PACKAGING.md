@@ -1,12 +1,12 @@
 # Runtime discovery and local candidate packages
 
-Distribution uses a separate shared coordinator/worker runtime and thin npm/NuGet SDKs for macOS 15+ on Apple Silicon, Node 24 and a separately installed .NET 10 SDK. Published v0.0.1 passed exact-artifact signing/notarization and macOS 15 installed/offline checks; each new release needs matching artifact evidence. Node/.NET are not installed or bundled by Know Code. v0.0.2 is stabilization only; see the [changelog](../CHANGELOG.md) and [release plan](RELEASE_PLAN.md).
+Distribution uses a separate shared coordinator/worker runtime and thin npm/NuGet SDKs for macOS 15+ on Apple Silicon, Node 24 and a separately installed .NET 10 SDK. **Published v0.0.2** passed its artifact-bound signing/notarization, installed/offline and macOS 15 checks. **Working version 0.0.3 is an unreleased candidate**; final packages, installed/platform/upgrade checks and corpus qualification remain pending. See the [candidate audit](RELEASE_0_0_3_AUDIT.md) and [retained failures/current work](IMPLEMENTATION_0_0_3.md). Neither package versions nor historical release receipts certify the candidate.
 
-The supported-platform rationale is the [Node 24 build matrix](https://raw.githubusercontent.com/nodejs/node/v24.22.2/BUILDING.md) and [.NET 10 OS matrix](https://raw.githubusercontent.com/dotnet/core/main/release-notes/10.0/supported-os.md), checked 2026-11-09. This SDK is built for .NET 10; compiler selection still honors repository pins and existing Roslyn compatibility checks. Swift/Rust adapters remain experimental outside the supported TS/C# contract, even when their small adapter resources are retained; accepted language goals remain in [PRODUCT_CONSTRAINTS.md](PRODUCT_CONSTRAINTS.md).
+The platform rationale is the [Node 24 build matrix](https://raw.githubusercontent.com/nodejs/node/v24.22.2/BUILDING.md) and [.NET 10 OS matrix](https://raw.githubusercontent.com/dotnet/core/main/release-notes/10.0/supported-os.md), checked 2026-11-09. The SDK targets .NET 10; repository pins and existing Roslyn compatibility checks still apply. Shipped 0.0.2 supports TS/C# and labels Swift/Rust experimental. The candidate declares all four providers required, with finite compiler/partial-graph boundaries in [COMPILER_ACCEPTANCE.md](COMPILER_ACCEPTANCE.md). Node/.NET remain shared prerequisites. Selected Swift/Xcode SDKs or Cargo/rustc/rust-analyzer/matching rust-src are needed for their respective source analysis. These tools are separately installed, never provisioned by ordinary indexing.
 
 ## Layout and discovery
 
-A v0.0.2 runtime archive extracts to `know-code-0.0.2-darwin-arm64/`:
+A versioned runtime archive extracts to `know-code-<version>-darwin-arm64/` (working candidate version `0.0.3`):
 
 ```text
 bin/know-code
@@ -25,6 +25,24 @@ The manifest versions the resource layout and records worker protocol/profile, s
 
 SDKs keep in-process graph queries. The npm package contains its native Node-API add-on and declarations; the NuGet package places the native C ABI library under `runtimes/osx-arm64/native`. Neither copies coordinator/workers into each consumer. Put the runtime's `bin` directory on PATH, or use the existing coordinator-executable override. Native dylib identities are relative `@rpath` names; SQLite remains bundled in each native artifact using the same pinned build policy.
 
+## Separate Xcode-only download
+
+The accepted candidate distribution adds an optional separate bridge download
+and separate bridge DMG; Xcode indexing requires that pinned tool, while SwiftPM
+and queries do not. It is not folded into the runtime/npm/NuGet archive set.
+The [tool recipe and layout](../tooling/xcode-bridge/README.md) and
+[adoption decision](XCODE_BRIDGE_DECISION.md) describe its executable/service,
+resources, licenses and user-scoped discovery. Missing or incompatible tooling
+must produce an actionable prerequisite error, without a substitute planner.
+
+Existing `scripts/sign_packages.py` now has separate `bridge-sign` and
+`bridge-verify` operations: authenticate the producer and exact two native
+signing transformations, then inventory the actual signed bytes. These source
+operations are not a signed/notarized bridge release. Final tool build,
+separate DMG/notarization, installed device/simulator and platform evidence are
+still required; the common runtime's macOS 15 floor does not qualify arbitrary
+Xcode versions.
+
 ## Build and review
 
 ```sh
@@ -39,7 +57,21 @@ NuGet worker publication retains its framework-dependent runtime/dependency file
 
 Every public release requires exact source/producer/archive provenance, dependency/license closure, signing/notarization and normal-security installed/offline/platform checks. Distribution uses GitHub release assets, including npm/NuGet SDK archives; registry publication is separate. The development LaunchAgent remains separate. See [0.0.1-to-0.0.2 upgrade compatibility](INSTALLATION.md#upgrading-from-001-to-002). Dated checkpoints below retain their original evidence limits.
 
-## Verification
+## Current verification and historical checkpoints
+
+The candidate must run the expanded installed/offline SwiftPM/Cargo and selected
+TS6/native-TS7 workflows, including representative Rust MCP queries, on matching
+final artifacts. The installed Xcode mode reuses the owned device/simulator
+fixture with genuine installed SDKs, checkout denial and authenticated separate
+tool inventory. Test source or syntax checks do not certify those runs. Final
+normal-security install, actual 0.0.2 upgrade/rollback/native compatibility and
+declared-platform checks remain separate. See [validation selection](VALIDATION.md)
+and the [release audit](RELEASE_0_0_3_AUDIT.md); the encoding performance gate
+remains explicitly deferred.
+
+The following retained packaging/installer/signing checkpoints describe earlier
+artifacts and their original limitations. Later shipped 0.0.2 closeout is in
+[RELEASE_PLAN.md](RELEASE_PLAN.md); none of these older states is a 0.0.3 pass.
 
 The installed-package harness extracts into a durable directory outside the checkout, installs both SDK archives and restores fixture dependencies before registration, then denies networking and checkout access for fresh TS/C# indexing, saved updates, CLI/MCP and both in-process SDKs. Its controlled socket probes preserve required local coordinator/Roslyn IPC while proving IPv4/IPv6 TCP/UDP denial. See OFFLINE_VALIDATION.md for the exact boundary, evidence and historical-candidate limitations. Relocation and deliberately missing/mismatched resources must be explicit. The initial archive test passed with checkout access denied: actual npm/NuGet installs, TypeScript/Roslyn analysis (including generated source), matching CLI/native/MCP queries, saved updates, runtime relocation and explicit damaged-resource/version failures. The retained experimental Swift/Rust adapters passed the same outside-checkout environment, including the relocated Swift IndexStore helper. These remain experimental and are not new 0.0.1 acceptance requirements.
 

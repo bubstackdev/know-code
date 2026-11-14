@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <errno.h>
 
 typedef void *handle;
 typedef struct { const char *data; size_t length; } text_ref;
@@ -27,6 +28,7 @@ API(text_ref, indexstore_unit_dependency_get_filepath, (handle));
 API(text_ref, indexstore_unit_dependency_get_name, (handle));
 API(handle, indexstore_record_reader_create, (handle, const char *, handle *));
 API(void, indexstore_record_reader_dispose, (handle));
+API(bool, indexstore_record_reader_symbols_apply_f, (handle, bool, void *, bool (*)(void *, handle)));
 API(bool, indexstore_record_reader_occurrences_apply_f, (handle, void *, bool (*)(void *, handle)));
 API(handle, indexstore_occurrence_get_symbol, (handle));
 API(uint64_t, indexstore_occurrence_get_roles, (handle));
@@ -37,14 +39,29 @@ API(handle, indexstore_symbol_relation_get_symbol, (handle));
 API(text_ref, indexstore_symbol_get_name, (handle));
 API(text_ref, indexstore_symbol_get_usr, (handle));
 API(unsigned, indexstore_symbol_get_kind, (handle));
+API(unsigned, indexstore_symbol_get_subkind, (handle));
 static handle store;
 static bool failed;
 static char **records;
 static size_t record_count;
 static char *wanted_paths;
 static size_t wanted_size;
-static void error(handle err) {
-  if (err) { fprintf(stderr, "%s\n", indexstore_error_get_description(err)); indexstore_error_dispose(err); }
+static bool output_failed;
+static int output_errno;
+static bool output_ok(void) {
+  if (ferror(stdout) && !output_failed) { output_failed = true; output_errno = errno; }
+  return !ferror(stdout);
+}
+static const text_ref empty = {"", 0};
+static void error(const char *stage, handle err, text_ref unit_name, text_ref record_name, text_ref path) {
+  (void)output_ok();
+  fprintf(stderr, "Swift IndexStore %s failed; unit=%.*s; record=%.*s; path=%.*s; detail=", stage,
+          (int)(unit_name.length > 1024 ? 1024 : unit_name.length), unit_name.data,
+          (int)(record_name.length > 1024 ? 1024 : record_name.length), record_name.data,
+          (int)(path.length > 2048 ? 2048 : path.length), path.data);
+  const char *description = err ? indexstore_error_get_description(err) : NULL;
+  fprintf(stderr, "%.2048s\n", description ? description : "no IndexStore error detail");
+  if (err) indexstore_error_dispose(err);
   failed = true;
 }
 static char *copy(text_ref s) {
@@ -62,29 +79,45 @@ static void json(text_ref s) {
   }
   putchar('"');
 }
+typedef struct { text_ref enclosing; bool first; } relation_context;
+typedef struct { text_ref unit_name; bool indexed; } unit_context;
+typedef struct { text_ref unit_name; text_ref record_name; text_ref path; } record_context;
 static bool relation(void *ctx, handle rel) {
+  relation_context *context = ctx;
   uint64_t roles = indexstore_symbol_relation_get_roles(rel);
-  // A compiler's containment relation supplies context, not a guessed call edge.
+  handle symbol = indexstore_symbol_relation_get_symbol(rel);
+  // Preserve every actual compiler relation, not just containment. The adapter
+  // distinguishes CALLEDBY from references and never guesses a call from a USR.
+  if (!context->first) putchar(',');
+  context->first = false;
+  printf("{\"usr\":"); json(indexstore_symbol_get_usr(symbol));
+  printf(",\"name\":"); json(indexstore_symbol_get_name(symbol));
+  printf(",\"kind\":%u,\"subkind\":%u,\"roles\":%llu}",
+         indexstore_symbol_get_kind(symbol), indexstore_symbol_get_subkind(symbol),
+         (unsigned long long)roles);
   if (roles & ((1ull << 9) | (1ull << 16))) {
-    text_ref *enclosing = ctx;
-    *enclosing = indexstore_symbol_get_usr(indexstore_symbol_relation_get_symbol(rel));
+    context->enclosing = indexstore_symbol_get_usr(symbol);
   }
-  return true;
+  return output_ok();
 }
 static bool occurrence(void *ctx, handle occ) {
+  record_context *record = ctx;
   handle symbol = indexstore_occurrence_get_symbol(occ);
   unsigned line, col;
   indexstore_occurrence_get_line_col(occ, &line, &col);
-  text_ref enclosing = {"", 0};
-  indexstore_occurrence_relations_apply_f(occ, &enclosing, relation);
-  printf("{\"path\":"); json(*(text_ref *)ctx);
+  printf("{\"path\":"); json(record->path);
   printf(",\"usr\":"); json(indexstore_symbol_get_usr(symbol));
   printf(",\"name\":"); json(indexstore_symbol_get_name(symbol));
-  printf(",\"enclosing\":"); json(enclosing);
-  printf(",\"kind\":%u,\"roles\":%llu,\"line\":%u,\"column\":%u}\n",
+  printf(",\"kind\":%u,\"subkind\":%u,\"roles\":%llu,\"line\":%u,\"column\":%u,\"relations\":[",
          indexstore_symbol_get_kind(symbol),
+         indexstore_symbol_get_subkind(symbol),
          (unsigned long long)indexstore_occurrence_get_roles(occ), line, col);
-  return !ferror(stdout);
+  relation_context context = {{"", 0}, true};
+  if (!indexstore_occurrence_relations_apply_f(occ, &context, relation)) {
+    error("occurrence relations traversal", NULL, record->unit_name, record->record_name, record->path); return false;
+  }
+  printf("],\"enclosing\":"); json(context.enclosing); puts("}");
+  return output_ok();
 }
 static bool wanted(text_ref path) {
   if (!wanted_paths) return true;
@@ -95,10 +128,16 @@ static bool wanted(text_ref path) {
   }
   return false;
 }
+static bool found_symbol(void *ctx, handle symbol) {
+  (void)symbol;
+  *(bool *)ctx = true;
+  return false; // One decoded symbol is enough; occurrence traversal remains authoritative.
+}
 static bool dependency(void *ctx, handle dep) {
+  unit_context *unit = ctx;
   text_ref path = indexstore_unit_dependency_get_filepath(dep);
   if (path.length) { printf("{\"input\":true,\"path\":"); json(path); puts("}"); }
-  if (!*(bool *)ctx || indexstore_unit_dependency_get_kind(dep) != 2 || !wanted(path)) return true;
+  if (!unit->indexed || indexstore_unit_dependency_get_kind(dep) != 2 || !wanted(path)) return true;
   char *name = copy(indexstore_unit_dependency_get_name(dep));
   for (size_t i = 0; i < record_count; ++i) if (strcmp(records[i], name) == 0) { free(name); return true; }
   char **grown = realloc(records, (record_count + 1) * sizeof(char *));
@@ -106,11 +145,22 @@ static bool dependency(void *ctx, handle dep) {
   records = grown; records[record_count++] = name;
   handle err = NULL;
   handle reader = indexstore_record_reader_create(store, name, &err);
-  if (!reader) { error(err); return false; }
+  text_ref record_name = {name, strlen(name)};
+  if (!reader) { error("record create", err, unit->unit_name, record_name, path); return false; }
   printf("{\"record\":true,\"path\":"); json(path); puts("}");
-  bool ok = indexstore_record_reader_occurrences_apply_f(reader, &path, occurrence);
+  // LLVM omits occurrence blocks when a record has no symbols. Its occurrence
+  // API still visits the absent cursor and returns false. Establish emptiness
+  // through successful public symbol enumeration, never by that false result.
+  bool has_symbol = false;
+  bool symbols_ok = indexstore_record_reader_symbols_apply_f(reader, true, &has_symbol, found_symbol);
+  if (!symbols_ok && !has_symbol) {
+    error("record symbols traversal", NULL, unit->unit_name, record_name, path);
+    indexstore_record_reader_dispose(reader); return false;
+  }
+  record_context context = {unit->unit_name, record_name, path};
+  bool ok = !has_symbol || indexstore_record_reader_occurrences_apply_f(reader, &context, occurrence);
+  if (!ok) error("record occurrences traversal", NULL, unit->unit_name, record_name, path);
   indexstore_record_reader_dispose(reader);
-  if (!ok) failed = true;
   return ok;
 }
 static bool unit(void *ctx, text_ref unit_name) {
@@ -119,14 +169,14 @@ static bool unit(void *ctx, text_ref unit_name) {
   handle err = NULL;
   handle reader = indexstore_unit_reader_create(store, name, &err);
   free(name);
-  if (!reader) { error(err); return false; }
+  if (!reader) { error("unit create", err, unit_name, empty, empty); return false; }
   if (indexstore_unit_reader_is_system_unit(reader)) { indexstore_unit_reader_dispose(reader); return true; }
   text_ref main_file = indexstore_unit_reader_get_main_file(reader);
-  bool indexed = wanted(main_file);
-  if (indexed) { printf("{\"unit\":true,\"path\":"); json(main_file); puts("}"); }
-  bool ok = indexstore_unit_reader_dependencies_apply_f(reader, &indexed, dependency);
+  unit_context context = {unit_name, wanted(main_file)};
+  if (context.indexed) { printf("{\"unit\":true,\"path\":"); json(main_file); puts("}"); }
+  bool ok = indexstore_unit_reader_dependencies_apply_f(reader, &context, dependency);
+  if (!ok) error("unit dependencies traversal", NULL, unit_name, empty, main_file);
   indexstore_unit_reader_dispose(reader);
-  if (!ok) failed = true;
   return ok;
 }
 #define LOAD(name) do { *(void **)(&name) = dlsym(library, #name); if (!name) { fprintf(stderr, "incompatible Swift libIndexStore: missing %s\n", #name); return 1; } } while (0)
@@ -153,15 +203,22 @@ int main(int argc, char **argv) {
   LOAD(indexstore_unit_reader_dispose); LOAD(indexstore_unit_reader_get_main_file); LOAD(indexstore_unit_reader_is_system_unit); LOAD(indexstore_unit_reader_dependencies_apply_f);
   LOAD(indexstore_unit_dependency_get_kind); LOAD(indexstore_unit_dependency_get_filepath);
   LOAD(indexstore_unit_dependency_get_name); LOAD(indexstore_record_reader_create);
-  LOAD(indexstore_record_reader_dispose); LOAD(indexstore_record_reader_occurrences_apply_f);
+  LOAD(indexstore_record_reader_dispose); LOAD(indexstore_record_reader_symbols_apply_f); LOAD(indexstore_record_reader_occurrences_apply_f);
   LOAD(indexstore_occurrence_get_symbol); LOAD(indexstore_occurrence_get_roles);
   LOAD(indexstore_occurrence_get_line_col); LOAD(indexstore_occurrence_relations_apply_f);
   LOAD(indexstore_symbol_relation_get_roles); LOAD(indexstore_symbol_relation_get_symbol);
-  LOAD(indexstore_symbol_get_name); LOAD(indexstore_symbol_get_usr); LOAD(indexstore_symbol_get_kind);
+  LOAD(indexstore_symbol_get_name); LOAD(indexstore_symbol_get_usr); LOAD(indexstore_symbol_get_kind); LOAD(indexstore_symbol_get_subkind);
   handle err = NULL;
   store = indexstore_store_create(argv[2], &err);
-  if (!store) { error(err); dlclose(library); return 1; }
+  if (!store) { text_ref path = {argv[2], strlen(argv[2])}; error("store create", err, empty, empty, path); dlclose(library); return 1; }
   bool ok = indexstore_store_units_apply_f(store, 1, NULL, unit);
+  if (!ok) error("store units traversal", NULL, empty, empty, empty);
+  (void)output_ok();
+  if (fflush(stdout) == EOF) { output_failed = true; output_errno = errno; }
+  if (output_failed) {
+    fprintf(stderr, "Swift IndexStore stdout write/flush failed; errno=%d (%s)\n", output_errno, strerror(output_errno));
+    failed = true;
+  }
   for (size_t i = 0; i < record_count; ++i) free(records[i]);
   free(records); free(wanted_paths);
   indexstore_store_dispose(store); dlclose(library);

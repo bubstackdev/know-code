@@ -1,6 +1,6 @@
-# Company onboarding — v0.0.2 backlog
+# Company onboarding — backlog, release unassigned
 
-Accepted by the user on 2026-11-09. This is backlog scope, not implemented behavior, and does not replace the active v0.0.1 embedding/API work.
+Accepted by the user on 2026-11-09. This is backlog scope, not implemented behavior. Its former 0.0.2 assignment was superseded when that release became stabilization-only. For 0.0.3 the user's preferred optional estate slice is symbol search across already registered repositories; that does not assign company cloning/sync to the release. See the [current scope audit](RELEASE_0_0_3_AUDIT.md).
 
 Input is a company's GitHub or GitLab root URL. The corresponding `gh` or `glab` CLI must already be installed and authenticated. Enumerate repositories within the supplied company/root and the authenticated account's permitted scope. This supports company-selected access or the individual developer's visible repositories; do not assume broader access or install/authenticate the CLI automatically.
 

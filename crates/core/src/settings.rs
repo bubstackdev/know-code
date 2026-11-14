@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const PROJECT_FILE: &str = ".know-code.json";
 const MAX_FILE_BYTES: u64 = 64 * 1024;
 
@@ -167,29 +167,29 @@ pub fn revoke_project_execution(root: &Path, data: &Path) -> Result<()> {
 
 /// Missing inherits; null explicitly selects repository/compiler defaults.
 #[derive(Clone, Debug, Default)]
-pub enum Selection {
+pub enum Selection<T = String> {
     #[default]
     Inherit,
     Automatic,
-    Named(String),
+    Named(T),
 }
-impl Selection {
+impl<T> Selection<T> {
     fn inherited(&self) -> bool {
         matches!(self, Self::Inherit)
     }
 }
-impl<'de> Deserialize<'de> for Selection {
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Selection<T> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        Ok(match Option::<String>::deserialize(d)? {
+        Ok(match Option::<T>::deserialize(d)? {
             Some(value) => Self::Named(value),
             None => Self::Automatic,
         })
     }
 }
-impl Serialize for Selection {
+impl<T: Serialize> Serialize for Selection<T> {
     fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         match self {
-            Self::Named(value) => s.serialize_str(value),
+            Self::Named(value) => value.serialize(s),
             _ => s.serialize_none(),
         }
     }
@@ -202,10 +202,28 @@ pub struct CSharpSettings {
     #[serde(skip_serializing_if = "Selection::inherited")]
     pub solution: Selection,
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RustSettings {
+    #[serde(skip_serializing_if = "Selection::inherited")]
+    pub targets: Selection<Vec<String>>,
+    #[serde(skip_serializing_if = "Selection::inherited")]
+    pub features: Selection<Vec<String>>,
+    #[serde(skip_serializing_if = "Selection::inherited")]
+    pub default_features: Selection<bool>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SwiftSettings {
+    #[serde(skip_serializing_if = "Selection::inherited")]
+    pub scheme: Selection,
+}
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct RepositorySettings {
     csharp: CSharpSettings,
+    rust: RustSettings,
+    swift: SwiftSettings,
 }
 
 /// Mutations replace this whole object. Omitted fields inherit/default.
@@ -213,6 +231,8 @@ struct RepositorySettings {
 #[serde(default, deny_unknown_fields)]
 pub struct PersonalSettings {
     pub csharp: CSharpSettings,
+    pub rust: RustSettings,
+    pub swift: SwiftSettings,
     pub allow_install_scripts: bool,
 }
 
@@ -263,12 +283,39 @@ fn selected(
         });
     };
     match value {
-        Selection::Named(value) if value.trim().is_empty() => Err(Error::InvalidRequest(
-            "settings selections must be nonempty strings or null".into(),
-        )),
+        Selection::Named(value) if value.trim().is_empty() || value.contains('\0') => Err(
+            Error::InvalidRequest("settings selections must be nonempty strings or null".into()),
+        ),
         Selection::Named(value) => Ok((Some(value.clone()), origin.into())),
         _ => Ok((None, origin.into())),
     }
+}
+
+fn selected_value<T: Clone>(personal: &Selection<T>, project: &Selection<T>) -> Option<T> {
+    match if personal.inherited() {
+        project
+    } else {
+        personal
+    } {
+        Selection::Named(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn selected_list(
+    personal: &Selection<Vec<String>>,
+    project: &Selection<Vec<String>>,
+) -> Result<Vec<String>> {
+    let values = selected_value(personal, project).unwrap_or_default();
+    if values
+        .iter()
+        .any(|value| value.trim().is_empty() || value.contains('\0') || value.starts_with('-'))
+    {
+        return Err(Error::InvalidRequest(
+            "Rust targets/features must be nonempty values, not command options".into(),
+        ));
+    }
+    Ok(values)
 }
 
 pub fn resolve(
@@ -308,6 +355,18 @@ fn resolve_personal(
             }
         })
         .map(|p| p.to_string_lossy().into_owned());
+    let (scheme, _) = selected(&personal.swift.scheme, &project.swift.scheme, None)?;
+    let scheme_path = scheme
+        .map(|s| {
+            let path = PathBuf::from(s);
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
+        })
+        .map(|p| p.to_string_lossy().into_owned());
+    let execution_allowed = project_execution_allowed(root, data)?;
     Ok(WorkspaceAnalysisSettings {
         csharp: Some(CSharpBuildContext {
             configuration,
@@ -321,7 +380,22 @@ fn resolve_personal(
         solution_origin,
         project_file: project_file.to_string_lossy().into_owned(),
         personal_file: personal_file.to_string_lossy().into_owned(),
-        project_execution_allowed: project_execution_allowed(root, data)?,
+        project_execution_allowed: execution_allowed,
+        rust: Some(RustAnalysisPolicy {
+            targets: selected_list(&personal.rust.targets, &project.rust.targets)?,
+            features: selected_list(&personal.rust.features, &project.rust.features)?,
+            default_features: selected_value(
+                &personal.rust.default_features,
+                &project.rust.default_features,
+            ),
+            execution_allowed,
+            cache_directory: data.join("workers/rust").to_string_lossy().into_owned(),
+        }),
+        swift: Some(SwiftBuildContext {
+            scheme_path,
+            execution_allowed,
+            cache_directory: data.join("workers/swift").to_string_lossy().into_owned(),
+        }),
     })
 }
 
@@ -564,6 +638,72 @@ mod tests {
             serde_json::from_str(r#"{"csharp":{"configuration":" "}}"#).unwrap();
         assert!(save(&root, &data, "", &invalid).is_err());
         assert_eq!(fs::read(path).unwrap(), before);
+    }
+    #[test]
+    fn language_settings_inherit_reset_and_cannot_forge_execution() {
+        let (root, data) = fixture();
+        fs::write(root.join(PROJECT_FILE), r#"{"rust":{"targets":["aarch64-apple-darwin"],"features":["extra"],"default_features":false},"swift":{"scheme":"App.xcodeproj/xcshareddata/xcschemes/App.xcscheme"}}"#).unwrap();
+        let resolved = resolve(&root, &data, "").unwrap();
+        let rust = resolved.rust.unwrap();
+        assert_eq!(rust.targets, ["aarch64-apple-darwin"]);
+        assert_eq!(rust.features, ["extra"]);
+        assert_eq!(rust.default_features, Some(false));
+        assert!(!rust.execution_allowed);
+        assert!(Path::new(&rust.cache_directory).is_absolute());
+        let swift = resolved.swift.unwrap();
+        assert!(!swift.execution_allowed);
+        assert_eq!(
+            swift.cache_directory,
+            data.join("workers/swift").to_string_lossy()
+        );
+        assert_eq!(
+            swift.scheme_path,
+            Some(
+                root.join("App.xcodeproj/xcshareddata/xcschemes/App.xcscheme")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        let personal: PersonalSettings = serde_json::from_str(r#"{"rust":{"targets":null,"features":[],"default_features":null},"swift":{"scheme":null}}"#).unwrap();
+        save(&root, &data, "", &personal).unwrap();
+        let reset = resolve(&root, &data, "").unwrap();
+        let rust = reset.rust.unwrap();
+        assert!(rust.targets.is_empty());
+        assert!(rust.features.is_empty());
+        assert_eq!(rust.default_features, None);
+        assert_eq!(reset.swift.unwrap().scheme_path, None);
+        set_project_execution(&root, &data, true).unwrap();
+        assert!(
+            resolve(&root, &data, "")
+                .unwrap()
+                .swift
+                .unwrap()
+                .execution_allowed
+        );
+        assert!(
+            resolve(&root, &data, "")
+                .unwrap()
+                .rust
+                .unwrap()
+                .execution_allowed
+        );
+        assert!(
+            serde_json::from_str::<PersonalSettings>(r#"{"rust":{"execution_allowed":true}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<PersonalSettings>(r#"{"swift":{"execution_allowed":true}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<RepositorySettings>(r#"{"swift":{"cache_directory":"/other"}}"#)
+                .is_err()
+        );
+        let invalid: PersonalSettings =
+            serde_json::from_str(r#"{"rust":{"targets":["--config=bad"]}}"#).unwrap();
+        let before = fs::read(paths(&root, &data)[1].clone()).unwrap();
+        assert!(save(&root, &data, "", &invalid).is_err());
+        assert_eq!(fs::read(paths(&root, &data)[1].clone()).unwrap(), before);
     }
     #[test]
     fn removal_revokes_grant_even_with_invalid_project_settings() {

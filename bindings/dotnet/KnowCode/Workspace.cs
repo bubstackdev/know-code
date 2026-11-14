@@ -6,9 +6,12 @@ public sealed record WorkspaceOptions(string? Configuration = null, string? Data
 public sealed record IndexProgress(string Stage, string ProjectPath, string Message);
 public sealed record CSharpBuildContext(string? Configuration, string? SolutionPath);
 public sealed record NodePreparationPolicy(string CacheDirectory, bool AllowInstallScripts);
+public sealed record RustAnalysisPolicy(string[] Targets, string[] Features, bool? DefaultFeatures,
+    bool ExecutionAllowed, string CacheDirectory);
+public sealed record SwiftBuildContext(string? SchemePath, bool ExecutionAllowed = false, string CacheDirectory = "");
 public sealed record AnalysisSettings(CSharpBuildContext Csharp, NodePreparationPolicy Node,
     string ConfigurationOrigin, string SolutionOrigin, string ProjectFile, string PersonalFile,
-    bool ProjectExecutionAllowed = false);
+    bool ProjectExecutionAllowed = false, RustAnalysisPolicy? Rust = null, SwiftBuildContext? Swift = null);
 public sealed record WorkspaceStatus(string WorkspaceRoot, string Database, string Phase, ulong ObservedEpoch,
     ulong PublishedEpoch, ulong Generation, bool Available, string Error, IndexProgress? Progress, string OutcomeCode = "", AnalysisSettings? RequestedSettings = null);
 internal sealed record WorkspaceDescriptor(string DataDirectory, string? CoordinatorExecutable, WorkspaceStatus Status);

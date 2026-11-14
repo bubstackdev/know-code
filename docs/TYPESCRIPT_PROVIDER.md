@@ -1,6 +1,8 @@
 # TypeScript declaration identity and worker residency
 
-The adapter uses repository-selected TypeScript 5.9.x and the existing configured/inferred planning path. [Implementation scope](IMPLEMENTATION.md) still applies: a first explicitly partial call/impact slice is now implemented; see [supported forms and limits](CALL_GRAPH.md). The declaration/collection measurements below predate graph activation and do not include its added facts.
+Shipped 0.0.2 uses repository-selected TypeScript 5.9.x and the existing configured/inferred planning path. [Implementation scope](IMPLEMENTATION.md) still applies: a first explicitly partial call/impact slice is now implemented; see [supported forms and limits](CALL_GRAPH.md). The declaration/collection measurements below predate graph activation and do not include its added facts.
+
+Integration source for 0.0.3 accepts 5.9.x/6.0.x through the legacy API and exact native 7.0.2 through its unstable API. Focused worker checks and actual compiler→store→CLI/.NET/Node call/impact/source/save/error-repair checks pass; installed/release/performance acceptance remains pending. Native independent project links and generic dispatch remain explicitly unavailable/partial, and unsupported compiler origins fail without fallback. [Current evidence and boundaries](TYPESCRIPT_7_READINESS.md) distinguish this finite implementation from released support and from the separate TS7.1 beta API.
 
 Test-origin policy 1 adds inferred `.test`/`.spec`/`__tests__` evidence on owned source artifacts, with unknown compilation/default origins and exact worker acknowledgment. Owned module/initializer declaration anchors are additive; identities, calls and reference occurrences stay unchanged. See [adapter contract, snapshot behavior and focused checks](TYPESCRIPT_TEST_CLASSIFICATION.md); shared filters/backfill and final native/package validation remain common-core integration work.
 

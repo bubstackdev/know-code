@@ -80,17 +80,54 @@ def facts(messages):
     return symbols, occurrences, artifacts
 
 
-initial = invoke('initial')
+# Seed the previous layout/checkpoint with the actual selected toolchain identity.
+# A compatibility change must bypass its failed checkpoint and retain old bytes.
+legacy_probe = subprocess.run(['node', '--input-type=module', '-e', '''
+import path from 'node:path';
+import {hash} from './providers/swift/index.mjs';
+import {createToolchainResolver} from './providers/swift/toolchain.mjs';
+const project = process.argv[1], directory = path.dirname(project);
+const toolchain = createToolchainResolver({workspaceRoot:directory})(directory);
+console.log(JSON.stringify({fingerprint:hash(`fixture1:${toolchain.identity}:Debug:swiftpm-planner-v2`),
+  state:hash(`${project}:${toolchain.identity}:Debug`).slice(0,24)}));
+''', str(PACKAGE / 'Package.swift')], cwd=ROOT, env=ENV, capture_output=True, text=True, timeout=30)
+assert legacy_probe.returncode == 0, legacy_probe.stderr
+legacy = json.loads(legacy_probe.stdout)
+legacy_state = RUN / 'data/workers/swift/packages' / legacy['state']
+legacy_marker = legacy_state / 'owned-legacy-cache.bin'
+legacy_marker.parent.mkdir(parents=True)
+legacy_marker.write_bytes(b'preserve incompatible derived state')
+legacy_checkpoint = {'key': f'swiftpm:{PACKAGE / "Package.swift"}', 'fingerprint': legacy['fingerprint'],
+                     'succeeded': False, 'error': 'owned incompatible legacy preparation failure', 'outputs': []}
+initial = invoke('initial', preparations=[legacy_checkpoint])
 compilations = [message['compilation'] for message in initial if 'compilation' in message]
 reports = [message['report'] for message in initial if 'report' in message]
 assert len(compilations) == 3 and all(c['projectPath'] == 'Package.swift' for c in compilations), compilations
 assert {c['target'] for c in compilations} == {'First', 'Second', 'SecondTests-product'}
 assert all(report['status'] == 'complete' for report in reports), reports
+assert all(report['capabilities']['calls'] == 'partial' and report['capabilities']['dependencies'] == 'partial'
+           and report['capabilities']['project_links'] == 'unavailable' for report in reports)
 assert all(not c['inferred'] and json.loads(c['optionsJson'])['origin'] == 'swiftpm_build_server' for c in compilations)
 assert all(json.loads(c['optionsJson'])['jobs'] == 1 for c in compilations)
+for compilation in compilations:
+    target = compilation['target']
+    body, = [i for i, message in enumerate(initial) if message.get('progress', {}).get('stage') == 'analyzing'
+             and message['progress']['message'] == f'Indexing Swift source bodies for {target}']
+    reader, = [i for i, message in enumerate(initial) if message.get('progress', {}).get('stage') == 'analyzing'
+               and message['progress']['message'] == f'Reading compiler IndexStore records for {target}']
+    published, = [i for i, message in enumerate(initial) if message.get('compilation', {}).get('id') == compilation['id']]
+    assert body < reader < published, (target, body, reader, published)
 assert any('Package@swift-6.0.swift' in input_path for c in compilations for input_path in c['inputPaths'])
 preparations = [message['preparation'] for message in initial if 'preparation' in message]
 assert len(preparations) == 1 and preparations[0]['succeeded']
+assert preparations[0]['fingerprint'] != legacy_checkpoint['fingerprint']
+new_plan, = [Path(file) for file in preparations[0]['outputs'] if file.endswith('/dependency-plan.json')]
+assert new_plan.parent != legacy_state and new_plan.is_file()
+assert legacy_marker.read_bytes() == b'preserve incompatible derived state'
+initial_ids = {compilation['id'] for compilation in compilations}
+warm = invoke('warm-compatible-state', preparations=preparations)
+assert not any('preparation' in message for message in warm), 'warm compatible state repeated restoration'
+assert {message['compilation']['id'] for message in warm if 'compilation' in message} == initial_ids
 symbols, occurrences, artifacts = facts(initial)
 assert any(s['name'] == 'greet(_:)' and not s['external'] for s in symbols.values())
 assert any(s['name'] == 'ExternalBox' and s['external'] for s in symbols.values())
@@ -120,6 +157,7 @@ write(PACKAGE / 'Sources/Second/Second.swift', SECOND)
 repaired = invoke('repaired', preparations=preparations)
 assert all(message['report']['status'] == 'complete' for message in repaired if 'report' in message)
 assert not any('preparation' in message for message in repaired)
+assert {message['compilation']['id'] for message in repaired if 'compilation' in message} == initial_ids
 # Compiler-reported missing modules must not leak stale prepared module bindings.
 assert any(s['name'] == 'call()' for s in facts(repaired)[0].values())
 # The preferred Xcode context must keep real toolchain macros available on a
@@ -195,11 +233,15 @@ if(await extensionRequest(modern,'buildTarget/prepare',{})!==7 || methods.length
 subprocess.run(['node', '--input-type=module', '-e', protocol_test], cwd=ROOT, env=ENV, check=True, timeout=15)
 assert not any((RUN / 'data/workers/swift').glob('job-*')), 'per-job indexes/spools must be reclaimed'
 assert hashlib.sha256(READER.read_bytes()).hexdigest() == reader_sha256, 'test changed the built reader'
+assert legacy_marker.read_bytes() == b'preserve incompatible derived state'
 summary = {'passed': True, 'run': str(RUN), 'profile': PROFILE, 'reader_sha256': reader_sha256,
            'targets': [c['target'] for c in compilations], 'initial_symbols': len(symbols),
            'initial_occurrences': len(occurrences), 'source_artifacts': len(artifacts),
            'module_only_preparation': True, 'dependency_sources_indexed': False,
            'source_save_dependency_checkpoint_reused': True, 'external_plugin_executed': False}
+summary['legacy_failed_checkpoint_bypassed_and_tree_retained'] = True
+summary['compatible_warm_and_saved_context_ids_stable'] = True
+summary['compiler_and_reader_progress_marked_analyzing'] = True
 summary['toolchain_selection'] = selection
 summary['xcode_testing_macros_saved_update'] = bool(selection['xcodeVersion'])
 (RUN / 'summary.json').write_text(json.dumps(summary, indent=2))

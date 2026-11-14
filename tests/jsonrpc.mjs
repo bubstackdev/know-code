@@ -33,6 +33,7 @@ process.stdin.on('data', chunk => {
       continue;
     }
     if (mode === 'hang') continue;
+    if (mode === 'delayed') { setTimeout(() => process.stdout.write(frame({id:message.id,result:message.params})), 150); continue; }
     if (mode === 'slow-reader') { process.stdout.write(frame({id:message.id,result:message.params.number})); continue; }
     if (mode === 'exit') process.exit(7);
     if (mode === 'rpc-error') { process.stdout.write(frame({id:message.id,error:{code:-32601,message:'Method not found',data:{method:message.method}}})); continue; }
@@ -121,15 +122,48 @@ checks.push('RPC error preserves code and data');
 for (const [mode,pattern] of [['exit',/exited \(7\)/], ['truncated',/exited/],
   ['zero',/invalid\/oversized/], ['oversized',/invalid\/oversized/],
   ['large-header',/oversized JSON-RPC header/], ['bad-json',/JSON|Unexpected|Expected/]]) {
-  await withChild(mode, async rpc => { await assert.rejects(rpc.request('start', {}), pattern); });
+  await withChild(mode, async rpc => {
+    await assert.rejects(rpc.request('start', {}), error => {
+      assert.match(error.message, pattern);
+      if (mode === 'exit' || mode === 'truncated') {
+        assert.deepEqual(error.processExit, {code: mode === 'exit' ? 7 : 0, signal: null});
+      } else assert.equal(error.processExit, undefined);
+      return true;
+    });
+    assert.equal(rpc.receivedBytes === 0, mode === 'exit');
+  });
   checks.push(mode);
 }
 
 await withChild('hang', async (rpc, exit) => {
-  await assert.rejects(rpc.request('never', {}), /timed out: never/);
+  const results = await Promise.allSettled([rpc.request('never', {}), rpc.request('concurrent', {})]);
+  assert.ok(results.every(result => result.status === 'rejected'));
+  const error = results[0].reason;
+  assert.match(error.message, /timed out: never/);
+  assert.equal(error.processExit, undefined);
+  assert.equal(results[1].reason, error);
+  assert.equal(rpc.pending.size, 0);
+  assert.equal(rpc.failure, error);
   await exit;
+  assert.equal(rpc.failure, error);
+  assert.equal(error.processExit, undefined);
+  await assert.rejects(rpc.request('after-exit', {}), rejected => rejected === error);
 }, {timeout:100});
-checks.push('request timeout terminates child');
+checks.push('request timeout fails all pending and preserves its cause after child exit');
+
+await withChild('delayed', async (rpc, exit) => {
+  assert.equal(rpc.timeout, 50);
+  assert.deepEqual(await rpc.request('longer-override', {accepted:true}, {timeout:1000}), {accepted:true});
+  assert.equal(rpc.timeout, 50);
+  await assert.rejects(rpc.request('default-deadline', {}), error => {
+    assert.match(error.message, /timed out: default-deadline/);
+    assert.equal(error, rpc.failure);
+    return true;
+  });
+  await exit;
+  assert.match(rpc.failure.message, /timed out: default-deadline/);
+}, {timeout:50});
+checks.push('per-request deadline override leaves the default deadline and causal failure unchanged');
 
 await withChild('hang', async rpc => {
   await assert.rejects(rpc.request('too-large', {text:'x'.repeat(8*1024*1024)}), /outgoing JSON-RPC frame exceeds/);
