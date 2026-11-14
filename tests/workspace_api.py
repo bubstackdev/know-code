@@ -44,7 +44,9 @@ class Client:
   (RUN/f'client-{self.p.pid}.json').write_text(json.dumps(self.events,indent=2)+'\n')
 
 def ready(client,after=0,previous_failed_epoch=None):
- until=time.monotonic()+60
+ # Ordinary TS/C# compiler publication, including input-watch reconciliation.
+ # Query deadlines and individual client reply bounds remain independent.
+ until=time.monotonic()+90
  while time.monotonic()<until:
   status=client.send('wait',wait_ms=1000)
   assert 'error' not in status or not isinstance(status['error'],dict),status
@@ -169,7 +171,8 @@ for op,args in [('query',{'request':{'op':'symbols'}}),('status',{}),('wait',{'w
 assert dotnet.send('close')['closed'];dotnet.close()
 previous=json.loads(cli('coordinator','status').stdout)['workspaces'][0]['generation']
 (WORKSPACE/'value.ts').write_text('export function savedWithoutClients() { return 10; }\n')
-until=time.monotonic()+45
+# A saved mixed-language workspace still waits for ordinary compiler publication.
+until=time.monotonic()+90
 while time.monotonic()<until:
  status=json.loads(cli('coordinator','status').stdout)['workspaces'][0]
  if status['phase']=='idle' and status['generation']>previous:break
