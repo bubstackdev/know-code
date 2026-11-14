@@ -942,3 +942,36 @@ ran. Exact Swift version and guest free space remain unknown. Sparse disk
 allocation is not guest free-space evidence, and no resource-pressure cause
 has been established. A source-reviewed Tart `--net-fd` discard-only socket
 supervisor is prepared for a separately named isolation gate; it has not run.
+
+
+### Signed installed gate and separate image preparation
+
+Fresh `candidate-installed-offline-rust-03` passed all 36 checks in 487.18
+seconds, using signed common stage `signed-01` and new outside-checkout prefix
+`/Users/zakkeown/Code/.kco/.artifacts/p003-03`. Its result explicitly certifies
+TypeScript, C# and Rust; Swift was not selected. This includes exact TS 6.0.2
+and native 7.0.2, CLI/Node/.NET graph/source parity, Rust MCP, saved compiler
+error/repair, offline/checkout exclusion controls, runtime relocation, npm 10
+policy and damaged/missing resource checks. Final generation is 10. Neither
+failed attempt 01 nor 02 is reclassified as passing. Read-only inspection of
+both retained failed indexes later found published Rust normal/test contexts;
+that supports available Rust facts, not a completed installed gate or a timing
+claim (`installed-rust-timing-01/findings.json`).
+
+Common and separate bridge images now each pass preparation, Developer ID
+signing and read-only mounted verification against their authenticated
+archives/native inventories (`candidate-{common,bridge}-image-*-01`). The
+shared operator preserves four common native items; the bridge adapter
+preserves exactly two and its full pinned runtime inventory. Public bridge
+proof copies have the accepted prefixes; image-internal proof bytes stay
+unchanged. These are local candidate images, not published or notarized
+artifacts, and installed Xcode qualification is a separate run.
+
+The first common Apple notarization submission was rejected before returning
+any submission ID: the developer team has an unaccepted or expired agreement.
+The Account Holder must resolve that in App Store Connect. The raw CLI receipt
+is retained locally under `common-dmg-01/evidence/notary-submit.*`; temporary
+URLs/credentials are not public assets. No automatic resubmission is allowed
+after the marker, and no bridge submission occurred. The user was asked to
+signal acceptance; other independent gates continue. This is Apple's account
+prerequisite, not a sandbox/automatic-approval rejection.
