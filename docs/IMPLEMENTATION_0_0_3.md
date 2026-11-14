@@ -792,3 +792,130 @@ new package/compiler/Xcode installation modes have not run. The next bridge
 build must record its builder digest before compilation; the old build-02
 record is deliberately not retrofitted. Signing, notarization, installed,
 upgrade/rollback and final platform evidence remain pending.
+
+## Registration liveness fix and initial Release preflight
+
+`649d039` separates the tiny cursor enrollment fence from retention/cache state,
+so registration can clear that fence while maintenance holds the latter lock.
+Coordinator enrollment ordering remains under the existing workspace lock;
+unregister's pre-existing maintenance wait is unchanged. Peer review found no
+inverse lock ordering. Ordinary cursor queries already use deadline-aware state
+acquisition; this change does not raise deadlines or refactor retention.
+The short trace did not reproduce attempt 09, so its exact cause remains
+unconfirmed. The deterministic real-control regression holds maintenance and
+checks registration plus sibling status/cancel/resource requests at the existing
+500-ms budget.
+
+The regression's first run failed its final cancellation assertion because the
+fixture used an unmanaged `Control::default()` handle. `c7a47e6` supplies a real
+managed job instead; the complete regression then passes. All 21 existing
+cursor service tests, formatting and strict Clippy also pass. The original
+failed fixture receipt is retained, not promoted.
+
+The first required Release core run stopped at a stale cursor-peer positive
+fixture lacking current settings/resource versions. `1e96cce` corrects that
+fixture and isolates cursor-version rejection from unrelated incompatibilities;
+production compatibility guards are unchanged. The second core attempt found
+a raw test-lock/fork interaction: closing the fixture's descriptor could leave
+its lock held by a parallel pre-exec fork. `3ba4869` explicitly unlocks the
+fixture before malformed-policy assertions. Production `HeldLock` already
+does this. All nine admission regressions and then the complete optimized Rust
+workspace pass: **290 passed, two existing manual helpers ignored**. Formatting
+and strict Clippy pass on that source. Both stopped core runs remain failed;
+fresh matching artifacts and the complete core gate still follow.
+
+The separate bridge build-03 passes with 200 staged files/95,015,745 logical
+bytes and a pre-compilation builder digest. Signing-03 also passes: exactly two
+native transformations, preserved resources/modes, signed inventory and the
+pinned Developer ID certificate. The compressed archive SHA-256 is
+`636806ff6a9604c8bcd2a97dd4e030ed1b20da33f26f3680301069d6b9d5c4bd`.
+It remains **not notarized or installed-qualified**; its separate DMG and actual
+installed Xcode gate have not run.
+
+Evidence: `wave-01/{cursor-enrollment-control-release-01,cursor-enrollment-control-release-02,cursor-service-release-01,candidate-release-core-01,candidate-release-core-02,cursor-peer-contract-release-01,admission-release-01,candidate-rust-release-01,candidate-format-03,candidate-clippy-03,bridge-producer-build-03,bridge-signing-03}/`,
+plus `.artifacts/xcode-tooling/{build-03,signed-03}/`.
+
+The source-matched optimized producer is now
+`99cad771bd0f4385b5c9ee0b40665a64` at `3ba4869`. The complete required Release
+core gate passes all 27 selected checks in 443 seconds. The six relevant
+language checks also pass in 262 seconds using the exact signed bridge-03,
+including all 17 device/simulator integration checks and the four-language
+native workflow. Exact TS6.0.2 semantics and native TS7.0.2 stored graph/source/
+save/error/no-fallback checks pass separately. Receipts are
+`wave-01/{candidate-release-core-03,candidate-release-language-consumers-01,candidate-typescript-60-semantic-01,candidate-native-typescript-release-01}/`.
+
+Owned Atelier attempt 10 is running on this Release producer with a private
+PATH selecting the actual signed bridge-03 runtime. Registration has succeeded
+and source analysis is progressing. Its first current publication and saved
+restoration remain pending; earlier corpus failures are unchanged. Common
+archive assembly, final installation and distribution gates remain separate.
+
+The common three archives subsequently assemble with no unresolved license
+evidence (`wave-01/candidate-packages-01/`) and pass signing verification
+(`wave-01/candidate-common-signing-01/`, signed manifest SHA-256
+`ac7fc4402b6611433af5f2764e7a3fc65c1035a6744635c3678718951b2dc5b7`).
+They remain not notarized or installed-qualified.
+
+Attempt 10 publishes generation 18 for epoch 6, then reconciles epoch 7.
+Read-only investigation found 80 newly enrolled, existing SDK interface files
+(36 macOS, 22 device, 22 simulator) absent from the acknowledged 1,544-path
+before-manifest. None is under the central cache, and the recorded before paths
+had no observed metadata changes/missing files. `execute()` deliberately omits
+serving-index compiler extras for a cancellation baseline or prior cancelled
+outcome; that explains why a post-cancellation run can need one broad
+membership-reconciliation pass even if serving facts already knew those SDK
+files. The packet does not prove which extras generation 16 contained, nor
+guarantee future convergence. Actual source: `coordinator.rs`'s cancellation
+extra-input selection and `JobOutput` before/after enrollment rule.
+Evidence: `saved-xcode-qualification-10/sdk-input-enrollment-01.json`, SHA-256
+`50dcc37bef3a6ac1a8dd74e7d7fd0e22cc4c277d387f43f3597a1a8806e2d28b`.
+No guard was removed or release telemetry added. Attempt 10 subsequently
+converged; its final result and cleanup are recorded below.
+
+
+### Frozen candidate: corpus pass and installed sandbox boundary
+
+The optimized producer remains source `3ba4869d2b5f94b414e666cdbefbe97acae011bb`,
+build ID `99cad771bd0f4385b5c9ee0b40665a64`. The full required Release core
+run (`candidate-release-core-03`) passed all 27 checks; the six relevant
+language/consumer checks, exact TypeScript 6.0.2 semantics, native TypeScript
+7.0.2 graph checks, 290 Rust tests (two existing manual helpers ignored),
+formatting and strict workspace Clippy also passed. Earlier failed core
+attempts remain failed receipts, with scoped fixture corrections documented
+above.
+
+The owned Atelier attempt 10 passed in 1,952.71 seconds. It reached current
+generation 19, then current generation 20 after automatic saved-source
+restoration. Exact caller/callee/impact and UTF-8 source evidence remained
+stable across SwiftPM, iPhone device and simulator contexts. Its 105 coverage
+rows were 89 complete and 16 partial; graph capabilities remain explicitly
+partial. This is warm retained-index qualification, not a cold full-index,
+performance or video-encoding certification. The separate
+`saved-xcode-qualification-10/cleanup-verification.json` confirms original
+source bytes/mode/mtime restored, two CPU cores/2 GiB restored, writer lock
+free and the owned coordinator stopped.
+
+The first signed installed/offline attempt (`candidate-installed-offline-01`,
+outside-checkout prefix `p003-01`) **failed** during SwiftPM manifest loading:
+`sandbox-exec: sandbox_apply: Operation not permitted`. Earlier checks in that
+process do not constitute a completed installed gate. No SwiftPM sandbox
+bypass, manifest priming or serving-index preseed was applied.
+
+Two benign `/usr/bin/true` controls isolate the boundary. Nested allow-default
+policies succeed; adding an outer denial for an unrelated nonexistent file,
+network access, or the checkout makes the inner sandbox application fail with
+exit 71. The first control's assertion assumed all nesting failed and was
+itself wrong; its retained failure is not a product result. Actual outcomes
+are in `nested-sandbox-control-01/result.json` and
+`nested-sandbox-control-02/result.json`. This establishes a composition problem
+with the host validation policy, rather than a general inability to nest
+sandbox profiles. SwiftPM must retain its own manifest sandbox.
+
+Continue the independently selectable installed Rust/TS/C# gate under the
+existing host protection. SwiftPM requires a separately identified isolation
+gate with genuine checkout/network exclusion, not a relaxed run reported as
+the original host gate. Signed common archives and separate signed bridge
+archives are prepared; DMG, notarization, installed Xcode, actual previous
+release upgrade and macOS 15 final-artifact gates remain pending. The user
+selected separate bridge download and DMG; Swift compiler batching remains
+deferred until packaging gates.
