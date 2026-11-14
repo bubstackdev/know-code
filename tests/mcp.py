@@ -23,7 +23,8 @@ def cli(*args,check=True):
 
 def status():return json.loads(cli('coordinator','status').stdout)['workspaces'][0]
 def ready(minimum=1):
- until=time.monotonic()+45;last=None
+ # Match the ordinary compiler-publication allowance used by the other host fixtures.
+ until=time.monotonic()+90;last=None
  while time.monotonic()<until:
   last=status()
   if last['phase']=='idle' and not last['error'] and last['published_epoch']==last['observed_epoch'] and last['generation']>=minimum:return last

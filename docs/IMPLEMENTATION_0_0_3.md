@@ -1084,3 +1084,35 @@ root cause was not established. One diagnostic helper reused its output name;
 the first failed observation's reported fields were recovered from the retained
 tool response with that limitation explicit in `health-receipt-recovery.json`.
 Future observations use timestamped paths. No failed release gate was relabeled.
+
+
+### Enrollment fix qualification and segmented core checkpoint
+
+The three new release enrollment regressions passed (1.31 seconds of test
+execution, 130.33 seconds including compilation), all 19 existing/new control
+unit cases passed, and strict all-target workspace Clippy/formatting passed.
+Matching release build 04 completed at source
+`d106de54d200194ede2cf1beb601ed730404fea5`, build ID
+`e0883d2733e14f009216f55dfe614fc6`. Fresh packages/signatures are under
+`packages-02` / `signed-02`; signed manifest SHA-256
+`ee6a35ee2670347450ec90f94674f1b0df39a805e577e69f8c544dee23a606de`,
+producer SHA-256
+`1e4fb8f7fc7c25f21dfd03c10dfaae3cd465ee18053bdf14d084f8b45a8c3bdf`.
+The new common image is signed and mounted-verified, not yet notarized.
+
+`candidate-release-core-04` remains **failed** after 892.48 seconds: 15 check
+families passed, then MCP's 45-second compiler-publication wait expired while
+C# SDK assembly-identity evaluation was still running for a later epoch.
+There was a usable prior generation, no compiler error, and no reported
+registration failure. The MCP harness readiness allowance now matches the
+other ordinary host fixtures at 90 seconds; compiler, RPC, query, cancellation
+and transport deadlines are unchanged. This is a test-only change and does
+not change the producer's compiled/package inputs.
+
+Focused `candidate-release-mcp-05` passed its 37 MCP cases (135.35 seconds
+including runner/provenance checks; named check 126 seconds). The remaining
+11 core families are scheduled separately against the same exact producer.
+A passing suffix must not relabel failed full run 04 as uninterrupted success.
+Report a segmented checkpoint only when every selected family and the final
+producer verification have actually passed. Existing unchanged provider/corpus
+receipts retain their original artifact/source boundaries.
