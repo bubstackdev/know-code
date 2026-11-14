@@ -312,3 +312,32 @@ and actual installed device/simulator indexing outside the checkout, using the
 existing installed Xcode fixture and authenticated stage. Keep the bridge
 installation explicit and separate from the common runtime. No execution or
 successful notarization/platform/installation claim accompanies this recipe.
+
+
+## 0.0.3 bridge assets in the shared release
+
+On 2026-11-13 the user selected one GitHub 0.0.3 release containing the common
+runtime and the separate bridge downloads/DMGs. The bridge's public proof
+files use the following names to avoid collisions with common assets:
+
+- `xcode-bridge-manifest.json` and `xcode-bridge-manifest.cms`
+- `xcode-bridge-signing-transform.json` and `xcode-bridge-build-record.json`
+- `xcode-bridge-notarization-log.json`
+- `xcode-bridge-release-index.json` and `xcode-bridge-release-index.cms`
+- `xcode-bridge-SHA256SUMS`
+
+The bridge TAR and DMG retain their recipe-specific names. The image's `proof/`
+files retain the original generic names and exactly the authenticated signing
+bytes. The separate outer index inventories actual public filenames and hashes;
+its own bytes/signature are excluded from that inventory. For existing strict
+CMS verification, copy the exact outer index and signature into a new evidence
+directory as `manifest.json` and `manifest.cms`; do not edit either content.
+The original signed stage and local unsigned replay proof remain unchanged.
+
+The retained 0.0.2 operator is adapted under
+`.artifacts/implementation-0.0.3/drivers/`: a common 0.0.3 operator and a narrow
+bridge preparation adapter share image, native, Apple-log and CMS verification.
+Pure/static checks passed 27 cases with OS subprocess execution blocked. That
+is tooling evidence only; it does not certify image creation, notarization or
+installation. Actual executions and failed attempts belong in the 0.0.3
+implementation ledger and artifact-bound receipts.
