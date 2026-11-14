@@ -2,6 +2,13 @@
 
 Started 2026-11-12 after the user approved implementation with TypeScript compatibility leading, Swift/Xcode and Rust in parallel, estate search conditional, and one validation owner. [Scope and accepted decisions](RELEASE_0_0_3_AUDIT.md) remain the requirement reference. This is a work ledger, not a release-readiness claim or publication authorization.
 
+Latest checkpoint: [candidate handoff](RELEASE_0_0_3_HANDOFF.md). Final common
+source `d106de5` and independent bridge are signed/notarized, with current-host
+installed, lifecycle, upgrade, native and segmented core evidence complete.
+VM testing was explicitly removed; SwiftPM strict outer-denial and real encoding
+performance are not claimed. The candidate remains unpublished. Earlier entries
+below are chronological observations, including superseded candidates and failures.
+
 ## Ownership and first checkpoints
 
 | Lane | Owned implementation | First reviewable checkpoint |
