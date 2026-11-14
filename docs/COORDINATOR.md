@@ -14,6 +14,13 @@ target/debug/know-code coordinator stop
 
 `watch` durably registers a workspace and starts the coordinator when necessary. `index` requests an explicit full refresh through that same coordinator. The client exits independently; the coordinator continues watching and indexing with zero consumers. `unwatch` removes registration/settings and stops monitoring; derived index files are currently retained for explicit future cleanup. `stop` drains the active job and exits. The development executable locates workers in its build checkout.
 
+Registration and refresh acknowledgements use one five-second deadline across
+socket connection, request writing and response reads. First enrollment can
+create and sync an index family before acknowledging. Expiry returns typed
+`deadline_exceeded`; it does not cancel or automatically repeat the mutation.
+Inspect workspace status before deciding whether another request is needed.
+Startup/version probes and ordinary query budgets retain their existing limits.
+
 The default per-user data root is `~/Library/Application Support/Know Code/`. `KNOW_CODE_DATA_DIR` can isolate development/tests. The root contains `registry.db`, `coordinator.lock`, `c.sock`, and per-workspace indexes. The socket must fit macOS's Unix-socket path limit; a too-long override returns an actionable startup error. No socket/state is placed in temporary storage.
 
 ## Ownership and control

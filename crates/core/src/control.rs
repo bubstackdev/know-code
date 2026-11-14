@@ -432,6 +432,24 @@ fn request_with_timeout(
     socket.set_read_timeout(Some(Duration::from_millis(u64::from(timeout.max(1)))))?;
     exchange(&mut socket, request)
 }
+// Durable enrollment may create and sync a new index family before replying.
+// One deadline covers connect, write and every response frame read; extending
+// each individual socket read would let a trickling reply renew the budget.
+fn request_with_deadline(
+    root: &Path,
+    request: ControlRequest,
+    execution: crate::execution::Execution,
+) -> Result<ControlResponse> {
+    let result = (|| {
+        let stream = crate::execution::connect(&socket_path(root), execution.clone())?;
+        exchange(
+            &mut crate::execution::TimedStream::new(stream, execution.clone())?,
+            request,
+        )
+    })();
+    execution.check()?;
+    result
+}
 fn exchange(
     socket: &mut (impl std::io::Read + std::io::Write),
     request: ControlRequest,
@@ -734,7 +752,22 @@ fn request_one(
         ensure_running(data, executable)?;
         require_analysis_settings(data)?;
     }
-    let response = match request(data, value.clone()) {
+    let enrollment = matches!(value.operation.as_str(), "register" | "refresh")
+        .then(|| {
+            crate::execution::Execution::new(
+                Default::default(),
+                Some(crate::execution::DEFAULT_DEADLINE_MS),
+            )
+        })
+        .transpose()?;
+    let send = |value: ControlRequest| {
+        if let Some(execution) = &enrollment {
+            request_with_deadline(data, value, execution.clone())
+        } else {
+            request(data, value)
+        }
+    };
+    let response = match send(value.clone()) {
         Err(Error::Io(error))
             if matches!(
                 error.kind(),
@@ -742,7 +775,7 @@ fn request_one(
             ) =>
         {
             ensure_running(data, executable)?;
-            request(data, value)?
+            send(value)?
         }
         result => result?,
     };
@@ -1420,6 +1453,168 @@ mod activity_tests {
             ));
         std::fs::create_dir_all(&path).unwrap();
         path
+    }
+    fn enrollment_peer(
+        listener: UnixListener,
+        workspace: PathBuf,
+        mode: &'static str,
+    ) -> std::thread::JoinHandle<Vec<String>> {
+        use std::io::Write;
+        listener.set_nonblocking(true).unwrap();
+        std::thread::spawn(move || {
+            let mut operations = Vec::new();
+            for index in 0..3 {
+                let until = Instant::now() + Duration::from_secs(5);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(peer) => break peer,
+                        Err(error)
+                            if error.kind() == ErrorKind::WouldBlock && Instant::now() < until =>
+                        {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("control fixture accept failed: {error}"),
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
+                let Some(envelope::Payload::ControlRequest(request)) = frame.payload else {
+                    panic!("expected control request")
+                };
+                if index < 2 {
+                    assert_eq!(request.operation, "status");
+                } else {
+                    assert!(matches!(request.operation.as_str(), "register" | "refresh"));
+                    if mode == "delayed" {
+                        std::thread::sleep(Duration::from_millis(650));
+                    }
+                }
+                operations.push(request.operation);
+                if index == 2 && mode == "malformed" {
+                    stream.write_all(&[0; 4]).unwrap();
+                } else {
+                    // Ignore a peer-close here so a regression is reported by
+                    // the actual client error, not a fixture write panic.
+                    let _ = protocol::write_frame(
+                        &mut stream,
+                        &Envelope {
+                            protocol_version: VERSION + u32::from(index == 2 && mode == "version"),
+                            payload: Some(envelope::Payload::ControlResponse(ControlResponse {
+                                resource_control_version: crate::resource::CONTROL_VERSION,
+                                index_lifecycle_version: protocol::INDEX_LIFECYCLE_VERSION,
+                                analysis_settings_version: crate::settings::VERSION,
+                                workspaces: vec![WorkspaceStatus {
+                                    workspace_root: workspace.to_string_lossy().into_owned(),
+                                    generation: 42,
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            assert_eq!(listener.accept().unwrap_err().kind(), ErrorKind::WouldBlock);
+            operations
+        })
+    }
+    #[test]
+    fn enrollment_waits_for_one_durable_ack_after_fast_startup_probes() {
+        for refresh in [false, true] {
+            let root = root();
+            let workspace = root.join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            let listener = UnixListener::bind(socket_path(&root)).unwrap();
+            let server = enrollment_peer(listener, workspace.clone(), "delayed");
+            let result = attach_workspace(
+                &root,
+                &workspace,
+                "Release".into(),
+                refresh,
+                Some(Path::new("/must-not-start-coordinator")),
+            );
+            let operations = server.join().unwrap();
+            assert_eq!(
+                operations,
+                [
+                    "status",
+                    "status",
+                    if refresh { "refresh" } else { "register" }
+                ]
+            );
+            let status = result.unwrap();
+            assert_eq!(status.workspace_root, workspace.to_string_lossy());
+            assert_eq!(status.generation, 42);
+        }
+    }
+    #[test]
+    fn enrollment_deadline_spans_an_incomplete_frame_and_is_typed() {
+        use std::io::Write;
+        for operation in ["register", "refresh"] {
+            let root = root();
+            let listener = UnixListener::bind(socket_path(&root)).unwrap();
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                let frame = protocol::read_frame(&mut stream).unwrap().unwrap();
+                let Some(envelope::Payload::ControlRequest(request)) = frame.payload else {
+                    panic!("expected control request")
+                };
+                // Start a frame, then retain the connection until the caller
+                // returns: EOF or renewed per-read timeouts cannot pass.
+                let _ = stream.write_all(&[1]);
+                let _ = held.recv_timeout(Duration::from_secs(2));
+                request.operation
+            });
+            let started = Instant::now();
+            let result = request_with_deadline(
+                &root,
+                ControlRequest {
+                    operation: operation.into(),
+                    ..Default::default()
+                },
+                crate::execution::Execution::new(Default::default(), Some(100)).unwrap(),
+            );
+            let elapsed = started.elapsed();
+            drop(release);
+            assert_eq!(server.join().unwrap(), operation);
+            assert!(matches!(result, Err(Error::DeadlineExceeded)), "{result:?}");
+            assert!(elapsed < Duration::from_secs(2));
+        }
+    }
+    #[test]
+    fn enrollment_rejects_malformed_and_incompatible_acks_without_retries() {
+        for mode in ["malformed", "version"] {
+            let root = root();
+            let workspace = root.join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            let listener = UnixListener::bind(socket_path(&root)).unwrap();
+            let server = enrollment_peer(listener, workspace.clone(), mode);
+            let result = attach_workspace(
+                &root,
+                &workspace,
+                String::new(),
+                false,
+                Some(Path::new("/must-not-start-coordinator")),
+            );
+            assert_eq!(server.join().unwrap(), ["status", "status", "register"]);
+            if mode == "version" {
+                assert!(
+                    matches!(result, Err(Error::UpdateRequired(_))),
+                    "{result:?}"
+                );
+            } else {
+                assert!(matches!(result, Err(Error::Protocol(_))), "{result:?}");
+            }
+        }
     }
     #[test]
     fn controlled_wait_reads_capable_peer_and_caps_server_wait() {
