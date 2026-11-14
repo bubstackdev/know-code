@@ -1059,3 +1059,28 @@ bridge bytes remain unchanged. No old receipt certifies the changed core.
 The user observed the diagnostic VM progress from black screen to Apple logo
 and desktop; SSH still timed out, so no guest failure cause or candidate
 qualification is inferred. The bounded console session stopped gracefully.
+
+
+### Accepted validation scope change: no VM gate for 0.0.3
+
+The user explicitly removed VM testing from this release: “Take the VM out of
+scope, too big a PITA.” All VM runs are stopped; do not resume this work as a
+release requirement. Keep the diagnostic artifacts and unexecuted operator
+sources as research, with no candidate first-use/SwiftPM qualification claim.
+The distribution floor remains macOS 15+ Apple Silicon, but 0.0.3 is qualified
+on the current host and must disclose that macOS 15 was not retested. This
+supersedes the earlier pending VM gate in this ledger/audit. It does not waive
+remaining current-host installation, language, native or upgrade checks, and
+it does not convert prior failed host SwiftPM sandbox checks into passes.
+
+During the last diagnostic session the user saw the desktop, confirmed guest
+IP 192.168.128.4 and Remote Login enabled. A direct probe received an OpenSSH
+9.9 banner, then the existing SSH helper collected macOS 15.7.7/ARM64, CLT
+16.4.0.0.1.1747106510, four GiB RAM and 15,713,836 KiB free before the console
+session's bounded shutdown. The remaining metadata probe timed out; no Swift
+compiler version or candidate code was qualified. The helper uses its first
+IP argument correctly and has no proxy or hostname override. Boot/network
+root cause was not established. One diagnostic helper reused its output name;
+the first failed observation's reported fields were recovered from the retained
+tool response with that limitation explicit in `health-receipt-recovery.json`.
+Future observations use timestamped paths. No failed release gate was relabeled.

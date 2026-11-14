@@ -82,6 +82,12 @@ approved real-HOME lifecycle/security workflow remain separate existing gates.
 No generic installer test that repurposes HOME is added. Encoding performance
 remains explicitly deferred; this policy does not manufacture a passing result.
 
+For 0.0.3, the user explicitly removed VM testing from scope on 2026-11-13.
+Run the remaining applicable gates on the current host; do not relaunch a VM
+or report a macOS 15 candidate pass. The accepted macOS 15+ distribution floor
+remains, with this release's lack of retesting disclosed. Historical 0.0.2 VM
+receipts remain evidence for that release only.
+
 Observed Debug work was about 1,013 seconds to the failed resources fixture and
 409 seconds for a later suffix after focused repair. Those are segmented costs,
 not an uninterrupted green suite. Ten npm/pnpm cells dominate profile-independent

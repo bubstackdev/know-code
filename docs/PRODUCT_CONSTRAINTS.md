@@ -90,3 +90,5 @@ support or arbitrary compiler-input coverage.
 
 - On 2026-11-13 the user approved adoption of the pinned SwiftBuild/BSP bridge as a separately installed optional Xcode-only prerequisite after protected real device/simulator and stored native-query evidence. This supersedes earlier undecided-adoption statements; production integration and release qualification remain pending. Preserve the common core and ordinary shared preparation, scheduling and resource controls.
 - The optional Xcode bridge has a separate download and DMG, explicitly selected on 2026-11-13. Keep its payload out of the main runtime download, retain separate signing/notarization and installed qualification, and do not install it automatically for other language workflows.
+
+- On 2026-11-13 the user explicitly removed VM testing from v0.0.3 scope after the macOS 15 diagnostics. Do not restart or require a VM gate for this release. Qualify the candidate on the current host and disclose that macOS 15 was not retested; this does not change the accepted macOS 15+ Apple Silicon distribution floor or create a passing VM result.
