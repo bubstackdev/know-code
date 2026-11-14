@@ -975,3 +975,87 @@ URLs/credentials are not public assets. No automatic resubmission is allowed
 after the marker, and no bridge submission occurred. The user was asked to
 signal acceptance; other independent gates continue. This is Apple's account
 prerequisite, not a sandbox/automatic-approval rejection.
+
+
+### Installed Xcode and finalized notarized images
+
+`candidate-installed-xcode-01` passed all 17 existing integration checks in
+378.53 seconds, using the signed outside-checkout common install and separate
+bridge under checkout/network denial. Its fresh owned device/simulator graphs,
+CLI/Node/.NET parity, saved edits, compiler/source/PBX error recovery and
+cancellation checks pass. The final result is
+`/Users/zakkeown/Code/.kco/.artifacts/x003-01/summary.json`. This certifies the
+finite current-host installed integration, not whole-language completeness,
+encoding performance or older-Xcode compatibility.
+
+After the user reported agreement acceptance, the immediate Apple retry still
+failed with the same prerequisite. A later read-only submission listing worked
+and contained no 0.0.3 jobs; attempt 03 submitted each image once. Both are
+Accepted, with raw logs matched to the actual pre-staple image SHA-256 and all
+required native CDHashes/ARM64 architectures:
+
+| Candidate | Apple submission | Final stapled DMG SHA-256 | Outer index SHA-256 |
+| --- | --- | --- | --- |
+| Common | `70fbffbe-7efd-4cb3-b6a8-52e71fd3c938` | `37e572bb0b9caad2bf1c26314ef8ce8cce2a0ee218727f98b0488048b90dc0c5` | `e1a70ad15b442f07ebcdb959998292dbe0c7f155aaed81e4c1802fef9204b4af` |
+| Bridge | `7b7101b4-0b2e-4f1d-a5e9-cdbcca3f3174` | `1671c7e5239b1f3a3538caa0736f5c3d0ce1715c82c44eb058df8172358e6241` | `a0c048d243f028334aa7be8f39f23a011db224cc3ca2264dd5e85793b2dde677` |
+
+The common ASC staple wrapper returned failure after Apple's stapler reported
+success, saying the target changed. Preserve that failed wrapper receipt.
+Read-only ticket validation and the existing post-staple mounted inventory,
+image signature and native-CDHash checks subsequently passed. The bridge used
+Apple's `xcrun stapler` directly, followed by those same strict post-staple
+checks. Both images then passed the existing shared finalizer and strict outer
+CMS verification. The inner signing manifests remain unchanged and truthfully
+say `not_performed` for their earlier stage; the outer indexes certify the
+later actual notarization. The 12 common and 10 prefixed bridge public asset
+names are disjoint (`final-candidate-assets.json`). Nothing is published.
+
+The first actual published-0.0.2 transition probe failed on a fixture API error:
+it sent response-only `coverage_scope` as a request field. Its cleanup passed;
+no product upgrade failure was established. The original driver and failed
+receipt remain retained. A two-line correction removes that request field and
+asserts workspace coverage on the response instead. Both old/current request
+schemas were checked before scheduling a new attempt.
+
+The cloned macOS 15 prerequisite boot also failed its bounded SSH banner check,
+before any candidate native code ran. Tart's supported graceful stop returned
+zero. This supplies no macOS 15 candidate first-use, Swift compiler or SwiftPM
+qualification; those gates remain open. No live development LaunchAgent or
+original supplied repository was changed.
+
+
+### Lifecycle registration deadline correction — new common candidate required
+
+`candidate-installed-lifecycle-01` failed its first `watch` after two lifecycle
+checks. The command took 0.637028 seconds and returned raw Darwin `EAGAIN`,
+yet the retained registry, initialized lifecycle selector and Release personal
+settings show registration side effects completed. The register request had
+only a 500 ms socket reply timeout; durable index-family creation and registry
+sync occur before the server acknowledgement. No stack trace identifies the
+exact syscall or proves host disk contention. The source/evidence supports
+correcting the acknowledgement budget without retrying an uncertain mutation.
+
+The fixture did uninstall its unique owned runtime/login job before its cleanup
+callback hit a late `__file__` NameError in the final inactivity probe. Preserve
+that failed cleanup receipt. Root separately verified both owner locks free,
+unique job/installation absent, socket refused with stale socket retained,
+and original development PID/plist hashes/inodes unchanged
+(`root-cleanup-verification.json` in the retained lifecycle prefix). A narrow
+artifact-only cleanup helper correction is prepared for the next run.
+
+Reviewed change `7ed3b3d` reuses the existing Execution/TimedStream for one
+absolute five-second **register/refresh acknowledgement** deadline after strict
+startup/version probes. It does not retry a timed-out acknowledgement, alter
+ordinary query/settings/cancel budgets, or add telemetry. Three focused tests
+cover delayed acknowledgement through public attach for both operations,
+incomplete-frame typed expiry, and strict malformed/version failure. Source
+peer review and targeted formatting passed; runtime tests are still pending.
+This is not a whole-startup five-second guarantee.
+
+The previously finalized source-3ba common image remains authentic evidence for
+that provisional artifact, but this production fix requires a new matching
+common producer/packages and relevant final gates. The independently frozen
+bridge bytes remain unchanged. No old receipt certifies the changed core.
+The user observed the diagnostic VM progress from black screen to Apple logo
+and desktop; SSH still timed out, so no guest failure cause or candidate
+qualification is inferred. The bounded console session stopped gracefully.
