@@ -266,8 +266,8 @@ def cleanup():
  for client in CLIENTS:client.close()
  if HOST.exists():command(HOST,'coordinator','stop',check=False)
 atexit.register(cleanup)
-def ready(client,after=1):
- until=time.monotonic()+90
+def ready(client,after=1,timeout=90):
+ until=time.monotonic()+timeout
  while time.monotonic()<until:
   s=client.send('wait',wait_ms=1000);assert not isinstance(s.get('error'),dict),s;assert s['phase']!='failed',s
   if s['phase']=='idle' and s['observed_epoch']==s['published_epoch'] and s['generation']>=after:return s
@@ -416,15 +416,16 @@ if ADDITIONAL_LANGUAGES:
   swift_text='// café 🦀 installed offline source\npublic func packagedSwiftLeaf(_ value: Int) -> Int { value + 1 }\npublic func packagedSwiftEntry() -> Int { packagedSwiftLeaf(41) }\npublic func packagedSwiftReference() -> (Int) -> Int { packagedSwiftLeaf }\n'
   (swift_package/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "PackagedSwift", targets: [.target(name: "PackagedSwift")])\n')
   swift_file.write_text(swift_text)
- ready(node,before+1)
- # More saves can queue while discovery reconciles; wait for both names.
- until=time.monotonic()+90
+ # More saves can queue while discovery reconciles; wait for selected names.
+ # Keep discovery and its nested publication wait within the same harness window.
+ until=time.monotonic()+300
+ found={}
  while time.monotonic()<until:
-  ready(node)
+  ready(node,before+1,timeout=max(.001,until-time.monotonic()))
   found={language:query({'op':'symbols','name':{'rust':'packaged_rust_entry','swift':'packagedSwiftEntry()'}[language]}) for language in sorted(ADDITIONAL_LANGUAGES)}
   if all(result.get('symbols') for result in found.values()):break
  else:raise AssertionError(found)
- MIN_GENERATION=ready(node)['generation']
+ MIN_GENERATION=ready(node,timeout=300)['generation']
  def language_symbol(name,language,compilation=None):
   request={'op':'symbols','name':name}
   if compilation is None:request.update(coverage_detail='full',detail_max_bytes=262144)
@@ -468,14 +469,14 @@ if ADDITIONAL_LANGUAGES:
  for language,entry_name,leaf_name,reference_name,filename,text,broken in language_cases:
   language_graph(language,entry_name,leaf_name,reference_name,filename)
   previous=ready(node)['generation'];filename.write_text(text+broken)
-  MIN_GENERATION=ready(node,previous+1)['generation']
+  MIN_GENERATION=ready(node,previous+1,timeout=300)['generation']
   anchor=query({'op':'symbols','limit':1})
   status=query({'op':'coverage','generation':anchor['generation'],'snapshot':anchor['snapshot'],'max_bytes':16384})
   assert status['coverage_scope']=='workspace',status
   reports=[row for row in status['coverage'] if row['language']==language]
   assert reports and any(row['status']=='partial' and row['diagnostic_counts'].get('error',0) for row in reports),status
   previous=ready(node)['generation'];filename.write_text(text)
-  MIN_GENERATION=ready(node,previous+1)['generation']
+  MIN_GENERATION=ready(node,previous+1,timeout=300)['generation']
   language_graph(language,entry_name,leaf_name,reference_name,filename)
   TESTED_ADDITIONAL_LANGUAGES.append(language)
  if 'rust' in ADDITIONAL_LANGUAGES:
