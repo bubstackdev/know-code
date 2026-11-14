@@ -2,7 +2,11 @@
 from pathlib import Path
 import argparse,atexit,hashlib,json,os,re,selectors,shlex,shutil,socket,subprocess,sys,tarfile,time,zipfile
 ROOT=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256');args=parser.parse_args()
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('packages',type=Path);parser.add_argument('--experimental',action='store_true',help='Test both Rust and Swift, retaining the existing combined selection');parser.add_argument('--prefix',type=Path,required=True);parser.add_argument('--deny-checkout',type=Path,action='append',default=[],help='additional build-source checkout to deny when archives came from another tree');parser.add_argument('--signed-team-id',help='Require Developer ID signatures and this Apple Team ID');parser.add_argument('--signed-signer-sha256',help='Externally pinned signing certificate DER SHA-256')
+parser.add_argument('--additional-language',choices=['rust','swift'],action='append',default=[],help='Additional installed language fixture to test; repeat to select both')
+args=parser.parse_args()
+ADDITIONAL_LANGUAGES=set(args.additional_language)|({'rust','swift'} if args.experimental else set())
+TESTED_ADDITIONAL_LANGUAGES=[]
 assert bool(args.signed_team_id)==bool(args.signed_signer_sha256),'signed mode requires both Team ID and pinned signer SHA-256'
 PACKAGES=args.packages.resolve();PREFIX=args.prefix.resolve();assert PREFIX!=ROOT and ROOT not in PREFIX.parents,'package test prefix must be outside checkout';PREFIX.mkdir(parents=True,exist_ok=False)
 CHECKOUTS=sorted({ROOT,*[p.resolve() for p in args.deny_checkout]})
@@ -398,25 +402,28 @@ try:
  final_generation=saved_cs['generation'];checks.append('offline_saved_TS_and_Csharp_semantic_and_source_updates')
 finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
 checks.append('installed_MCP_shared_queries_and_EOF')
-if args.experimental:
+if ADDITIONAL_LANGUAGES:
  before=ready(node)['generation']
- rust_package=WORKSPACE/'rust-package';rust_package.mkdir()
- swift_package=WORKSPACE/'swift-package';swift_sources=swift_package/'Sources/PackagedSwift';swift_sources.mkdir(parents=True)
- (rust_package/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n[workspace]\n')
- rust_file=rust_package/'lib.rs';swift_file=swift_sources/'Model.swift'
- rust_text='// café 🦀 installed offline source\npub fn packaged_rust_leaf(value: i32) -> i32 { value + 1 }\npub fn packaged_rust_entry() -> i32 { packaged_rust_leaf(41) }\npub fn packaged_rust_reference() -> fn(i32) -> i32 { packaged_rust_leaf }\n'
- swift_text='// café 🦀 installed offline source\npublic func packagedSwiftLeaf(_ value: Int) -> Int { value + 1 }\npublic func packagedSwiftEntry() -> Int { packagedSwiftLeaf(41) }\npublic func packagedSwiftReference() -> (Int) -> Int { packagedSwiftLeaf }\n'
- (swift_package/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "PackagedSwift", targets: [.target(name: "PackagedSwift")])\n')
- rust_file.write_text(rust_text);swift_file.write_text(swift_text)
+ if 'rust' in ADDITIONAL_LANGUAGES:
+  rust_package=WORKSPACE/'rust-package';rust_package.mkdir()
+  (rust_package/'Cargo.toml').write_text('[package]\nname="packaged"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="lib.rs"\n[workspace]\n')
+  rust_file=rust_package/'lib.rs'
+  rust_text='// café 🦀 installed offline source\npub fn packaged_rust_leaf(value: i32) -> i32 { value + 1 }\npub fn packaged_rust_entry() -> i32 { packaged_rust_leaf(41) }\npub fn packaged_rust_reference() -> fn(i32) -> i32 { packaged_rust_leaf }\n'
+  rust_file.write_text(rust_text)
+ if 'swift' in ADDITIONAL_LANGUAGES:
+  swift_package=WORKSPACE/'swift-package';swift_sources=swift_package/'Sources/PackagedSwift';swift_sources.mkdir(parents=True)
+  swift_file=swift_sources/'Model.swift'
+  swift_text='// café 🦀 installed offline source\npublic func packagedSwiftLeaf(_ value: Int) -> Int { value + 1 }\npublic func packagedSwiftEntry() -> Int { packagedSwiftLeaf(41) }\npublic func packagedSwiftReference() -> (Int) -> Int { packagedSwiftLeaf }\n'
+  (swift_package/'Package.swift').write_text('// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: "PackagedSwift", targets: [.target(name: "PackagedSwift")])\n')
+  swift_file.write_text(swift_text)
  ready(node,before+1)
  # More saves can queue while discovery reconciles; wait for both names.
  until=time.monotonic()+90
  while time.monotonic()<until:
   ready(node)
-  rust=query({'op':'symbols','name':'packaged_rust_entry'})
-  swift=query({'op':'symbols','name':'packagedSwiftEntry()'})
-  if rust.get('symbols') and swift.get('symbols'):break
- else:raise AssertionError((rust,swift))
+  found={language:query({'op':'symbols','name':{'rust':'packaged_rust_entry','swift':'packagedSwiftEntry()'}[language]}) for language in sorted(ADDITIONAL_LANGUAGES)}
+  if all(result.get('symbols') for result in found.values()):break
+ else:raise AssertionError(found)
  MIN_GENERATION=ready(node)['generation']
  def language_symbol(name,language,compilation=None):
   request={'op':'symbols','name':name}
@@ -453,10 +460,11 @@ if args.experimental:
                  'content_hash':location['content_hash'],'max_bytes':4096})['source']
    exact_source(source,filename)
    assert filename.read_bytes()[location['start_byte']:location['end_byte']].decode()==leaf_name.split('(')[0],occurrence
- language_cases=[('rust','packaged_rust_entry','packaged_rust_leaf','packaged_rust_reference',rust_file,rust_text,
-                  '\npub fn broken_package() -> i32 { missing_package_value }\n'),
-                 ('swift','packagedSwiftEntry()','packagedSwiftLeaf(_:)','packagedSwiftReference()',swift_file,swift_text,
-                  '\npublic func brokenPackage() -> Int { missingPackageValue }\n')]
+ language_cases=[]
+ if 'rust' in ADDITIONAL_LANGUAGES:language_cases.append(('rust','packaged_rust_entry','packaged_rust_leaf','packaged_rust_reference',rust_file,rust_text,
+                  '\npub fn broken_package() -> i32 { missing_package_value }\n'))
+ if 'swift' in ADDITIONAL_LANGUAGES:language_cases.append(('swift','packagedSwiftEntry()','packagedSwiftLeaf(_:)','packagedSwiftReference()',swift_file,swift_text,
+                  '\npublic func brokenPackage() -> Int { missingPackageValue }\n'))
  for language,entry_name,leaf_name,reference_name,filename,text,broken in language_cases:
   language_graph(language,entry_name,leaf_name,reference_name,filename)
   previous=ready(node)['generation'];filename.write_text(text+broken)
@@ -469,32 +477,34 @@ if args.experimental:
   previous=ready(node)['generation'];filename.write_text(text)
   MIN_GENERATION=ready(node,previous+1)['generation']
   language_graph(language,entry_name,leaf_name,reference_name,filename)
- # Reuse the same installed MCP framing/helpers for one new-language graph;
- # the earlier TS/C# session ended before the Cargo/SwiftPM fixtures existed.
- rust_entry,rust_report=language_symbol('packaged_rust_entry','rust')
- rust_leaf,_=language_symbol('packaged_rust_leaf','rust',rust_entry['compilation_id'])
- rust_anchor=query({'op':'symbols','name':'packaged_rust_entry','compilation_id':rust_entry['compilation_id']})
- rust_graph_args={'symbol_id':rust_entry['id'],'target':rust_report['target'],'max_depth':1,
-                  'snapshot':rust_anchor['snapshot'],'include_source':True,'source_max_bytes':4096}
- mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-rust-stderr.log').open('w'))
- mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
- try:
-  assert rpc(100,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test-rust','version':'1'}})['result']['protocolVersion']=='2025-11-25'
-  mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
-  rust_mcp=tool_result(101,'callees',rust_graph_args)
-  assert rust_mcp==query(dict(rust_graph_args,op='callees')),rust_mcp
-  assert rust_mcp['snapshot']==rust_anchor['snapshot'] and rust_mcp['generation']==rust_anchor['generation'],rust_mcp
-  called=next(finding for finding in rust_mcp['graph']['findings'] if finding['symbol']['id']==rust_leaf['id'])
-  assert called['symbol']['compilation_id']==rust_entry['compilation_id'],called
-  assert called['paths'] and all(len(path)==1 and path[0]['kind']=='call' and path[0]['resolution']=='compiler_bound'
-                                and path[0]['source_id']==rust_entry['id'] and path[0]['target_id']==rust_leaf['id']
-                                for path in called['paths']),called
-  declarations=called['context']['declarations'];assert declarations and all(d['source_status']=='included' for d in declarations),called
-  for declaration in declarations:exact_source(declaration['source'],rust_file)
-  checks.append('installed_offline_Cargo_MCP_graph_snapshot_source_matches_native_projection')
- finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp-rust.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
- checks+=['installed_offline_SwiftPM_Cargo_direct_calls_value_impact_exact_source_native_parity',
-          'installed_offline_SwiftPM_Cargo_saved_compiler_partial_repair']
+  TESTED_ADDITIONAL_LANGUAGES.append(language)
+ if 'rust' in ADDITIONAL_LANGUAGES:
+  # Reuse the same installed MCP framing/helpers for the selected Cargo graph.
+  rust_entry,rust_report=language_symbol('packaged_rust_entry','rust')
+  rust_leaf,_=language_symbol('packaged_rust_leaf','rust',rust_entry['compilation_id'])
+  rust_anchor=query({'op':'symbols','name':'packaged_rust_entry','compilation_id':rust_entry['compilation_id']})
+  rust_graph_args={'symbol_id':rust_entry['id'],'target':rust_report['target'],'max_depth':1,
+                   'snapshot':rust_anchor['snapshot'],'include_source':True,'source_max_bytes':4096}
+  mcp=subprocess.Popen(['/usr/bin/sandbox-exec','-f',str(POLICY_FILE),str(HOST),'mcp','--workspace',str(WORKSPACE)],cwd=PREFIX,env=ENV,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=(PREFIX/'mcp-rust-stderr.log').open('w'))
+  mcp_selector=selectors.DefaultSelector();mcp_selector.register(mcp.stdout,selectors.EVENT_READ);mcp_buffer=b'';mcp_events=[]
+  try:
+   assert rpc(100,'initialize',{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'package-test-rust','version':'1'}})['result']['protocolVersion']=='2025-11-25'
+   mcp.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');mcp.stdin.flush()
+   rust_mcp=tool_result(101,'callees',rust_graph_args)
+   assert rust_mcp==query(dict(rust_graph_args,op='callees')),rust_mcp
+   assert rust_mcp['snapshot']==rust_anchor['snapshot'] and rust_mcp['generation']==rust_anchor['generation'],rust_mcp
+   called=next(finding for finding in rust_mcp['graph']['findings'] if finding['symbol']['id']==rust_leaf['id'])
+   assert called['symbol']['compilation_id']==rust_entry['compilation_id'],called
+   assert called['paths'] and all(len(path)==1 and path[0]['kind']=='call' and path[0]['resolution']=='compiler_bound'
+                                 and path[0]['source_id']==rust_entry['id'] and path[0]['target_id']==rust_leaf['id']
+                                 for path in called['paths']),called
+   declarations=called['context']['declarations'];assert declarations and all(d['source_status']=='included' for d in declarations),called
+   for declaration in declarations:exact_source(declaration['source'],rust_file)
+   checks.append('installed_offline_Cargo_MCP_graph_snapshot_source_matches_native_projection')
+  finally:mcp.stdin.close();mcp.wait(timeout=10);mcp_selector.close();(PREFIX/'mcp-rust.json').write_text(json.dumps(mcp_events,indent=2)+'\n')
+ labels='_'.join({'rust':'Cargo','swift':'SwiftPM'}[language] for language in ['swift','rust'] if language in ADDITIONAL_LANGUAGES)
+ checks+=[f'installed_offline_{labels}_direct_calls_value_impact_exact_source_native_parity',
+          f'installed_offline_{labels}_saved_compiler_partial_repair']
 final_generation=ready(node)['generation'];node.close();net.close();checks.append('packaged_saved_file_updates')
 command(HOST,'coordinator','stop');until=time.monotonic()+20
 while (DATA/'c.sock').exists() and time.monotonic()<until:time.sleep(.05)
@@ -611,5 +621,6 @@ finally:manifest_file.write_bytes(saved)
 invalid=PREFIX/'invalid-resources';invalid.mkdir();failure=command(HOST,'runtime-info',check=False,env=dict(ENV,KNOW_CODE_RUNTIME_DIR=str(invalid)));assert failure.returncode and 'manifest' in failure.stderr
 bare=PREFIX/'bare';bare.mkdir();shutil.copy2(bundle/'bin/know-code',bare/'know-code');failure=command(bare/'know-code','runtime-info',check=False);assert failure.returncode and 'not found' in failure.stderr
 checks+=['missing_resource_no_checkout_fallback','manifest_protocol_mismatch','invalid_override_no_silent_fallback','bare_executable_actionable_error']
-result={'passed':True,'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json'),'installed_npm10_evidence':str(PREFIX/'npm10-installed.json')}
+assert set(TESTED_ADDITIONAL_LANGUAGES)==ADDITIONAL_LANGUAGES,(TESTED_ADDITIONAL_LANGUAGES,ADDITIONAL_LANGUAGES)
+result={'passed':True,'selected_additional_languages':sorted(ADDITIONAL_LANGUAGES),'tested_additional_languages':sorted(TESTED_ADDITIONAL_LANGUAGES),'tested_languages':['typescript','csharp',*sorted(TESTED_ADDITIONAL_LANGUAGES)],'signing_verification':SIGNING,'prefix':str(PREFIX),'packages':str(PACKAGES),'matrix':manifest['runtime'],'checks':checks,'final_generation':final_generation,'checkout_denied':True,'denied_checkouts':[str(root) for root in CHECKOUTS],'network_denied_after_restoration':True,'archive_sha256':{a['file']:a['sha256'] for a in manifest['artifacts']},'candidate_source_revision':manifest.get('source_revision'),'candidate_manifest_sha256':hashlib.sha256((PREFIX/'candidate-manifest.json').read_bytes()).hexdigest(),'phase_evidence':str(PREFIX/'phases.json'),'network_policy_proof':str(PREFIX/'network-policy-proof.json'),'installed_npm10_evidence':str(PREFIX/'npm10-installed.json')}
 (PREFIX/'result.json').write_text(json.dumps(result,indent=2)+'\n');report=ROOT/'.artifacts/packaging/installed-test.json';report.parent.mkdir(parents=True,exist_ok=True);report.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
