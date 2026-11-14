@@ -919,3 +919,26 @@ archives are prepared; DMG, notarization, installed Xcode, actual previous
 release upgrade and macOS 15 final-artifact gates remain pending. The user
 selected separate bridge download and DMG; Swift compiler batching remains
 deferred until packaging gates.
+
+
+The user confirmed one GitHub 0.0.3 release containing both downloads. Public
+bridge proof/checksum assets will use `xcode-bridge-` prefixes to avoid
+collisions with the common runtime's files. Image-internal proof names and
+their authenticated bytes stay unchanged; the bridge TAR/DMG remain separate.
+
+Installed Rust-only attempt 02 also remains failed: its 90-second test wait
+expired while the existing analyzer was still loading (generation 5,
+observed epoch 19, published epoch 15). The provider's own readiness/request
+deadline is 120 seconds per context, with normal/test contexts distinct.
+This result does not establish an analyzer hang or a successful installed
+Rust gate. A scoped harness wait correction must allow the provider to return
+its actual outcome; compiler/product deadlines and resource limits stay fixed.
+
+The no-share macOS 15 prerequisite-only VM boot reported 15.7.7/ARM64 and the
+CLT Swift executable path, then stopped responding during the version probe.
+A later bounded SSH observation timed out during banner exchange. The owner
+stopped that attempt after 162 seconds; no candidate native code or indexing
+ran. Exact Swift version and guest free space remain unknown. Sparse disk
+allocation is not guest free-space evidence, and no resource-pressure cause
+has been established. A source-reviewed Tart `--net-fd` discard-only socket
+supervisor is prepared for a separately named isolation gate; it has not run.
